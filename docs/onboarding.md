@@ -113,7 +113,9 @@ botcorp config set <name> <dotted.path> <value>
 
 The harness's `config-guard` PreToolUse hook blocks direct `Edit`/`Write`
 on `bot.yaml`, the generated `settings.json`, `access.json` and the vault, so
-the writer is the only way in. Two classes of change:
+the writer is the only way in (the separate `vault-guard` hook blocks any
+tool — `Read`/`Bash` included — from touching a vault or the secrets CLI's
+mutating verbs). Two classes of change:
 
 - **Applies immediately** (written, then `sync`; effective at the next
   session roll): `model`, `effort`, `persona`, `harness.modules.*`,

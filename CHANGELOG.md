@@ -3,6 +3,84 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.0
+
+Secret-access hardening: scoping, an audit trail, an ACL check, launch
+attestation, an operator lock mode, and an encrypted bundle for moving a
+bot's vault between machines. None of this is an OS boundary - every bot
+still runs as the same Windows user - it is what BotCorp enforces instead
+(`docs/secrets.md` has the full threat model).
+
+- **Per-bot secret scoping.** `bot.yaml` gets a top-level `secrets:` list
+  naming every vault key the launcher may inject (default `[oauth_token,
+  telegram_token]`). `daemon/launch.ps1` decrypts ONLY the declared keys, into
+  the child env under a fixed name for the two harness secrets or else its
+  UPPERCASE form (`Get-SecretEnvName`: `hub_token` -> `HUB_TOKEN`).
+  `automations[].secrets` must be a subset of the bot's own `secrets:` list -
+  `daemon/botyaml.mjs --validate` rejects an automation that names an
+  undeclared key. `botcorp doctor`'s `<bot>: secrets scope` line reports
+  declared vs. actually-present keys.
+- **The vault-guard `PreToolUse` hook cannot be disabled.** It blocks every
+  `Read`/`Glob`/`Grep`/`Bash`/`Edit`/`Write`/`MultiEdit`/`NotebookEdit` call
+  that touches a `.vault/` directory (any bot's), the vault scripts, the
+  secrets CLI's mutating verbs, `ProtectedData`, or the audit log itself;
+  `harness.hooks_disable` refuses `vault-guard` by name no matter what a
+  bot's own config asks for.
+- **Append-only audit log.** Every decrypt (`Get-VaultSecret`) appends one
+  line to `state/secret-access.jsonl` - bot, key, reason, pid, ok, ts, never a
+  value - readable with `botcorp secrets audit [bot] [--tail N] [--json]` and
+  the cockpit's "Secret access" panel. `secrets list` no longer decrypts
+  anything: `Set-VaultSecret` now stores each entry's `last4` alongside the
+  DPAPI blob, so listing masked entries is a plain read.
+- **Vault ACL + isolation checks.** `botcorp secrets acl <bot>` re-applies the
+  `.vault` directory ACL (current user + SYSTEM only, inheritance off) without
+  touching any entry. `botcorp doctor` adds `<bot>: vault acl` (PASS/WARN on
+  the ACL state) and `<bot>: vault isolation` (feeds the vault-guard hook a
+  synthetic `Read` of a SIBLING bot's vault and expects it to block).
+- **Launch attestation.** A trusted start path (the daemon's cold-start,
+  `restart.ps1`, `launch-visible.ps1`, `botcorp start`) mints a 32-byte
+  nonce; only its sha256 lands in `state/<bot>.json` `launch`, and the raw
+  nonce reaches `launch.ps1` in the environment, never on disk. `-Reason
+  launch` decrypts refuse without a nonce that matches, is unconsumed, and is
+  under 120 s old. A `launch.ps1` started any other way still runs, but
+  WITHOUT secrets and without the Telegram poller, and says so in
+  `launches.log`. It proves which recorded path launched the bot; it is not
+  an OS boundary.
+- **Lock mode.** `botcorp secrets migrate <bot>` moves a v1 vault (bot-name
+  DPAPI entropy) to v2 (a random per-bot key `K`, wrapped either `dpapi` or
+  `operator`). `botcorp secrets lock <bot>` (passphrase on stdin) removes the
+  DPAPI wrap, so the vault is LOCKED now and after every reboot until
+  `botcorp secrets unlock <bot> [--permanent]` (or the cockpit) unwraps `K`
+  and caches it, boot-bound, until the next reboot. While locked: the daemon
+  will not cold-start or restart the bot (`state/<bot>.json status: locked`),
+  `botcorp start` refuses, `botcorp status` and `botcorp doctor` report it.
+  The cockpit's vault drawer shows the lock state and, when locked, a
+  passphrase field that posts to `/api/bots/:name/unlock` - never from a
+  chat message.
+- **Encrypted secrets bundle.** `botcorp secrets export-bundle <bot> --out
+  <dir> [--files a,~/b]` / `import-bundle <bot> <bundle.enc>` move a bot's
+  vault entries (and chosen files) between machines: AES-256-GCM +
+  PBKDF2-SHA256, passphrase always on stdin. A file's `scope: bot | home`
+  decides whether it restores relative to the bot folder or the operator's
+  `USERPROFILE` (`~/`-prefixed, only with `--allow-home`, never into a bot
+  folder or the BotCorp runtime home, never over an existing file without
+  `--force`). Every import target is printed before anything is written, and
+  every write is appended to the audit log with reason `import`.
+
+**Upgrading a bot from v0.1.x:** add a top-level `secrets:` list to
+`bot.yaml` naming every vault key the launcher may inject (default
+`[oauth_token, telegram_token]`); a bot whose automations use other keys
+must list them there too, e.g.:
+
+```yaml
+secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key, hcloud_token]
+```
+
+`botcorp doctor` (`<bot>: bot.yaml` / `<bot>: secrets scope`) reports what is
+missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
+<launch nonce>`. Existing v1 vaults keep working unchanged until you run
+`botcorp secrets migrate <bot>`.
+
 ## v0.1.3
 
 Hotfix for the reference host's install step (branched from v0.1.2):

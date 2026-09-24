@@ -70,6 +70,13 @@ project).
   (`botcorp config set`, `botcorp secrets set`, the cockpit pairing panel)
   instead, so widening changes (new allow-listed sender, loosened policy, a
   new secret) can be gated on operator approval.
+- **`vault-guard.sh`** (`PreToolUse` on `Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`)
+  — FAIL-CLOSED (exit 2): blocks any tool call that touches a bot vault
+  (`.vault/`, any bot's — its own included), `secrets.ps1`/`vault.ps1`/
+  `accounts.ps1`, the `ProtectedData` DPAPI API, the `secret-access.jsonl`
+  audit log, or the secrets CLI's mutating verbs (`botcorp secrets
+  get|unlock|lock|import-bundle|export-bundle|migrate`); `secrets
+  set|list|delete|audit` stay open since that's the operator flow.
 - **`core-guard.sh`** (`PostToolUse` on the same matcher) — warn-only: tells
   the bot the moment it edits a TRACKED harness file outside a `suggest/*`
   branch, before the divergence becomes a silent one.

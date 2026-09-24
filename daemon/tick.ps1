@@ -495,6 +495,14 @@ function Invoke-BotTick {
         Write-DaemonLog 'harness.service: manual - the daemon does not cold-start this bot' -Bot $Bot -Quiet
         $action = 'paused'
     }
+    # Operator lock (vault.lock: operator, not unlocked since boot): a launch
+    # now would run without secrets, a restart would throw away the ones the
+    # live session holds. Wait for `botcorp secrets unlock` / the cockpit.
+    if (($action -in @('cold-start', 'restart')) -and (Test-VaultLocked -BotHome $P.BotHome -Bot $Bot)) {
+        Write-DaemonLog "vault LOCKED (operator lock, not unlocked since boot) - not ${action}ing; botcorp secrets unlock $Bot or the cockpit" -Bot $Bot -Quiet
+        if ($action -eq 'cold-start' -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ status = 'locked'; updated_at = (Get-Date).ToString('o') } }
+        $action = 'locked'
+    }
 
     # --- session-0 stray sweep ---------------------------------------------------
     # Hung session-0 launchers outlive the tick that spawned them (the task's
@@ -583,7 +591,7 @@ function Invoke-BotTick {
     if ($script:RestartAllWhy -and $action -eq 'none' -and $alive) { $action = 'restart'; $why = $script:RestartAllWhy }
     Invoke-Automations -Bot $Bot -AsDryRun:$DryRun
 
-    if ($action -in @('none', 'paused')) { Write-DaemonLog "no action (alive=$alive poller=$poller)" -Bot $Bot -Quiet; return }
+    if ($action -in @('none', 'paused', 'locked')) { Write-DaemonLog "no action (alive=$alive poller=$poller$(if ($action -ne 'none') { " $action" }))" -Bot $Bot -Quiet; return }
     if ($DryRun) { Write-DaemonLog "DRYRUN would $action $Bot (alive=$alive poller=$poller)" -Bot $Bot; return }
 
     # --- start cap --------------------------------------------------------------

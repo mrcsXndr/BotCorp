@@ -63,6 +63,18 @@ integrations:
   google:                         # OPTIONAL, doctor-only: the account this bot's token.json should belong to
     account: null
 
+secrets: [oauth_token, telegram_token]   # the ONLY vault keys ever decrypted for this bot (docs/secrets.md). The launcher
+                                  # injects them into the session env: oauth_token -> CLAUDE_CODE_OAUTH_TOKEN,
+                                  # telegram_token -> TELEGRAM_BOT_TOKEN (with modules.telegram), any other key ->
+                                  # its UPPERCASE name (hub_token -> HUB_TOKEN). Keys an automation lists
+                                  # under automations[].secrets must be declared here too. Vault entries not listed
+                                  # here are never decrypted. Values: `botcorp secrets set <name> <key>`.
+vault:
+  lock: null                      # null = none (DPAPI only: the daemon relaunches this bot unattended after a
+                                  # reboot) | operator (the vault key is held only under the operator passphrase:
+                                  # after a reboot the bot stays `locked` until `botcorp secrets unlock <name>` or
+                                  # the cockpit; never from a chat message)
+
 backup:                           # OPTIONAL module, off while git_remote is null. A bot folder is NOT a git repo;
   git_remote: null                # `botcorp backup <bot>` inits one inside it (.gitignore = the template's), commits
   paths: [memory]                 # `paths` and pushes them here, bounded, no credential prompt (GIT_TERMINAL_PROMPT=0)

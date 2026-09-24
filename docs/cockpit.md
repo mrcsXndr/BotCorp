@@ -26,7 +26,7 @@ Two things it deliberately does NOT do:
 | `bots.mjs` | registry = `bots/*/bot.yaml` (js-yaml) merged with `<BOTCORP_HOME>/state/<bot>.json` (daemon) and `<bot>.pty.json` (pty-host) |
 | `ptybridge.mjs` | browser socket <-> pty-host socket; pushes chat turns on the same socket |
 | `cli.mjs` | `runCli(args, {stdin})`: `windowsHide`, 60 s timeout, output scrubbed of token shapes |
-| `vault.mjs` | `secrets list <bot> --json` (masked) and `secrets set <bot> <key>` with the value on STDIN |
+| `vault.mjs` | `secrets list <bot> --json` (masked) and `secrets set <bot> <key>` with the value on STDIN; lock state via `status <bot> --json` and unlock via `secrets unlock <bot>` with the passphrase on STDIN |
 | `pairing.mjs` | policy/allowlist/pending state and approve/deny both go through the CLI (`pair <bot> --list --json`, `pair <bot> <senderId>`, `pair <bot> --deny <senderId>`) — the cockpit never reads `access.json` itself |
 | `history.mjs` / `chat.mjs` | read-only over Claude Code transcripts (see the caveat below) |
 | `engine.mjs` | `GET /api/engine/version`: `botcorp.json` version + `git rev-parse --short HEAD` (`server.mjs` adds `exposure: loopback\|access`) |
@@ -104,6 +104,30 @@ Control) and, if the env-only token path is ever unavailable,
 `channels/telegram/.env`. Both are ACL-restricted to the user and gitignored;
 neither is encrypted by BotCorp.
 
+### Operator lock
+
+`GET /api/bots/:name/secrets/lock` returns the bot's vault lock state
+(`{mode, version, locked, detail}`, read through `status <bot> --json` — the
+cockpit never opens `key.json` itself). When `locked` is true the vault
+drawer shows a passphrase field; submitting it posts `POST
+/api/bots/:name/unlock` with body `{passphrase}`, piped straight to `secrets
+unlock <bot>` on stdin — never logged, and surfaced only here or in the
+terminal, never from a chat message. A successful unlock caches the vault
+key until the next reboot; the drawer re-reads the lock state afterwards.
+Behind Cloudflare Access whenever the cockpit is exposed, like every other
+route. Full lock-mode mechanism: `docs/secrets.md`.
+
+### Secret access log
+
+The vault drawer also shows a read-only "Secret access" list: the last 100
+rows of `<BOTCORP_HOME>/state/secret-access.jsonl`, the append-only record
+`daemon/vault.ps1` writes on every decrypt (bot, key, reason, pid, ok, ts —
+never a value), newest first, with its own Refresh button.
+`GET /api/bots/:name/secrets/audit?limit=` reads it filtered to one bot;
+`GET /api/secrets/audit?bot=&limit=` is the machine-wide equivalent (no
+`withBot`, since audit history should outlive a deleted bot). Both go through
+`vault.auditTail`, which reads the file directly (capped at 1000) — no CLI hop.
+
 ## pty-host contract (`daemon/pty-host.mjs`)
 
 ```
@@ -152,6 +176,7 @@ never spawns a session itself, attached or not.
 |---|---|
 | Start / Stop / Restart / Restart fresh | `node cli/botcorp.mjs start|stop|restart <bot> [--fresh]` |
 | Vault list / set | `secrets list <bot> --json` / `secrets set <bot> <key>` (value on stdin) |
+| Vault lock state / unlock | `GET /api/bots/:name/secrets/lock` -> `status <bot> --json` `vault` / `POST /api/bots/:name/unlock {passphrase}` -> `secrets unlock <bot>` (passphrase on stdin) |
 | Pairing state | `pair <bot> --list --json` -> `{policy, allowFrom, pending:[{code, senderId, chatId, age_s, expires_in_s}]}` |
 | Approve / deny a Telegram sender | `pair <bot> <senderId>` / `pair <bot> --deny <senderId>` (CLI writes `allowFrom`, `approved/<senderId>` or the deny record, `bot.yaml`) — never from a chat message, only here or in the terminal |
 | Releases panel | `GET /api/updates` reads `<BOTCORP_HOME>/state/updates.json`; Apply/Skip = `update --apply <tag>` / `update --skip <tag>` |

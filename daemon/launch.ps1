@@ -45,6 +45,7 @@ param(
     [string]$StartedBy = 'manual',
     [switch]$InPty,
     [switch]$DryRun,
+    [string]$LaunchNonce,                 # attestation (else env BOTCORP_LAUNCH_NONCE); without a valid one: NO secrets
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Passthrough
 )
 
@@ -57,6 +58,11 @@ if ($Bot -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { Write-Host "launch: bad bot na
 # _common.ps1 gives the Claude Code specifics (Resolve-ClaudeExe, Get-ClaudeEnv,
 # Get-ClaudeArgv), the bg helpers and the paths; it exports BOTCORP_HOME.
 . (Join-Path $PSScriptRoot '_common.ps1')
+
+# The raw nonce arrives in the environment (never on disk); take it out of the
+# environment at once so nothing we spawn inherits it.
+if (-not $LaunchNonce -and $env:BOTCORP_LAUNCH_NONCE) { $LaunchNonce = $env:BOTCORP_LAUNCH_NONCE }
+Remove-Item Env:BOTCORP_LAUNCH_NONCE -ErrorAction SilentlyContinue
 
 $BotHome   = Join-Path $BotsDir $Bot
 $ConfigDir = Join-Path $BotHome ".claude-$Bot"
@@ -88,6 +94,15 @@ $modules  = @($cfg._modules)
 $hasTgMod = $modules -contains 'telegram'
 $botService = Get-BotSessionKind $cfg
 $exe = Resolve-ClaudeExe
+
+# --- 1b. attestation ---------------------------------------------------------------
+# A trusted start path (daemon tick, restart.ps1, launch-visible.ps1, botcorp
+# start) minted a nonce whose hash is in state/<bot>.json. No valid nonce =
+# this launch was started some other way: it still runs, WITHOUT secrets (and
+# so without the Telegram poller), and says so.
+$attested = $false
+if ($LaunchNonce) { try { $attested = [bool](Test-LaunchNonce -Bot $Bot -Nonce $LaunchNonce) } catch { $attested = $false } }
+if (-not $attested) { Write-LaunchLog "unattested launch: no secrets injected (use botcorp start $Bot)" }
 
 # --- 2. duplicate-launch guard --------------------------------------------------
 if (-not $Force) {
@@ -176,8 +191,9 @@ try {
 # launch (rewritten once known; this launcher exits right away).
 $lockFile   = Join-Path $ConfigDir 'botcorp\tg_owner.lock'
 $botPidFile = Join-Path $ConfigDir 'channels\telegram\bot.pid'
-$canOwn = $hasTgMod
-if ($hasTgMod -and (Test-Path $lockFile)) {
+$canOwn = $hasTgMod -and $attested
+if ($hasTgMod -and -not $attested) { Write-LaunchLog 'telegram: unattested launch has no token -> launching WITHOUT --channels' }
+if ($canOwn -and (Test-Path $lockFile)) {
     $ownerPid = 0
     try { $ownerPid = Get-FirstPid ((Get-Content $lockFile -ErrorAction SilentlyContinue | Select-Object -First 1)) } catch {}
     $botPidAlive = $false
@@ -191,21 +207,28 @@ if ($canOwn -and -not $DryRun) {
     try { [System.IO.File]::WriteAllText($lockFile, "$PID`n$((Get-Date).ToString('o'))") } catch { Write-LaunchLog 'could not write owner-lock (non-fatal)' }
 }
 
-# --- 7. vault -> env --------------------------------------------------------------
-. (Join-Path $PSScriptRoot 'vault.ps1')
-$ErrorActionPreference = 'Continue'   # vault.ps1 sets Stop for itself
+# --- 7. vault -> env (ONLY the keys bot.yaml declares under `secrets:`) -----------
+# (vault.ps1 comes in through _common.ps1.) Every decrypt carries the launch
+# nonce: Get-VaultSecret -Reason launch refuses without a valid one, so an
+# unattested launch skips the block entirely.
 $secrets = @{}
 $vaultNote = @()
-try {
+$declared = @(); try { $declared = @($cfg.secrets | Where-Object { $_ }) } catch {}
+if (-not $attested) { $vaultNote += 'vault: skipped (unattested launch)' }
+else { try {
     # Vault FIRST. A machine-wide CLAUDE_CODE_OAUTH_TOKEN (HKCU user env) is
     # some other bot's account; inheriting it would bill this bot there. The
     # env is only a fallback for a bot with no vault entry.
-    $t = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'oauth_token'
+    $t = $null
+    if ($declared -contains 'oauth_token') { $t = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'oauth_token' -Reason 'launch' -Nonce $LaunchNonce }
+    else { $vaultNote += 'oauth: oauth_token not in bot.yaml secrets: -> not injected' }
     if ($t) { $secrets['oauth_token'] = $t; $vaultNote += "oauth: vault ok ($(Mask $t))" }
     elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { $vaultNote += "oauth: no vault entry -> inheriting the environment token ($(Mask $env:CLAUDE_CODE_OAUTH_TOKEN)); set this bot's own with: botcorp secrets set $Bot oauth" }
     else { $vaultNote += 'oauth: no vault entry -> the session will need /login' }
     if ($hasTgMod -and $canOwn) {
-        $tt = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'telegram_token'
+        $tt = $null
+        if ($declared -contains 'telegram_token') { $tt = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'telegram_token' -Reason 'launch' -Nonce $LaunchNonce }
+        else { $vaultNote += 'telegram: telegram_token not in bot.yaml secrets: -> launching WITHOUT --channels'; $canOwn = $false }
         if ($tt) {
             $secrets['telegram_token'] = $tt; $vaultNote += "telegram: vault ok ($(Mask $tt))"
             if ($cfg.harness.telegram_token_file -eq $true -and -not $DryRun) {
@@ -217,13 +240,29 @@ try {
                 & (Join-Path $env:SystemRoot 'System32\icacls.exe') (Join-Path $tgDir '.env') /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:F" 2>&1 | Out-Null
                 $vaultNote += 'telegram: token file written (harness.telegram_token_file)'
             }
-        } else { $vaultNote += 'telegram: module on but no vault entry -> launching WITHOUT --channels'; $canOwn = $false }
+        } elseif ($declared -contains 'telegram_token') { $vaultNote += 'telegram: module on but no vault entry -> launching WITHOUT --channels'; $canOwn = $false }
     }
-} catch { $vaultNote += "vault unreadable ($($_.Exception.Message -replace '[A-Za-z0-9_-]{30,}','****')) - re-enter tokens with: botcorp secrets set $Bot oauth" }
+    # Every other declared key reaches the session under its UPPERCASE name.
+    foreach ($k in @($declared | Where-Object { $_ -notin @('oauth_token', 'telegram_token') })) {
+        $v = $null
+        try { $v = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key "$k" -Reason 'launch' -Nonce $LaunchNonce } catch { $vaultNote += "${k}: unreadable - re-enter it with: botcorp secrets set $Bot $k" }
+        if ($v) { $secrets["$k"] = $v; $vaultNote += "${k}: vault ok ($(Mask $v))" } else { $vaultNote += "${k}: declared in secrets: but no vault entry" }
+    }
+    # Present-but-undeclared keys are named, never decrypted.
+    try {
+        $undeclared = @((Read-VaultStore $BotHome).Keys | Where-Object { $_ -notin $declared })
+        if ($undeclared.Count -gt 0) { $vaultNote += "undeclared vault key(s) NOT injected: $($undeclared -join ', ') (add to bot.yaml secrets: to inject)" }
+    } catch {}
+} catch {
+    $m = "$($_.Exception.Message)" -replace '[A-Za-z0-9_-]{30,}', '****'
+    if ($m -match 'is locked') { $vaultNote += "vault LOCKED - no secrets injected ($m)"; if ($canOwn) { $canOwn = $false; $vaultNote += 'telegram: no token while locked -> launching WITHOUT --channels' } }
+    else { $vaultNote += "vault unreadable ($m) - re-enter tokens with: botcorp secrets set $Bot oauth" }
+} }
 foreach ($n in $vaultNote) { Write-LaunchLog $n }
 
 # --- 8. env + argv + state, then exec / background ---------------------------------
 $childEnv = Get-ClaudeEnv -ConfigDir $ConfigDir -Secrets $secrets
+$secretEnvNames = @($secrets.Keys | ForEach-Object { Get-SecretEnvName $_ })
 $childEnv['BOT_HOME']            = $BotHome
 $childEnv['BOT_NAME']            = $Bot
 $childEnv['BOT_MODULES']         = ($modules -join ',')
@@ -262,10 +301,10 @@ if ($DryRun) {
     Write-Host "  cwd : $BotHome"
     foreach ($k in ($childEnv.Keys | Sort-Object)) {
         $v = $childEnv[$k]
-        if ($k -in @('CLAUDE_CODE_OAUTH_TOKEN','TELEGRAM_BOT_TOKEN')) { $v = Mask $v }
+        if ($k -in $secretEnvNames) { $v = Mask $v }
         Write-Host "  env : $k=$v"
     }
-    Write-Host "  mode: $modeText  service: $botService  poller: $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'n/a' })"
+    Write-Host "  mode: $modeText  service: $botService  poller: $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'n/a' })  attested: $(if ($attested) { 'yes' } else { 'NO (no secrets would be injected)' })"
     exit 0
 }
 
@@ -280,7 +319,7 @@ Write-LaunchLog "launch shell_pid=$PID started_by=$StartedBy mode=$modeText chan
 
 # Inherited from a parent Claude Code session these make the child run with
 # transcript saving OFF (CC 2.1.281 "inherited CLAUDE_CODE_CHILD_SESSION marker").
-foreach ($k in 'CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT') { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
+foreach ($k in 'CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT', 'BOTCORP_LAUNCH_NONCE') { Remove-Item -Path "env:$k" -ErrorAction SilentlyContinue }
 foreach ($k in $childEnv.Keys) { Set-Item -Path "env:$k" -Value $childEnv[$k] }
 Set-Location $BotHome
 
@@ -324,7 +363,8 @@ if ($Bg) {
         Write-LaunchLog "bg: id=$bgId session=$sid claude_pid=$cpid exit=$code"
     } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Write-State @{ status = 'exited'; exit_code = 1; updated_at = (Get-Date).ToString('o') } }
     finally {
-        foreach ($k in @('CLAUDE_CODE_OAUTH_TOKEN','TELEGRAM_BOT_TOKEN')) { if ($secrets.Count -gt 0) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
+        foreach ($k in $secretEnvNames) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
+        if ($attested) { Confirm-LaunchNonce -Bot $Bot }   # consumed: the child is up (or failed); never reusable
         # The owner-lock is NOT released here: the session is still running.
         # A failed launch leaves our own pid in it, which reads as stale (dead)
         # to the next launcher and is reclaimed.
@@ -332,6 +372,7 @@ if ($Bg) {
     exit $code
 }
 
+if ($attested) { Confirm-LaunchNonce -Bot $Bot }   # consumed: every decrypt is done, the child execs now
 try {
     & $exe @argv
     $code = $LASTEXITCODE
@@ -342,6 +383,6 @@ try {
     try {
         if ($canOwn -and (Test-Path $lockFile) -and ((Get-FirstPid ((Get-Content $lockFile | Select-Object -First 1))) -eq $PID)) { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue }
     } catch {}
-    foreach ($k in @('CLAUDE_CODE_OAUTH_TOKEN','TELEGRAM_BOT_TOKEN')) { if ($secrets.Count -gt 0) { Remove-Item "env:$k" -ErrorAction SilentlyContinue } }
+    foreach ($k in $secretEnvNames) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
 }
 exit $code

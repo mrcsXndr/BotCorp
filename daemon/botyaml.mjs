@@ -56,6 +56,15 @@ export const DEFAULTS = {
     google: { account: null },                       // doctor: which account the bot's token.json should belong to
   },
   automations: [],
+  // The vault keys the launcher injects into THIS bot's session env, and nothing
+  // else (oauth_token -> CLAUDE_CODE_OAUTH_TOKEN, telegram_token ->
+  // TELEGRAM_BOT_TOKEN with modules.telegram on, any other key -> its UPPERCASE
+  // name, e.g. hub_token -> HUB_TOKEN). automations[].secrets must be a subset.
+  secrets: ['oauth_token', 'telegram_token'],
+  // lock: none (DPAPI only; unattended reboots) | operator (the vault key is
+  // held only under the operator passphrase; after a reboot the bot stays
+  // `locked` until `botcorp secrets unlock` / the cockpit; docs/secrets.md)
+  vault: { lock: null },
   // Optional module, OFF while git_remote is null: `botcorp backup <bot>` commits
   // `paths` inside bots/<name>/ and pushes them (the folder is not a repo otherwise).
   backup: { git_remote: null, paths: ['memory'] },
@@ -104,7 +113,12 @@ export function validate(cfg) {
     const known = hookNames();
     const bad = cfg.harness.hooks_disable.map(String).filter((h) => !known.includes(h));
     if (known.length && bad.length) errs.push(`harness.hooks_disable: unknown hook(s) ${bad.join(', ')} (valid: ${known.join(', ')})`);
+    // The vault guard is the one hook a bot may never switch off.
+    if (cfg.harness.hooks_disable.map(String).includes('vault-guard')) errs.push('harness.hooks_disable: vault-guard cannot be disabled');
   }
+  const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
+  if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
+  if (!isObj(cfg.vault) || !(cfg.vault.lock === null || ['none', 'operator'].includes(cfg.vault.lock))) errs.push(`vault.lock: none | operator (null = the host default; got ${JSON.stringify(cfg.vault && cfg.vault.lock)})`);
   if (!isObj(cfg.harness.modules)) errs.push('harness.modules: must be a mapping');
   if (!['pairing', 'allowlist', 'disabled'].includes(cfg.integrations.telegram.dm_policy)) errs.push('integrations.telegram.dm_policy: pairing | allowlist | disabled');
   if (!Array.isArray(cfg.integrations.telegram.allow_from)) errs.push('integrations.telegram.allow_from: must be a list of ids');
@@ -119,6 +133,11 @@ export function validate(cfg) {
     if (!a.command) errs.push(`automations[${i}].command: required`);
     const t = a.trigger || {};
     if (!t.cron && !t.interval_min && !t.event) errs.push(`automations[${i}].trigger: cron | interval_min | event required`);
+    if (a.secrets !== undefined) {
+      const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
+      const extra = (Array.isArray(a.secrets) ? a.secrets.map(String) : [String(a.secrets)]).filter((k) => !declared.has(k));
+      if (extra.length) errs.push(`automations[${i}].secrets: ${extra.join(', ')} not declared in the bot's secrets: list (only declared keys are ever decrypted for this bot)`);
+    }
   }
   return errs;
 }

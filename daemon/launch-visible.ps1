@@ -68,13 +68,25 @@ try {
         if (Test-Path $wtSettings) { $haveProfile = ((Get-Content $wtSettings -Raw) -match ('"name"\s*:\s*"' + [regex]::Escape($wtProfile) + '"')) }
     } catch {}
 
+    # This task is a trusted start path: mint the launch nonce so the launcher
+    # gets its secrets (launch.ps1 without one runs unattested = no secrets).
+    $nonce = ''
+    try { $nonce = New-LaunchNonce -Bot $Bot } catch { Write-DaemonLog "launch-visible: nonce not minted (launch runs unattested): $($_.Exception.Message)" -Bot $Bot }
+    $a = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launcher, '-Bot', $Bot, '-Continue', '-StartedBy', 'visible')
     if ($haveProfile -and $wtPath) {
         # -w 0 = new tab in the most-recently-used WT window (no extra window).
-        Start-Process -FilePath $wtPath -ArgumentList @('-w', '0', '-p', $wtProfile)
-        Write-DaemonLog "launch-visible: session $sid -> wt -w 0 -p $wtProfile" -Bot $Bot
+        # The tab's shell is spawned by that window's own process, so the nonce
+        # cannot ride in our environment: it goes on the command line that
+        # overrides the profile's (the profile keeps its look), consumed
+        # seconds later by launch.ps1.
+        if ($nonce) { $a += @('-LaunchNonce', $nonce) }
+        Start-Process -FilePath $wtPath -ArgumentList (@('-w', '0', '-p', $wtProfile, (Resolve-PwshExe)) + $a)
+        Write-DaemonLog "launch-visible: session $sid -> wt -w 0 -p $wtProfile pwsh launch.ps1 -Bot $Bot -Continue" -Bot $Bot
     } else {
-        $a = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $launcher, '-Bot', $Bot, '-Continue', '-StartedBy', 'visible')
-        Start-Process -FilePath (Resolve-PwshExe) -ArgumentList $a -WorkingDirectory (Join-Path $BotsDir $Bot)
+        # Start-Process inherits our environment: the nonce rides in it.
+        if ($nonce) { $env:BOTCORP_LAUNCH_NONCE = $nonce }
+        try { Start-Process -FilePath (Resolve-PwshExe) -ArgumentList $a -WorkingDirectory (Join-Path $BotsDir $Bot) }
+        finally { Remove-Item Env:BOTCORP_LAUNCH_NONCE -ErrorAction SilentlyContinue }
         Write-DaemonLog "launch-visible: session $sid -> pwsh -NoExit launch.ps1 -Bot $Bot -Continue (no WT profile '$wtProfile')" -Bot $Bot
     }
 } catch {

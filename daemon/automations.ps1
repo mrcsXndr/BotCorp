@@ -174,7 +174,7 @@ function Invoke-AutomationJob {
             . (Join-Path $PSScriptRoot 'vault.ps1')
             foreach ($k in $secretNames) {
                 $v = $null
-                try { $v = Get-VaultSecret -BotHome $P.BotHome -Bot $Bot -Key "$k" } catch { Log "run ${name}: vault key '$k' unreadable - re-enter it with: botcorp secrets set $Bot $k" }
+                try { $v = Get-VaultSecret -BotHome $P.BotHome -Bot $Bot -Key "$k" -Reason 'automation' } catch { Log "run ${name}: vault key '$k' unreadable - re-enter it with: botcorp secrets set $Bot $k" }
                 if ($v) { $envMap["$k".ToUpperInvariant()] = $v } else { Log "run ${name}: vault key '$k' missing" }
             }
         } catch { Log "run ${name}: vault unavailable ($($_.Exception.Message))" }

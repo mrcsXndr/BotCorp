@@ -37,6 +37,12 @@ foreach ($d in @($script:RtHome, $script:StateDir, $script:LogsDir)) {
     try { if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null } } catch {}
 }
 
+# vault.ps1 (launch nonces, lock state, the one decrypt path) sets Stop for
+# itself; every caller here is fail-open, so restore its preference.
+$__eap = $ErrorActionPreference
+. (Join-Path $PSScriptRoot 'vault.ps1')
+$ErrorActionPreference = $__eap
+
 # --- time ----------------------------------------------------------------------
 function Get-DaemonNow {
     # BOTCORP_FAKE_NOW (ISO 8601) overrides scheduling time. Harmless when unset.
@@ -303,11 +309,21 @@ function Get-ClaudeEnv {
     # $Secrets: hashtable key -> plaintext (only the keys the launcher decided
     # this bot needs), mapped to Claude Code's env names. The launcher masks
     # them when it prints and never puts them on a command line.
+    # Env names: the two Claude Code / plugin names, else the key upper-cased
+    # (hub_token -> HUB_TOKEN, the same rule automations.ps1 applies).
     param([string]$ConfigDir, [hashtable]$Secrets = @{})
     $e = @{ CLAUDE_CONFIG_DIR = $ConfigDir }
-    if ($Secrets.ContainsKey('oauth_token'))    { $e['CLAUDE_CODE_OAUTH_TOKEN'] = $Secrets['oauth_token'] }
-    if ($Secrets.ContainsKey('telegram_token')) { $e['TELEGRAM_BOT_TOKEN']      = $Secrets['telegram_token'] }
+    foreach ($k in $Secrets.Keys) { $e[(Get-SecretEnvName $k)] = $Secrets[$k] }
     return $e
+}
+
+function Get-SecretEnvName {
+    param([string]$Key)
+    switch ($Key) {
+        'oauth_token'    { return 'CLAUDE_CODE_OAUTH_TOKEN' }
+        'telegram_token' { return 'TELEGRAM_BOT_TOKEN' }
+        default          { return "$Key".ToUpperInvariant() }
+    }
 }
 
 function Get-ClaudeArgv {
@@ -453,7 +469,11 @@ function Start-BotBg {
     param([Parameter(Mandatory)][string]$Bot, [switch]$Fresh, [string]$StartedBy = 'daemon-cold')
     $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'launch.ps1'), '-Bot', $Bot, '-Bg', '-StartedBy', $StartedBy)
     if ($Fresh) { $a += '-Fresh' }
-    $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments $a -TimeoutSec 150 -Label 'launch -Bg' -Capture -WorkingDirectory $script:BotCorp -Bot $Bot
+    # Attestation: this is a trusted start path, so mint the launch nonce the
+    # vault requires (raw nonce via env only; state holds its hash).
+    $env = @{}
+    try { $env['BOTCORP_LAUNCH_NONCE'] = New-LaunchNonce -Bot $Bot } catch { Write-DaemonLog "launch nonce not minted (fail-open, launch runs unattested): $($_.Exception.Message)" -Bot $Bot }
+    $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments $a -TimeoutSec 150 -Label 'launch -Bg' -Capture -Env $env -WorkingDirectory $script:BotCorp -Bot $Bot
     $last = ''; try { $last = (($r.Output -split "`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1) } catch {}
     return "launch.ps1 -Bg exit=$($r.ExitCode) $last".Trim()
 }
@@ -741,7 +761,11 @@ function Start-PtyHost {
     $node = Resolve-Node
     if (-not $node) { Write-DaemonLog 'node.exe not found - cannot start pty-host' -Bot $Bot; return 0 }
     $a = @((Join-Path $PSScriptRoot 'pty-host.mjs'), '--bot', $Bot, '--botcorp', $script:BotCorp, $(if ($Fresh) { '--fresh' } else { '--continue' }))
-    return (Start-Hidden -Exe $node -Arguments $a -WorkingDirectory $script:BotCorp)
+    # Start-Hidden inherits our environment: the launch nonce rides to
+    # pty-host and on to launch.ps1 inside the pty (which strips it before claude).
+    try { $env:BOTCORP_LAUNCH_NONCE = New-LaunchNonce -Bot $Bot } catch { Write-DaemonLog "launch nonce not minted (fail-open, launch runs unattested): $($_.Exception.Message)" -Bot $Bot }
+    try { return (Start-Hidden -Exe $node -Arguments $a -WorkingDirectory $script:BotCorp) }
+    finally { Remove-Item Env:BOTCORP_LAUNCH_NONCE -ErrorAction SilentlyContinue }
 }
 
 function Stop-PtyHost {

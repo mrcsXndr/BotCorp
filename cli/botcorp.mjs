@@ -26,13 +26,13 @@ import {
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
-  resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
+  resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } from './_lib.mjs';
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -96,9 +96,37 @@ async function readSecretValue(label) {
   return promptHidden(label);
 }
 
+// state/secret-access.jsonl: one line per decrypt, written by daemon/vault.ps1.
+// Audit history outlives bots, so this reads bot-name-as-filter, never through
+// requireBot/botExists.
+const SECRET_ACCESS_LOG = path.join(STATE_DIR, 'secret-access.jsonl');
+
+function cmdSecretsAudit(bot, flags) {
+  let text;
+  try { text = fs.readFileSync(SECRET_ACCESS_LOG, 'utf-8'); }
+  catch { out('no secret access recorded yet'); return 0; }
+  let tail = 50;
+  if (flags.tail !== undefined) {
+    const n = parseInt(flags.tail, 10);
+    if (!Number.isFinite(n) || n <= 0) usage('--tail needs a positive number');
+    tail = Math.min(n, 5000);
+  }
+  const lines = text.split('\n').filter(Boolean).slice(-tail);
+  const rows = [];
+  for (const line of lines) { try { rows.push(JSON.parse(line)); } catch {} }
+  const filtered = bot ? rows.filter((r) => r && r.bot === bot) : rows;
+  if (flags.json) { outJson(filtered); return 0; }
+  if (!filtered.length) { out('no secret access recorded yet'); return 0; }
+  for (const r of filtered) {
+    out(`${String(r.ts || '').padEnd(24)} ${String(r.bot || '').padEnd(12)} ${String(r.key || '').padEnd(20)} ${String(r.reason || '').padEnd(11)} ${String(r.pid ?? '').padEnd(7)} ${r.ok === false ? 'FAILED' : 'ok'}`);
+  }
+  return 0;
+}
+
 async function cmdSecrets({ pos, flags }) {
   const [, action, bot, key] = pos;
-  if (!action) usage('secrets set|list|delete <bot> [key]   (key = any name; oauth|telegram|hub alias oauth_token|telegram_token|hub_token; others reach automations as UPPERCASE env via automations[].secrets)');
+  if (!action) usage('secrets set|list|delete|acl|audit|migrate|lock|unlock|export-bundle|import-bundle <bot> [key]   (key = any name; oauth|telegram|hub alias oauth_token|telegram_token|hub_token; others reach automations as UPPERCASE env via automations[].secrets)');
+  if (action === 'audit') return cmdSecretsAudit(bot, flags);
   requireBot(bot);
   if (action === 'list') {
     const r = flags.json ? secretsListJson(bot) : runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'list', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 });
@@ -120,7 +148,98 @@ async function cmdSecrets({ pos, flags }) {
     if (r.err.trim()) process.stderr.write(r.err.trim() + '\n');
     return r.code;
   }
+  if (action === 'acl') return echoPs(runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'acl', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 }));
+  if (action === 'migrate') return echoPs(runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'migrate', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 }));
+  // Operator lock (docs/secrets.md): the passphrase travels on stdin to the
+  // .ps1 exactly like a secret value, never on argv. `lock` on an already
+  // locked vault re-locks without a passphrase (drops the until-reboot cache).
+  if (action === 'lock') {
+    const st = vaultLockState(bot);
+    let stdin = null;
+    if (st.mode !== 'operator') {
+      const pass = await readSecretValue(`Operator passphrase to lock ${bot} (hidden; you will need it after every reboot): `);
+      if (!pass) fail('secrets lock: empty passphrase');
+      stdin = pass + '\n';
+    }
+    return echoPs(runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'lock', '-BotCorpRoot', ROOT], { stdin, timeoutMs: 120_000 }));
+  }
+  if (action === 'unlock') {
+    const pass = await readSecretValue(`Operator passphrase for ${bot} (hidden): `);
+    if (!pass) fail('secrets unlock: empty passphrase');
+    const args = ['-Bot', bot, '-Action', 'unlock', '-BotCorpRoot', ROOT];
+    if (flags.permanent) args.push('-Permanent');
+    return echoPs(runPwshFile(SECRETS_PS1, args, { stdin: pass + '\n', timeoutMs: 120_000 }));
+  }
+  // The encrypted bundle (daemon/bundle.ps1, docs/secrets.md): the passphrase
+  // travels on stdin to the .ps1 exactly like a secret value, never on argv.
+  if (action === 'export-bundle') {
+    if (!flags.out) usage('secrets export-bundle <bot> --out <dir> [--files a,~/b]   (passphrase on stdin, or a hidden prompt; ~/x = relative to USERPROFILE, scope home)');
+    const pass = await readSecretValue(`Bundle passphrase for ${bot} (hidden): `);
+    if (!pass) fail('secrets export-bundle: empty passphrase');
+    const args = ['-Bot', bot, '-Action', 'export-bundle', '-OutDir', path.resolve(String(flags.out)), '-BotCorpRoot', ROOT];
+    // ONE comma-joined value: `pwsh -File` binds only the first of `-Files a b`.
+    if (flags.files) args.push('-Files', String(flags.files).split(',').map((s) => s.trim()).filter(Boolean).join(','));
+    return echoPs(runPwshFile(SECRETS_PS1, args, { stdin: pass + '\n', timeoutMs: 120_000 }));
+  }
+  if (action === 'import-bundle') {
+    if (!key) usage('secrets import-bundle <bot> <bundle.enc> [--manifest <json>] [--dry-run] [--allow-home] [--force]   (passphrase on stdin, or a hidden prompt)');
+    const bundle = path.resolve(key);
+    if (!fs.existsSync(bundle)) fail(`secrets import-bundle: ${bundle} not found`);
+    const pass = await readSecretValue(`Bundle passphrase for ${bot} (hidden): `);
+    if (!pass) fail('secrets import-bundle: empty passphrase');
+    const args = ['-Bot', bot, '-Action', 'import-bundle', '-Bundle', bundle, '-BotCorpRoot', ROOT];
+    if (flags.manifest) args.push('-Manifest', path.resolve(String(flags.manifest)));
+    if (flags['dry-run']) args.push('-DryRun');
+    if (flags['allow-home']) args.push('-AllowHome');   // scope: home files (under USERPROFILE) restore only on request
+    if (flags.force) args.push('-Force');               // existing targets are never overwritten silently
+    return echoPs(runPwshFile(SECRETS_PS1, args, { stdin: pass + '\n', timeoutMs: 120_000 }));
+  }
   usage(`secrets: unknown action '${action}'`);
+}
+
+// `secrets.ps1 -Action doctor -Json`: ACL state + lock state + one audited decrypt probe.
+function secretsDoctorJson(bot) {
+  const r = runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'doctor', '-Json', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 });
+  if (r.code !== 0) return null;
+  try { return JSON.parse(r.out.trim()); } catch { return null; }
+}
+
+// Lock state for `status` / the cockpit: {mode, version, locked, detail}. A v1
+// vault or a DPAPI-wrapped v2 key is readable from key.json alone; whether an
+// operator-locked vault has a good unlock cache for THIS boot only the vault
+// code can tell (`secrets.ps1 -Action lock-state`, which decrypts no entry).
+function vaultLockState(bot) {
+  const kf = readJson(path.join(botHome(bot), '.vault', 'key.json'));
+  if (!kf) return { mode: 'none', version: 1, locked: false, detail: `v1 vault (bot-name entropy); botcorp secrets migrate ${bot} moves it to a per-bot key` };
+  if (kf.wraps && kf.wraps.dpapi) return { mode: 'none', version: 2, locked: false, detail: 'per-bot key, DPAPI-wrapped (readable across an unattended reboot)' };
+  const r = runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'lock-state', '-Json', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 });
+  try { if (r.code === 0) { const j = JSON.parse(r.out.trim()); return { mode: String(j.mode), version: Number(j.version) || 2, locked: !!j.locked, detail: String(j.detail || '') }; } } catch {}
+  return { mode: 'operator', version: 2, locked: true, detail: `operator lock (state unreadable: ${(r.err || r.out).trim().split(/\r?\n/)[0].slice(0, 120)})` };
+}
+
+// Git for Windows bash for the hook probes (System32\bash.exe is WSL, not it).
+function resolveBash() {
+  if (process.platform !== 'win32') return findOnPath(['bash']) || 'bash';
+  const pf = process.env.ProgramFiles || 'C:\\Program Files';
+  for (const c of [path.join(pf, 'Git', 'bin', 'bash.exe'), path.join(pf, 'Git', 'usr', 'bin', 'bash.exe')]) if (fs.existsSync(c)) return c;
+  return findOnPath(['bash.exe'], { skip: /\\system32/i });
+}
+
+// Feed the vault-guard hook a synthetic Read of a SIBLING bot's vault and
+// expect it to block (exit 2). This is the isolation a bot session actually
+// gets: every bot runs as one Windows user, so no ACL can keep one bot's
+// process out of another's vault - the tool guard is the boundary.
+function vaultIsolationCheck(bot) {
+  const hooks = readJson(path.join(ROOT, 'harness', 'hooks', 'hooks.json'));
+  const registered = !!(hooks && (hooks.hooks?.PreToolUse || []).some((g) => /\bRead\b/.test(g.matcher || '') && /\bBash\b/.test(g.matcher || '') && (g.hooks || []).some((h) => /vault-guard\.sh/.test(h.command || ''))));
+  if (!registered) return { level: 'FAIL', detail: 'harness/hooks/hooks.json does not register hooks/vault-guard.sh for Read|...|Bash' };
+  const bash = resolveBash();
+  if (!bash) return { level: 'WARN', detail: 'no bash to probe the hook (Git for Windows expected)' };
+  const sibling = path.join(ROOT, 'bots', bot === 'other-bot' ? 'another-bot' : 'other-bot', '.vault', 'secrets.json');
+  const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: sibling } });
+  const r = run(bash, [path.join(ROOT, 'harness', 'hooks', 'vault-guard.sh')], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness') } });
+  if (r.code === 2 && /BLOCKED/.test(r.err)) return { level: 'PASS', detail: 'vault-guard blocks a Read of a sibling .vault (exit 2)' };
+  return { level: 'FAIL', detail: `vault-guard did NOT block a sibling .vault read (exit ${r.code}${r.timedOut ? ', timed out' : ''}): ${(r.err || r.out).trim().split(/\r?\n/)[0].slice(0, 120)}` };
 }
 
 // ---- accounts registry (daemon/accounts.ps1): logins for `chat`, separate from bots -----
@@ -576,14 +695,37 @@ function sessionKind(bot) {
 }
 function botState(bot) { return readJson(path.join(STATE_DIR, `${bot}.json`)) || {}; }
 
+// Launch attestation (docs/secrets.md): `botcorp start` is a trusted start
+// path. It mints a 32-byte nonce, records ONLY its sha256 in state/<bot>.json
+// `launch` (state files are readable by every process of this user) and hands
+// the raw nonce to launch.ps1 in the environment - never argv, never disk.
+// Without it launch.ps1 runs unattested: no secrets injected.
+function mintLaunchNonce(bot) {
+  const nonce = crypto.randomBytes(32).toString('hex');
+  const file = path.join(STATE_DIR, `${bot}.json`);
+  const st = readJson(file) || { bot };
+  st.launch = {
+    nonce_sha256: crypto.createHash('sha256').update(nonce, 'utf8').digest('hex'),
+    minted_by_pid: process.pid,
+    at: new Date().toISOString(),
+    at_unix: Math.floor(Date.now() / 1000),
+    consumed_at: null,
+  };
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(st, null, 2) + '\n');
+  return nonce;
+}
+
 async function startBot(bot, fresh) {
   // The daemon skips cold-starting a paused bot; an explicit start un-pauses it.
   try { fs.unlinkSync(pausedPath(bot)); } catch {}
+  const lock = vaultLockState(bot);
+  if (lock.locked) fail(`${bot}: vault is LOCKED (operator lock, not unlocked since boot) - a launch now would run without secrets. Unlock first: botcorp secrets unlock ${bot} (or the cockpit)`);
   if (sessionKind(bot) === 'bg') {
     const st = botState(bot);
     if (st.bg_id && pidAlive(Number(st.claude_pid))) fail(`${bot} is already running (background session ${st.bg_id}, pid ${st.claude_pid}); use restart`);
     const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : [])];
-    const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000 });
+    const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000, env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
     for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
     if (r.code !== 0) fail(`start: launch.ps1 -Bg exited ${r.code}`);
     const after = botState(bot);
@@ -592,7 +734,8 @@ async function startBot(bot, fresh) {
   }
   const live = ptyLive(bot);
   if (live) fail(`${bot} is already running (pty host pid ${live.pid}, pty pid ${live.ptyPid}); use restart`);
-  const pid = spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, fresh ? '--fresh' : '--continue']);
+  // pty-host passes its environment to the pwsh running launch.ps1 inside the pty.
+  const pid = spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, fresh ? '--fresh' : '--continue'], { env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
   const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     const rec = ptyLive(bot);
@@ -688,6 +831,7 @@ function botStatus(bot) {
     state: state ? { status: state.status ?? null, started_by: state.started_by ?? null, poller: state.poller ?? null, claude_pid: state.claude_pid ?? null, started_at: state.started_at ?? null } : null,
     telegram: !!(cfg && cfg.harness.modules.telegram),
     model: cfg ? cfg.model : null,
+    vault: vaultLockState(bot),
     harness_version: harnessVersion(),
     yaml_error: yamlError,
     status_json: status ? { age_s: statusAgeS, ctx_used_pct: ctxUsedPct, rate_limits: rateLimits, version: status.version ?? null } : null,
@@ -704,6 +848,7 @@ function printStatus(s) {
   if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
   out(`  telegram: ${s.telegram ? 'on' : 'off'}  model: ${s.model ?? '?'}  harness: ${s.harness_version ? 'v' + s.harness_version : '?'}`);
+  out(`  vault: ${s.vault.mode} v${s.vault.version}${s.vault.locked ? ` LOCKED - botcorp secrets unlock ${s.name}` : ''}`);
   if (s.yaml_error) out(`  bot.yaml: INVALID - ${s.yaml_error}`);
   if (s.status_json) {
     const rl = s.status_json.rate_limits || {};
@@ -1851,11 +1996,31 @@ async function cmdDoctor({ flags }) {
       try { cfg = loadBotYaml(botYamlPath(bot)); const errs = validate(cfg); add(errs.length ? 'FAIL' : 'PASS', `${bot}: bot.yaml`, errs.length ? errs.join('; ') : 'valid', 'bots'); }
       catch (e) { add('FAIL', `${bot}: bot.yaml`, e.message, 'bots'); }
       const vault = secretsListJson(bot);
+      const vd = vault.ok ? secretsDoctorJson(bot) : null;
       if (!vault.ok) add('FAIL', `${bot}: vault`, `secrets list failed: ${vault.err.slice(0, 160)}`, 'bots');
-      else if (vault.rows.some((r) => r.masked === 'unreadable')) add('FAIL', `${bot}: vault`, 'vault unreadable - re-enter tokens (botcorp secrets set)', 'bots');
+      else if (vault.rows.some((r) => r.masked === 'unreadable') || (vd && vd.probe && vd.probe.ok === false && !(vd.lock && vd.lock.locked))) add('FAIL', `${bot}: vault`, `vault unreadable (${vd && vd.probe ? vd.probe.detail : 'unreadable entry'}) - re-enter tokens (botcorp secrets set)`, 'bots');
       else {
         add(vault.rows.some((r) => r.key === 'oauth_token') ? 'PASS' : 'WARN', `${bot}: vault`, vault.rows.length ? `${vault.rows.map((r) => r.key).join(', ')}` : 'no entries (no oauth_token: the session will need /login)', 'bots');
         oauthInheritanceCheck(bot, vault.rows, envLast4, (l, n, d) => add(l, n, d, 'bots'));
+      }
+      if (vd && vd.acl) add(vd.acl.ok ? 'PASS' : 'WARN', `${bot}: vault acl`, vd.acl.ok ? vd.acl.detail : `${vd.acl.detail} (botcorp secrets acl ${bot})`, 'bots');
+      else if (vault.ok) add('WARN', `${bot}: vault acl`, 'could not read (secrets doctor failed)', 'bots');
+      // lock mode: what key.json says vs what bot.yaml asks for
+      if (vd && vd.lock) {
+        const want = cfg && cfg.vault && cfg.vault.lock ? String(cfg.vault.lock) : null;
+        const l = vd.lock;
+        if (l.locked) add('WARN', `${bot}: vault lock`, `${l.detail} - the daemon will not start or restart this bot until then`, 'bots');
+        else if (want && want !== l.mode) add('WARN', `${bot}: vault lock`, `bot.yaml vault.lock: ${want} but the vault is ${l.mode} (${l.mode === 'operator' ? `botcorp secrets unlock ${bot} --permanent` : `botcorp secrets lock ${bot}`})`, 'bots');
+        else add(l.version === 1 ? 'INFO' : 'PASS', `${bot}: vault lock`, `${l.mode} v${l.version}: ${l.detail}`, 'bots');
+      }
+      if (process.platform === 'win32') { const iso = vaultIsolationCheck(bot); add(iso.level, `${bot}: vault isolation`, iso.detail, 'bots'); }
+      // scoping: what the launcher will inject vs what the vault holds
+      if (cfg && vault.ok) {
+        const declared = Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : [];
+        const present = vault.rows.map((r) => r.key);
+        const missing = declared.filter((k) => !present.includes(k) && !(k === 'telegram_token' && !cfg.harness.modules.telegram));
+        const undeclared = present.filter((k) => !declared.includes(k));
+        add(missing.length ? 'WARN' : 'PASS', `${bot}: secrets scope`, `injects ${declared.join(', ') || '(none)'}${missing.length ? `; declared but not in the vault: ${missing.join(', ')} (botcorp secrets set ${bot} <key>)` : ''}${undeclared.length ? `; in the vault but not declared, never decrypted: ${undeclared.join(', ')}` : ''}`, 'bots');
       }
       // the generated settings.json must exist (WARN if not); the config home's
       // settings.json is optional. Neither may ever carry enabledPlugins.
@@ -1936,8 +2101,14 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   chat [--account <id>] [--cwd <folder>|--generic] [--dry-run]     (plain claude for an account in its own WT tab; a picker without flags)
   attach <bot> [--elevate] | tray <bot> on [--attach-at-login]|off|status   (pull a bg bot up in a WT tab; per-bot tray icon at login)
   sync <bot> [--dry-run]
-  secrets set <bot> <key> | list <bot> [--json] | delete <bot> <key>      (any key; value on stdin or hidden prompt;
-      oauth|telegram|hub alias oauth_token|telegram_token|hub_token, other keys reach automations[].secrets as UPPERCASE env)
+  secrets set <bot> <key> | list <bot> [--json] | delete <bot> <key> | acl <bot> | audit [bot] [--tail N] [--json]
+      | migrate <bot> | lock <bot> | unlock <bot> [--permanent]           (per-bot key; operator lock: passphrase on stdin, LOCKED after every reboot until unlock)
+      | export-bundle <bot> --out <dir> [--files a,~/b] | import-bundle <bot> <bundle.enc> [--manifest <json>] [--dry-run] [--allow-home] [--force]
+      (any key; value on stdin or hidden prompt; oauth|telegram|hub alias oauth_token|telegram_token|hub_token,
+      other keys reach automations[].secrets as UPPERCASE env; audit reads state/secret-access.jsonl,
+      newest --tail lines (default 50, max 5000), optional bot filter, no value ever recorded;
+      acl re-applies the vault ACL; export-bundle/import-bundle move a bot's vault between machines,
+      passphrase always on stdin, never argv)
   pair <bot> <senderId> | pair <bot> --list [--json] | pair <bot> --deny <senderId>
   config get <bot> [<dotted.path>] [--json] | config set <bot> <dotted.path> <value>
   approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>

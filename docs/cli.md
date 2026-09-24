@@ -165,6 +165,72 @@ echo <token> | botcorp secrets set bot-1 telegram
 botcorp secrets list bot-1
 ```
 
+### `secrets acl <bot>`
+
+Re-applies the vault directory ACL (current user + SYSTEM only, inheritance
+off, on the `.vault` folder and every file already in it) without touching
+any entry. What a copied or restored bot folder needs, since it may have
+inherited a wider ACL from its new parent. See `docs/secrets.md` for the
+threat model this ACL does (and doesn't) cover.
+
+### `secrets migrate <bot>`
+
+Moves a v1 vault (bot-name DPAPI entropy per entry) to v2: mints a random
+per-bot key, re-protects every entry with it, and writes `.vault/key.json`
+with a DPAPI wrap (lock mode `none`). A no-op, reported as such, on a vault
+that is already v2. `lock` runs this automatically first if needed.
+
+### `secrets lock <bot>` / `secrets unlock <bot> [--permanent]`
+
+Operator lock mode. `lock` (passphrase on stdin, minimum 8 characters; a
+hidden prompt when not piped) wraps the vault's per-bot key under the
+passphrase only and drops the DPAPI wrap, so the vault is LOCKED right now
+and stays locked after every reboot until `unlock`. Calling `lock` again on
+an already operator-locked vault re-locks it at once with no passphrase
+needed (drops the until-reboot unlock cache). `unlock` (passphrase on stdin)
+verifies it and caches the key until the next reboot, so the daemon can
+cold-start / restart the bot again; `--permanent` instead restores the
+DPAPI wrap and removes the operator lock entirely (back to lock mode
+`none`). Full mechanism, on-disk shapes and cockpit path: `docs/secrets.md`.
+
+```
+echo <passphrase> | botcorp secrets lock bot-1
+echo <passphrase> | botcorp secrets unlock bot-1
+```
+
+### `secrets export-bundle <bot> --out <dir> [--files a,~/b]` / `secrets import-bundle <bot> <bundle.enc> [--manifest <json>] [--dry-run] [--allow-home] [--force]`
+
+Move a bot's vault entries (and optionally chosen credential files) between
+machines as an encrypted bundle. The passphrase always comes in on stdin -
+never argv, never echoed. `--files` entries are relative to the bot's own
+folder by default; a `~/`-prefixed entry (e.g. `~/AppData/Roaming/thing/
+creds.json`) is relative to `USERPROFILE` instead (scope `home`).
+`import-bundle` prints every resolved target (`target [bot|home|vault] ...`)
+before writing anything, refuses any home-scoped file unless `--allow-home`
+is passed, and refuses to overwrite any existing file unless `--force` is
+passed; `--dry-run` prints what would be restored and writes nothing. Full
+bundle format, encryption details and import guarantees: `docs/secrets.md`.
+
+```
+echo <passphrase> | botcorp secrets export-bundle bot-1 --out .\out --files token.json,~/AppData/Roaming/thing/creds.json
+echo <passphrase> | botcorp secrets import-bundle bot-1 .\out\secrets.bundle.enc --allow-home
+```
+
+### `secrets audit [bot] [--tail N] [--json]`
+
+Reads `<BOTCORP_HOME>/state/secret-access.jsonl`, one line per decrypt written
+by `daemon/vault.ps1`: `bot`, `key`, `reason` (`launch|automation|cli|list|
+export|doctor|unlock|import`), `pid`/`ppid`, `ok`, `ts` — never a value.
+Append-only; audit history outlives a bot, so this does not require the bot
+to still exist (no `requireBot` check). Prints the newest `--tail` lines
+(default 50, max 5000), optionally filtered to one bot; `--json` returns the
+array. A missing log file prints `no secret access recorded yet` and exits 0.
+
+```
+botcorp secrets audit bot-1 --tail 20
+botcorp secrets audit --json
+```
+
 ### `pair <bot> <senderId>` / `pair <bot> --list [--json]` / `pair <bot> --deny <senderId>`
 
 The operator's approval of a Telegram sender, done at the machine or from
@@ -249,7 +315,9 @@ host does.
 
 The GUARDED WRITER: the only way `bot.yaml` changes from inside a bot session
 (the harness `config-guard` PreToolUse hook blocks direct `Edit`/`Write` on
-`bot.yaml`, the generated `settings.json`, `access.json` and the vault).
+`bot.yaml`, the generated `settings.json`, `access.json` and the vault; the
+`vault-guard` hook separately blocks any tool — including `Read`/`Bash` — from
+touching a vault or the secrets CLI's mutating verbs).
 `get` reads the effective config (defaults applied). Values parse as
 `true | false | null | <number> | [a,b] | string`. Automations are addressed
 by name: `automations.<name>.enabled`. Unknown paths (anything not in
@@ -289,6 +357,10 @@ says so). `reject` drops the entry.
 
 ### `start <bot> [--fresh]` / `stop <bot>` / `restart <bot> [--fresh]`
 
+- `start` is a trusted launch path: it mints the launch nonce (attestation,
+  `docs/secrets.md`) before spawning, so its launch gets the bot's declared
+  vault secrets. It refuses outright when the vault is operator-locked
+  (`vault: <bot> is LOCKED ... unlock first: botcorp secrets unlock <bot>`).
 - `start`: spawns `node daemon/pty-host.mjs --bot <bot> --botcorp <root>
   --continue|--fresh` DETACHED (the host owns the ConPTY; the cockpit attaches
   to it), waits up to 10 s for `<BOTCORP_HOME>/state/<bot>.pty.json` and prints
@@ -311,8 +383,11 @@ the daemon's `state/<bot>.json` (`status`, `started_by`, `poller`,
 `claude_pid`), telegram module, model, harness version
 (`harness/.claude-plugin/plugin.json`), the age of `<config
 home>/botcorp/status.json` with context used %, 5 h / 7 d rate-limit usage
-and the running CC version (written by the statusline on every render), and
-the pending approvals count.
+and the running CC version (written by the statusline on every render), the
+pending approvals count, and a `vault: <mode> v<version>[ LOCKED - botcorp
+secrets unlock <bot>]` line (`{mode, version, locked, detail}` under
+`vault` in `--json`) — the same lock state the cockpit reads for its vault
+drawer.
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 
@@ -413,7 +488,21 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   runs a second, independent bot supervisor and allowlists its task prefix
   that way;
 - per bot: `bot.yaml` valid; vault readable (`unreadable` entries =>
-  `vault unreadable - re-enter tokens`; no `oauth_token` => WARN); no
+  `vault unreadable - re-enter tokens`; no `oauth_token` => WARN);
+  `<bot>: vault acl` — PASS when `.vault` (and every file in it) grants only
+  the current user + SYSTEM with inheritance off, WARN otherwise (with
+  `botcorp secrets acl <bot>` to fix it); `<bot>: vault isolation` — feeds
+  the vault-guard hook a synthetic `Read` of a SIBLING bot's `.vault` and
+  expects it to block (exit 2); FAIL if the hook lets it through or
+  `harness/hooks/hooks.json` does not register it for
+  `Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`; `<bot>: secrets
+  scope` — declared (`bot.yaml` `secrets:`) vs. present vault keys, WARN on
+  either a declared key missing from the vault or a vault key that's present
+  but undeclared (never decrypted at launch); `<bot>: vault lock` — PASS
+  (v2) / INFO (v1) when the vault's actual lock mode matches (or `bot.yaml`
+  `vault.lock` is unset), WARN when it's operator-locked (the daemon will not
+  start or restart the bot until `botcorp secrets unlock <bot>`) or when
+  `bot.yaml` asks for a lock mode the vault isn't actually in; no
   `enabledPlugins` in `bots/<bot>/.claude/settings.json` or `<config
   home>/settings.json`; `<bot>: oauth token` — the vault `oauth_token` must
   exist and must not be the machine-wide `CLAUDE_CODE_OAUTH_TOKEN` (compared
@@ -492,10 +581,12 @@ Prints the command summary.
 ## What the cockpit calls
 
 `start|stop|restart <bot> [--fresh]`, `secrets list <bot> --json`,
-`secrets set <bot> <key>` (value on stdin), `pair <bot> <senderId>`, `pair
-<bot> --list --json`, `pair <bot> --deny <senderId>`, `update [--json]`,
-`update --apply|--skip <tag>`. Output is truncated to 4 KB and scrubbed of
-token shapes before it reaches the browser (`cockpit/cli.mjs`).
+`secrets set <bot> <key>` (value on stdin), `secrets unlock <bot>`
+(passphrase on stdin), `status <bot> --json` (lock state for the vault
+drawer), `pair <bot> <senderId>`, `pair <bot> --list --json`, `pair <bot>
+--deny <senderId>`, `update [--json]`, `update --apply|--skip <tag>`. Output
+is truncated to 4 KB and scrubbed of token shapes before it reaches the
+browser (`cockpit/cli.mjs`).
 
 ## Notes
 

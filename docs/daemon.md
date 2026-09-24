@@ -48,9 +48,10 @@ never secrets:
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... session=... claude_pid=...` |
-| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status`, `started_by`, `poller`, `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version` |
+| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status` (incl. `locked` — the vault is operator-locked, see below), `started_by`, `poller`, `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `launch` (launch attestation: `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}` — only the nonce's hash, `docs/secrets.md`) |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
+| `state/unlock/<bot>.key` | `botcorp secrets unlock` | the operator-lock unlock cache: the vault key, DPAPI-wrapped with entropy bound to the current boot time — dies with the boot, so an operator lock (`vault.lock: operator`) needs `unlock` again after every reboot |
 | `state/<bot>/automations.json`, `runs.jsonl`, `events/`, `jobs/` | automations.ps1 | see docs/automations.md |
 | `state/install.json` | install.ps1 | `{user_profile, user, logon_type, run_level, registered_at, botcorp_root, runtime_root, interval_min}` |
 | `state/daemon.json` | tick | `cockpit_pid`, `cockpit_started_at`, `update_check_at` |
@@ -164,6 +165,9 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
   decision              not alive              -> cold-start   (unless state/<bot>.paused or harness.service: manual)
                         alive + DEAD / STOLEN  -> restart      (idle-gated)
                         else                   -> none
+                        cold-start/restart, vault operator-locked -> locked (state/<bot>.json status: locked;
+                                    waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
+                                    without secrets, a restart would throw away the ones the live session holds)
   guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
                         hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
   isolated ticks        usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)

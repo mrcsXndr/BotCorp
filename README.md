@@ -63,7 +63,7 @@ safety hooks. A bot opts into the rest through `bot.yaml`:
 
 | Catalogue | Entries | Opt in via |
 |---|---|---|
-| Hooks | session start/end, inbound-prompt guard, precompact extract + timeline, memory sync, cost meter, auto-commit, block-dialogs, config-guard, core-guard, stop-failure, notification, subagent start/stop | loaded from the plugin automatically; `bot.yaml` `harness.hooks_disable: [...]` turns any off |
+| Hooks | session start/end, inbound-prompt guard, precompact extract + timeline, memory sync, cost meter, auto-commit, block-dialogs, config-guard, vault-guard, core-guard, stop-failure, notification, subagent start/stop | loaded from the plugin automatically; `bot.yaml` `harness.hooks_disable: [...]` turns any off |
 | Agents | `planner`, `senior-coder`, `coder`, `one-shot`, `critic`, `fable` | all available; a same-named file in the bot's own `.claude/agents/` overrides one |
 | Skills | `review-artifact`, `morning`, `standup`, `weekly`, `tasks`, `notes`, `prd`, `launch` (+ the `/critic` command) | `harness.skills: all` or a list; the rest are hidden |
 | Modules | `telegram`, `board`, `cost_meter`, `usage_resume`, `alert_triage`, `hub`, `janitor`, `remote_control`, `lessons`, `debrief`, `auto_commit`, `memory_sync`, `sound`, `telemetry`, `backup` | `harness.modules.<x>: true` in `bot.yaml` → env for the launched session + which daemon ticks run for this bot |

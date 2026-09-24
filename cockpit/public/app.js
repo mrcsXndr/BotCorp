@@ -156,9 +156,18 @@ async function renderDrawer(which) {
     } else if (which === 'vault') {
       box.innerHTML = '<p class="hint">loading</p>';
       const list = await api('GET', `/api/bots/${b.name}/secrets`);
+      let lock = null;
+      try { lock = await api('GET', `/api/bots/${b.name}/secrets/lock`); } catch {}
       let html = '<p class="hint">Values are encrypted at rest and never shown. Set a key to replace its value.</p>';
+      if (lock) {
+        html += `<div class="row"><span class="grow" style="font-weight:600">Vault lock</span><span class="dim">${esc(lock.mode)} v${esc(lock.version)}</span><span class="m" style="color:${lock.locked ? 'var(--bad)' : 'var(--ok)'}">${lock.locked ? 'LOCKED' : 'unlocked'}</span></div>`;
+        html += `<p class="hint">${esc(lock.detail)}</p>`;
+        if (lock.locked) html += '<div class="field"><input id="unlockPass" type="password" placeholder="operator passphrase" style="flex:1" autocomplete="off" /><button class="btn" id="unlockBtn">Unlock until reboot</button></div><div class="err" id="unlockErr"></div>';
+      }
       html += list.length ? list.map((s) => `<div class="row"><span class="m grow">${esc(s.key)}</span><span class="dim">${esc(s.masked)}</span></div>`).join('') : '<p class="hint">No secrets yet.</p>';
       html += '<div class="field"><input id="secKey" placeholder="key (oauth_token, telegram_token, ...)" /><input id="secVal" type="password" placeholder="value" style="flex:1" autocomplete="off" /><button class="btn" id="secSave">Set</button></div><div class="err" id="secErr"></div>';
+      html += '<div class="row" style="margin-top:10px"><span class="grow" style="font-weight:600">Secret access</span><button class="btn quiet" id="auditRefresh">Refresh</button></div>';
+      html += '<div id="auditRows"><p class="hint">loading</p></div>';
       box.innerHTML = html;
       el('secSave').onclick = async () => {
         el('secErr').textContent = '';
@@ -169,6 +178,18 @@ async function renderDrawer(which) {
           renderDrawer('vault');
         } catch (e) { el('secErr').textContent = e.message; }
       };
+      el('auditRefresh').onclick = () => loadAudit(b.name);
+      const unlockBtn = el('unlockBtn');
+      if (unlockBtn) unlockBtn.onclick = async () => {
+        el('unlockErr').textContent = '';
+        try {
+          await api('POST', `/api/bots/${b.name}/unlock`, { passphrase: el('unlockPass').value });
+          el('unlockPass').value = '';
+          toast('vault unlocked until reboot');
+          renderDrawer('vault');
+        } catch (e) { el('unlockErr').textContent = e.message; }
+      };
+      loadAudit(b.name);
     } else if (which === 'runs') {
       const r = await api('GET', `/api/bots/${b.name}/automations`);
       let html = '';
@@ -179,6 +200,16 @@ async function renderDrawer(which) {
       }
       box.innerHTML = html || '<p class="hint">Nothing here.</p>';
     }
+  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+}
+
+async function loadAudit(bot) {
+  const box = el('auditRows');
+  if (!box) return;
+  try {
+    const rows = await api('GET', `/api/bots/${bot}/secrets/audit?limit=100`);
+    if (!rows.length) { box.innerHTML = '<p class="hint">No secret access recorded yet.</p>'; return; }
+    box.innerHTML = rows.map((r) => `<div class="row"><span class="m">${esc(r.ts || '')}</span><span class="m grow">${esc(r.key || '')}</span><span class="dim">${esc(r.reason || '')}</span><span class="dim">pid ${esc(r.pid ?? '?')}</span><span class="m" style="color:${r.ok === false ? 'var(--bad)' : 'var(--ok)'}">${r.ok === false ? 'FAILED' : 'ok'}</span></div>`).join('');
   } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
 }
 

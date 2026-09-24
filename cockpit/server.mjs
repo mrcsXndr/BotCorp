@@ -165,6 +165,17 @@ app.post('/api/bots/:name/pair/deny', withBot(async (req, res, bot) => res.json(
 
 app.get('/api/bots/:name/secrets', withBot(async (_req, res, bot) => res.json(await vault.listSecrets(bot.name))));
 app.put('/api/bots/:name/secrets/:key', withBot(async (req, res, bot) => res.json(await vault.setSecret(bot.name, req.params.key, req.body?.value))));
+// Operator lock: state is read through the CLI; unlock pipes the passphrase
+// to `secrets unlock` on stdin. Only here (behind Access when exposed) or in
+// the terminal - never from a chat message.
+app.get('/api/bots/:name/secrets/lock', withBot(async (_req, res, bot) => res.json(await vault.lockState(bot.name))));
+app.post('/api/bots/:name/unlock', withBot(async (req, res, bot) => res.json(await vault.unlock(bot.name, req.body?.passphrase))));
+
+app.get('/api/secrets/audit', wrap(async (req, res) => {
+  const bot = typeof req.query.bot === 'string' ? req.query.bot : '';
+  res.json(await vault.auditTail(bot || null, parseInt(req.query.limit, 10) || 100));
+}));
+app.get('/api/bots/:name/secrets/audit', withBot(async (req, res, bot) => res.json(await vault.auditTail(bot.name, parseInt(req.query.limit, 10) || 100))));
 
 // Machine-wide Releases panel: read-only list here, Apply/Skip go through the
 // CLI same as every other write path (lifecycle() above is already generic).
