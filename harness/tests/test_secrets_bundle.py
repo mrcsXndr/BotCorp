@@ -261,9 +261,64 @@ def test_home_scope_round_trip_needs_allow_home_and_force(tmp_path):
     assert r.returncode != 0
     assert "(EXISTS)" in r.stdout and "Force" in (r.stdout + r.stderr)
     assert (dst_home / "creds" / "svc.json").read_bytes() == b"changed by the operator\n"
+
+    # a dry run previews the whole plan (EXISTS markers + the flags a real run
+    # would need) instead of refusing at the first gate, and writes nothing
+    r = _secrets(root, args + ["-DryRun"], stdin=PASSPHRASE + "\n", env=env)
+    assert r.returncode == 0, r.stderr
+    assert "would restore [home] creds/svc.json (EXISTS)" in r.stdout
+    assert "would restore [bot] token.json (EXISTS)" in r.stdout
+    assert "1 home-scoped file(s) need -AllowHome" in r.stdout
+    assert "2 existing file(s) need -Force" in r.stdout
+    assert "nothing written" in r.stdout
+    assert (dst_home / "creds" / "svc.json").read_bytes() == b"changed by the operator\n"
     r = _secrets(root, args + ["-AllowHome", "-Force"], stdin=PASSPHRASE + "\n", env=env)
     assert r.returncode == 0, r.stderr
     assert (dst_home / "creds" / "svc.json").read_bytes() == FAKE_HOME_BYTES
+
+
+def test_home_scope_accepts_ssh_and_config_paths_and_ignores_extra_entry_keys(tmp_path):
+    """Rulings: (a) unknown extra keys on a files[] entry (target, source,
+    purpose, bytes, shared_host_unsafe) are ignored, not rejected; (b) home
+    scope accepts any path under USERPROFILE - ~/.ssh, ~/.config included -
+    refusing only .claude / .claude-* (plus .botcorp and .vault as belt and
+    braces); it still needs -AllowHome and never overwrites without -Force."""
+    src_home = tmp_path / "src_home"
+    for rel in ("ssh/id_test", "config/tool/creds.json"):
+        (src_home / rel).parent.mkdir(parents=True, exist_ok=True)
+    (src_home / ".ssh").mkdir()
+    (src_home / ".ssh" / "id_test").write_bytes(b"ssh-key-bytes-for-tests-0123456789")
+    (src_home / ".config" / "tool").mkdir(parents=True)
+    (src_home / ".config" / "tool" / "creds.json").write_bytes(FAKE_HOME_BYTES)
+    root = tmp_path / "botcorp"
+    out_dir = tmp_path / "out"
+    _make_bot(root, "demo")
+    env = {"USERPROFILE": str(src_home), "BOTCORP_HOME": str(tmp_path / "rt")}
+    r = _secrets(root, ["-Bot", "demo", "-Action", "export-bundle", "-OutDir", str(out_dir),
+                        "-Files", "~/.ssh/id_test,~/.config/tool/creds.json"], stdin=PASSPHRASE + "\n", env=env)
+    assert r.returncode == 0, r.stderr
+    manifest_path = out_dir / "secrets.manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert {f["path"] for f in manifest["files"]} == {".ssh/id_test", ".config/tool/creds.json"}
+    # extra keys a foreign producer adds on each entry, and at the top level
+    for f in manifest["files"]:
+        f.update({"target": "~/" + f["path"], "source": "old box", "purpose": "test", "bytes": 1, "shared_host_unsafe": True})
+    manifest["notes"] = "extra top-level key"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    dst_home = tmp_path / "dst_home"
+    dst_home.mkdir()
+    env2 = {"USERPROFILE": str(dst_home), "BOTCORP_HOME": str(tmp_path / "rt2")}
+    args = ["-Bot", "demo", "-Action", "import-bundle", "-Bundle", str(out_dir / "secrets.bundle.enc"), "-Manifest", str(manifest_path)]
+    r = _secrets(root, args, stdin=PASSPHRASE + "\n", env=env2)
+    assert r.returncode != 0 and "AllowHome" in (r.stdout + r.stderr)   # still gated
+    assert not (dst_home / ".ssh" / "id_test").exists()
+    r = _secrets(root, args + ["-AllowHome"], stdin=PASSPHRASE + "\n", env=env2)
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert (dst_home / ".ssh" / "id_test").read_bytes() == b"ssh-key-bytes-for-tests-0123456789"
+    assert (dst_home / ".config" / "tool" / "creds.json").read_bytes() == FAKE_HOME_BYTES
+    r = _secrets(root, args + ["-AllowHome"], stdin=PASSPHRASE + "\n", env=env2)
+    assert r.returncode != 0 and "Force" in (r.stdout + r.stderr)        # never overwrites silently
 
 
 def test_home_scope_refuses_traversal_absolute_and_a_bot_folder_target(tmp_path):

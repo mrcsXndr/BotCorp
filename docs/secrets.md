@@ -79,8 +79,9 @@ echo <passphrase> | botcorp secrets import-bundle demo .\out\secrets.bundle.enc 
 `--files` names (default: none); a `~/`-prefixed entry is scope `home`,
 anything else is scope `bot`. `import-bundle` defaults `--manifest` to
 `secrets.manifest.json` next to the bundle file; `--dry-run` prints what
-would be restored (file and key names only - never values) and writes
-nothing.
+would be restored (file and key names only - never values), marks targets
+that already exist with `(EXISTS)`, reports which of `--allow-home` /
+`--force` the real run would need, and writes nothing.
 
 ### Import guarantees
 

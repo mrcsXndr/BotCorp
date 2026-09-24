@@ -234,14 +234,19 @@ try {
             # [Console]::Error, not Write-Error: one plain line the CLI can echo
             # (Write-Error wraps a long message across decorated lines).
             if ($bad.Count -gt 0) { [Console]::Error.WriteLine("secrets import-bundle: refusing unsafe target(s): $($bad -join '; ') - nothing written"); exit 1 }
-            if ($homeCount -gt 0 -and -not $AllowHome) { [Console]::Error.WriteLine("secrets import-bundle: $homeCount home-scoped file(s) (relative to $userProfile) need -AllowHome (botcorp: --allow-home) - nothing written"); exit 1 }
-            if ($existing.Count -gt 0 -and -not $Force) { [Console]::Error.WriteLine("secrets import-bundle: would overwrite existing file(s) - pass -Force (botcorp: --force): $($existing -join '; ') - nothing written"); exit 1 }
 
             if ($DryRun) {
-                foreach ($p in $plans) { Write-Output "would restore [$($p.scope)] $($p.path)" }
+                # A dry run is the preview of a real run: it reports the -AllowHome /
+                # -Force refusals the real run would hit instead of stopping at the
+                # first one, so the operator sees the whole plan in one pass.
+                foreach ($p in $plans) { Write-Output "would restore [$($p.scope)] $($p.path)$(if ($p.exists) { ' (EXISTS)' })" }
                 foreach ($k in ($result.vault.Keys | Sort-Object)) { Write-Output "would set vault $k" }
+                if ($homeCount -gt 0 -and -not $AllowHome) { Write-Output "dry run: $homeCount home-scoped file(s) need -AllowHome (botcorp: --allow-home)" }
+                if ($existing.Count -gt 0 -and -not $Force) { Write-Output "dry run: $($existing.Count) existing file(s) need -Force (botcorp: --force)" }
                 Write-Output "secrets import-bundle: dry run - $($plans.Count) files, $($result.vault.Count) keys, nothing written"
             } else {
+                if ($homeCount -gt 0 -and -not $AllowHome) { [Console]::Error.WriteLine("secrets import-bundle: $homeCount home-scoped file(s) (relative to $userProfile) need -AllowHome (botcorp: --allow-home) - nothing written"); exit 1 }
+                if ($existing.Count -gt 0 -and -not $Force) { [Console]::Error.WriteLine("secrets import-bundle: would overwrite existing file(s) - pass -Force (botcorp: --force): $($existing -join '; ') - nothing written"); exit 1 }
                 $me = "$env:USERDOMAIN\$env:USERNAME"
                 foreach ($p in $plans) {
                     $dir = Split-Path $p.full -Parent

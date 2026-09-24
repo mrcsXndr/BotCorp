@@ -3,6 +3,24 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.2
+
+- **The `auto_commit` Stop hook only commits inside the bot's own home.** It
+  used to act on `_guard.sh`'s BOT_HOME fallback (the session cwd), so a
+  `--plugin-dir` smoke run from another repo landed `chore(auto)` checkpoint
+  commits there. It now requires the launcher's `BOT_HOME`/`BOT_NAME` (a
+  `bots/<name>` folder), a session cwd inside that folder, and the folder
+  being the root of its own git work tree; anything else is a no-op
+  (`harness/tests/test_hooks_auto_commit.py`).
+- **`secrets import-bundle --dry-run` previews the whole plan.** It marks
+  targets that already exist with `(EXISTS)` and reports which of
+  `--allow-home` / `--force` the real run would need, instead of refusing at
+  the first gate. Unsafe targets still refuse. A real run is unchanged.
+- Tests for the two home-scope rulings: unknown extra keys on a manifest
+  `files[]` entry are ignored, and `~/.ssh` / `~/.config` paths import under
+  `--allow-home` (only `.claude` / `.claude-*`, plus `.botcorp` and any
+  `.vault`, are refused). No behaviour change.
+
 ## v0.2.1
 
 v0.2.0 plus the v0.1.4 hotfix below (`sync` accepts the `--bg` bypass
