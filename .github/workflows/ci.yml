@@ -99,7 +99,11 @@ jobs:
             BASE="${{ github.event.before }}"
             HEAD="${{ github.sha }}"
             if ! git cat-file -e "$BASE" 2>/dev/null || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
-              BASE=$(git rev-parse "$HEAD~1" 2>/dev/null || echo "$HEAD")
+              # --verify -q: a bare `rev-parse` echoes an unparsable "<sha>~1" to
+              # STDOUT before failing, which put a second line into GITHUB_OUTPUT
+              # on the root commit. No parent -> diff against the empty tree so
+              # the whole first commit is scanned.
+              BASE=$(git rev-parse --verify -q "$HEAD~1" || git hash-object -t tree /dev/null)
             fi
           fi
           echo "range=$BASE..$HEAD" >> "$GITHUB_OUTPUT"
