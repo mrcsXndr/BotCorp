@@ -116,3 +116,18 @@ def test_sync_settings_pin_bg_isolation_none(tmp_path):
     assert r.returncode == 0, r.stderr
     settings = json.loads((root / "bots" / "gamma" / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert settings["worktree"] == {"bgIsolation": "none"}, r.stderr
+
+
+def test_sync_settings_turn_off_cc_ui_noise(tmp_path):
+    root = _root_with_bot(tmp_path, "delta", "name: delta\n")
+    r = _node(str(SYNC), "delta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    settings = json.loads((root / "bots" / "delta" / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["feedbackSurveyRate"] == 0
+    assert settings["feedbackDrafts"] == "off"
+    assert settings["spinnerTipsEnabled"] is False
+    assert settings["promptSuggestionEnabled"] is False
+    assert settings["showTurnDuration"] is False
+    assert settings["env"]["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"] == "1"
+    # would also kill auto-update, so it must never be set
+    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in settings["env"]

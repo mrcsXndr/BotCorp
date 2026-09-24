@@ -3,6 +3,26 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.3
+
+Hotfix for the reference host's install step (branched from v0.1.2):
+
+- **`botcorp install` takes the password from piped stdin.** `install
+  -Password <pw>` was silently ignored and the hidden prompt then hung an
+  elevated, console-less shell with nothing registered. Now: piped stdin when
+  stdin is not a terminal (`$pw | node cli\botcorp.mjs install`), a hidden
+  prompt only on a real TTY, and with neither a fast exit 1 that says how to
+  pipe it. A password on argv is refused outright. S4U is only ever explicit
+  (`--s4u`); a blank password is an error, never a silent S4U fallback (the
+  Password logon is what gives the daemon DPAPI and git credentials). New
+  `--dry-run` prints what would be registered without registering.
+- **Generated bot settings turn off Claude Code UI noise**: `feedbackSurveyRate:
+  0`, `feedbackDrafts: off`, `spinnerTipsEnabled`, `promptSuggestionEnabled`,
+  `showTurnDuration: false` and `env.CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY=1`
+  in every bot's `.claude/settings.json` (a bot's config home does not inherit
+  the operator's `~/.claude/settings.json`). `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+  is deliberately not set: it also disables auto-update.
+
 ## v0.1.2
 
 Findings from the first `botcorp doctor` run on the reference host, fixed

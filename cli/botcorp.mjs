@@ -1412,21 +1412,28 @@ function cmdUpdate({ flags }) {
   return 0;
 }
 
-async function cmdInstall({ flags }) {
+const INSTALL_PIPE_HINT = 'pipe it on stdin, never on the command line (process listings show argv):  $pw | node cli\\botcorp.mjs install   (elevated), or register without a stored password with --s4u';
+
+async function cmdInstall({ pos, flags }) {
   const file = path.join(ROOT, 'daemon', 'install.ps1');
   if (flags.unregister) return shellDaemonScript('install.ps1', ['-Unregister'], 'install');
   if (!fs.existsSync(file)) { out('daemon/install.ps1 not present'); return 1; }
+  // A password on argv is refused outright: `install -Password x` used to be
+  // silently ignored (and then prompted, which hangs without a console).
+  if (pos.length > 1 || Object.keys(flags).some((k) => /^password$/i.test(k))) fail(`install: refusing a password on the command line; ${INSTALL_PIPE_HINT}`);
   let args = [];
   let stdin = null;
-  if (!flags.s4u) {
-    // Stored-password mode: the password goes to the script on STDIN, never
-    // on argv. Older install.ps1 without that switch = S4U only; say so.
-    if (!/PasswordFromStdin/.test(fs.readFileSync(file, 'utf-8'))) out('install: this daemon/install.ps1 has no stored-password mode; registering the S4U tasks (no password)');
-    else {
-      const pw = await readSecretValue('Windows password for the daemon task (hidden; blank = S4U, no stored password): ');
-      if (pw) { args = ['-PasswordFromStdin']; stdin = pw + '\n'; }
-    }
+  if (flags.s4u) args = ['-LogonType', 'S4U'];
+  else {
+    // Stored-password mode (the default: DPAPI + git credentials need a real
+    // logon). Piped stdin when there is one; a hidden prompt only on a real
+    // TTY; anything else fails fast. S4U is never a silent fallback.
+    const tty = process.stdin.isTTY;
+    const pw = tty ? await promptHidden('Windows password for the daemon task (hidden): ') : readStdinAll().trim();
+    if (!pw) fail(`install: ${tty ? 'no password given' : 'no TTY to prompt on and no password on stdin'}; ${INSTALL_PIPE_HINT}`);
+    args = ['-PasswordFromStdin']; stdin = pw + '\n';
   }
+  if (flags['dry-run']) args.push('-DryRun');
   const r = runPwshFile(file, args, { timeoutMs: 300_000, stdin });
   for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
   if (r.timedOut) out('install: timed out');
@@ -1938,7 +1945,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   status [<bot>] [--json]
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
-  install [--s4u] [--unregister]                                        (prompts hidden for the task password unless --s4u)
+  install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)
   suggest <bot> --topic <t> [--lesson <file>] [--dry-run]
   doctor [--json] [--host]

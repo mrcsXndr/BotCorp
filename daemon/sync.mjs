@@ -75,9 +75,18 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     env: {
       PYTHONIOENCODING: 'utf-8',
       CLAUDE_CODE_ARTIFACT_AUTO_OPEN: '0',
+      CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
       BOT_NAME: cfg.name,
       BOT_HOME: fwd(botHome),
     },
+    // No Claude Code UI noise in a bot session: a bot's config home does not
+    // inherit the operator's ~/.claude/settings.json, so it is set here. NOT
+    // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC - that also disables auto-update.
+    feedbackSurveyRate: 0,
+    feedbackDrafts: 'off',
+    spinnerTipsEnabled: false,
+    promptSuggestionEnabled: false,
+    showTurnDuration: false,
     permissions: cfg.permissions === 'bypass'
       ? { allow: ['Edit(*)', 'Write(*)', 'Bash(*)', 'Read(*)', 'Glob(*)', 'Grep(*)', 'WebFetch(*)', 'WebSearch(*)', 'Agent(*)', 'Skill(*)'],
           deny: ['AskUserQuestion', 'ExitPlanMode'], defaultMode: 'bypassPermissions' }

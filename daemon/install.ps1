@@ -61,6 +61,7 @@ param(
     [ValidateSet('Limited', 'Highest')][string]$RunLevel = 'Limited',
     [System.Security.SecureString]$Password,
     [switch]$PasswordFromStdin,           # one line on stdin (the CLI's hidden prompt); never argv
+    [switch]$DryRun,                      # collect the password, print what would be registered, register nothing
     [string]$GitUser = 'botcorp-bot',
     [string]$GitEmail = 'botcorp-bot@users.noreply.github.com',
     # internal: set on the elevated re-launch
@@ -196,15 +197,31 @@ if (-not $Unregister -and $LogonType -eq 'Password') {
         } finally { try { Remove-Item $PasswordFile -Force -ErrorAction SilentlyContinue } catch {} }
     } elseif ($Password) {
         $plain = ConvertTo-Plain $Password
-    } elseif ($PasswordFromStdin) {
+    } elseif ($PasswordFromStdin -or [Console]::IsInputRedirected) {
+        # Piped stdin (the CLI, or `$pw | pwsh -File install.ps1`): one line,
+        # read in memory, never logged. Nothing to read = fail, never a prompt.
         $plain = "$([Console]::In.ReadLine())".Trim()
-        if (-not $plain) { Say 'No password on stdin; nothing registered.' 'Red'; exit 1 }
-    } else {
+        if (-not $plain) { Say 'No password on stdin; nothing registered. Pipe it: $pw | node cli\botcorp.mjs install   (or -LogonType S4U explicitly)' 'Red'; exit 1 }
+    } elseif ([Environment]::UserInteractive) {
         Say "LogonType Password: the daemon task runs as $env:USERDOMAIN\$env:USERNAME whether logged on or not; the Task Scheduler stores the password (-LogonType S4U avoids that at the cost of no user profile / DPAPI)." 'Cyan'
         $sec = Read-Host -Prompt "  Password for $env:USERNAME" -AsSecureString
         $plain = ConvertTo-Plain $sec
-        if (-not $plain) { Say 'No password given; nothing registered.' 'Red'; exit 1 }
+        if (-not $plain) { Say 'No password given; nothing registered (S4U is never a silent fallback: pass -LogonType S4U).' 'Red'; exit 1 }
+    } else {
+        # No console to prompt on and nothing piped: a prompt here hung an
+        # elevated, non-interactive install on the reference host.
+        Say 'No TTY and nothing on stdin: pipe the password ($pw | node cli\botcorp.mjs install) or pass -LogonType S4U explicitly. Nothing registered.' 'Red'; exit 1
     }
+}
+
+if ($DryRun) {
+    $who = "$env:USERDOMAIN\$env:USERNAME"
+    $pwNote = if ($LogonType -eq 'Password') { " (password: $(if ($plain) { "provided, $($plain.Length) chars" } else { 'none' }))" } else { '' }
+    Say "DRYRUN: would register '$daemonTask' as $who, LogonType ${LogonType}${pwNote}, RunLevel ${RunLevel}: At Startup + every ${IntervalMinutes}m -> wscript -> pwsh -File $tickScript" 'Cyan'
+    Say "DRYRUN: would register '$launchTask' (Interactive, no triggers) -> pwsh -File $visibleScript" 'Cyan'
+    Say "DRYRUN: would write $(Join-Path $StateDir 'install.json'), set the repo git identity ($GitUser <$GitEmail>), and elevate via Start-Process -Verb RunAs if not already admin. Nothing registered." 'Cyan'
+    $plain = $null
+    exit 0
 }
 
 # --- elevation ------------------------------------------------------------------------

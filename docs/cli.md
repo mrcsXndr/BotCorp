@@ -339,14 +339,28 @@ kept) and `--skip <tag>` sets `skipped`; both stamp `decided_at` /
 never applies anything itself. `--check` shells to `daemon/update.ps1
 -Check` to record new releases now.
 
-### `install [--s4u] [--unregister]`
+### `install [--s4u] [--unregister] [--dry-run]`
 
-Registers the two scheduled tasks via `daemon/install.ps1`. Unless `--s4u`,
-it prompts (hidden) for the Windows password of the task principal and hands
-it to the script on STDIN (`-PasswordFromStdin`; never on argv); blank, or
-an `install.ps1` without that switch, registers the S4U tasks (no stored
-password) and says so. `--unregister` removes both tasks. Missing script:
-`daemon/install.ps1 not present`, exit 1.
+Registers the two scheduled tasks via `daemon/install.ps1`. The daemon task
+needs the Windows password of the task principal (Password logon = a real
+profile: DPAPI and git credentials work unattended). The password reaches
+the script on STDIN, never on argv:
+
+```powershell
+$pw = Read-Host -AsSecureString "Windows password"   # or however you hold it
+[System.Net.NetworkCredential]::new('', $pw).Password | node cli\botcorp.mjs install
+```
+
+Piped stdin is used whenever stdin is not a terminal (the same detection as
+`secrets set`); on a real TTY with nothing piped it prompts hidden. With no
+TTY and nothing on stdin it exits 1 at once with the pipe hint (an elevated,
+console-less install used to hang on the prompt). `-Password x` /
+`--password x` on the command line are refused (process listings show argv).
+S4U (no stored password, no profile) is only ever explicit: `--s4u`; a blank
+password is an error, never a silent S4U. `--dry-run` collects the password
+the same way, prints what would be registered (`LogonType Password`, the
+password length only) and registers nothing. `--unregister` removes both
+tasks. Missing script: `daemon/install.ps1 not present`, exit 1.
 
 ### `cockpit expose --team <slug> --aud <aud> --yes` / `cockpit unexpose`
 
