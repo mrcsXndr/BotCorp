@@ -1,0 +1,7 @@
+{
+  "_comment": "Bot-owned local settings. `botcorp sync` generates .claude/settings.json from bot.yaml and never touches this file — put personal permission overrides, extra hooks, or anything you don't want overwritten by a re-sync here. Not shared by the template; each bot's copy is its own.",
+  "permissions": {
+    "allow": [],
+    "deny": []
+  }
+}

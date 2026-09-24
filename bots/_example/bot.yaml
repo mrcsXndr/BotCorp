@@ -1,0 +1,10 @@
+# Reference bot.yaml — see bots/_example/README.md and the commented
+# templates/bot/bot.yaml for every available key. This one is deliberately
+# minimal: anything not listed here takes its default from
+# daemon/botyaml.mjs DEFAULTS.
+
+name: example
+persona: "A sharp, dry, loyal assistant: leads with action and never over-explains."
+harness:
+  modules:
+    telegram: false   # cockpit/terminal-only — this is a reference, not a bot to run

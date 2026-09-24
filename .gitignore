@@ -1,0 +1,51 @@
+# --- bots/ is WHITELIST-ignored: every bot is a plain private folder nested here (never a nested repo).
+# Only the README and the shipped example are tracked; nothing a real bot
+# writes (memory, transcripts, vault, config home) can ever be staged in BotCorp.
+bots/*
+!bots/README.md
+!bots/_example/
+bots/_example/.claude-*/
+bots/_example/.vault/
+bots/_example/memory/
+
+# --- belt and braces for the two things that must never leave a machine ---
+bots/**/.vault/
+bots/**/.claude-*/
+*.oauth_token
+.env
+*.env
+!*.env.example
+credentials.json
+token.json
+.credentials/
+*.pem
+*.p12
+*.pfx
+*.key
+
+# --- runtime, never source ---
+node_modules/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+*.lock
+*.bak.*
+.tmp/
+tmp/
+logs/
+screenshots/
+.claude/.current_session_id
+.claude/stash/
+.claude/.botcorp_*
+.claude/statsig/
+.claude/worktrees/
+
+# --- OS / editor junk ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
+*~

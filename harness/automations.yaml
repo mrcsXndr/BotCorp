@@ -1,0 +1,100 @@
+# harness/automations.yaml — the harness-level automation objects.
+#
+# Per-bot automations are declared in EACH bot's own bot.yaml under
+# `automations:` (a bot's own ticks — an issue-triage poll, an incident watch,
+# whatever it runs). This file declares the small, fixed set of ticks the
+# HARNESS itself needs on every machine: board polling, box hygiene, the
+# self-update check, the hub push and the telemetry rollup. Both are the SAME
+# object shape, evaluated by the one scheduler (daemon/automations.ps1) —
+# this file just supplies the harness's own entries so a bot never has to
+# copy them into its bot.yaml by hand.
+#
+# Object schema (mirrors bot.yaml's `automations:` entries):
+#   name         slug, unique within this file                        (required)
+#   scope        "bot"     -> run once per bot that has `module` enabled
+#                             (or every bot, if `module` is omitted)
+#                "machine" -> run once per machine, independent of any
+#                             single bot's modules (janitor, update_check)
+#                             default: "bot"
+#   module       a harness.modules.<name> key (bot.yaml) that must be `true`
+#                for this automation to run for that bot. Omitted = always on.
+#   trigger      exactly one of:
+#                  cron: "<5-field cron>"
+#                  interval_min: <int>
+#                  interval_from: "<dotted bot.yaml path>"   # e.g. integrations.hub.interval_s
+#                    default_min: <int>                       # used if that path is null/absent
+#                  event: alerts_log | board_ready | tg_inbound | session_stop | harness_updated
+#   command      shell command, cwd = the bot's BOT_HOME (or the harness root
+#                for a "machine"-scope entry with no bot context).
+#                ${HARNESS}  -> <BotCorp>/harness   (this checkout's plugin dir)
+#                ${BOTCORP}  -> <BotCorp>            (the checkout root)
+#                ${PY}       -> the pinned interpreter (BOT_PYTHON > python3 > python)
+#   timeout_min  hard wall-clock cap; the scheduler tree-kills past it
+#   backoff      {base_min, max_min} — exponential after a failing run, reset on success
+#   max_per_day  hard cap regardless of trigger cadence
+#   idle_gated   true = only run while the bot's own session is idle (Test-SessionBusy)
+#   enabled      false disables without deleting the entry
+#
+# Every run is recorded to <BOTCORP_HOME>/state/<bot>/runs.jsonl by the
+# scheduler, same as a bot's own automations — this file only supplies WHAT
+# runs and WHEN, not the run-recording mechanism.
+
+automations:
+  - name: board_poll
+    scope: bot
+    module: board
+    trigger:
+      interval_min: 3
+    command: "${PY} ${HARNESS}/tools/v2/gh_projects.py poll"
+    timeout_min: 2
+    backoff: { base_min: 10, max_min: 120 }
+    max_per_day: 500
+    idle_gated: false
+    enabled: true
+
+  - name: janitor
+    scope: machine
+    trigger:
+      cron: "0 4 * * *"
+    command: "pwsh -NoProfile -ExecutionPolicy Bypass -File ${BOTCORP}/daemon/tick.ps1 -JanitorOnly"
+    timeout_min: 20
+    backoff: { base_min: 30, max_min: 240 }
+    max_per_day: 4
+    idle_gated: false
+    enabled: true
+
+  - name: update_check
+    scope: machine
+    trigger:
+      interval_min: 60
+    command: "pwsh -NoProfile -ExecutionPolicy Bypass -File ${BOTCORP}/daemon/update.ps1 -Check"
+    timeout_min: 2
+    backoff: { base_min: 15, max_min: 120 }
+    max_per_day: 48
+    idle_gated: false
+    enabled: true
+
+  - name: hub_push
+    scope: bot
+    module: hub
+    trigger:
+      interval_from: integrations.hub.interval_s
+      default_min: 5
+    command: "${PY} ${HARNESS}/tools/infra/hub_push.py"
+    timeout_min: 1
+    backoff: { base_min: 5, max_min: 60 }
+    max_per_day: 2000
+    idle_gated: false
+    enabled: true
+
+  - name: telemetry_rollup
+    scope: bot
+    module: telemetry
+    trigger:
+      interval_min: 60
+    command: "${PY} ${HARNESS}/tools/v2/cost_meter.py --rollup"
+    timeout_min: 2
+    backoff: { base_min: 10, max_min: 120 }
+    max_per_day: 48
+    idle_gated: false
+    enabled: true

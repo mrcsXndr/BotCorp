@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>BotCorp cockpit</title>
+  <link rel="stylesheet" href="/vendor/xterm-css/xterm.css" />
+  <style>
+    /* One surface, one palette: a green-black ink that the terminal sits in
+       without a seam. Type is the system face (neutral on purpose); mono is
+       reserved for data (pids, paths, the terminal). No shadows, no glows. */
+    :root {
+      --bg: #111614; --panel: #161c19; --raised: #1c2420; --sunk: #0d100e;
+      --edge: rgba(215, 226, 210, .09); --edge-strong: rgba(215, 226, 210, .18);
+      --ink: #d8ded3; --ink-2: #a2ad9f; --mute: #66716a;
+      --ok: #9fbb94; --warn: #c9955f; --bad: #c8705a;
+      --sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+      --mono: "Cascadia Code", Consolas, ui-monospace, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; margin: 0; }
+    body { background: var(--bg); color: var(--ink); font: 14px/1.5 var(--sans); display: grid; grid-template-columns: 250px 1fr; grid-template-rows: 100dvh; overflow: hidden; }
+    button { font: inherit; color: inherit; }
+    ::selection { background: #2f4a3a; }
+
+    /* ---- bot column ---- */
+    aside { background: var(--panel); border-right: 1px solid var(--edge); display: flex; flex-direction: column; min-height: 0; }
+    .brand { padding: 22px 20px 12px; display: flex; align-items: baseline; gap: 10px; }
+    .brand h1 { margin: 0; font: 600 15px/1 var(--sans); letter-spacing: .01em; }
+    .brand .ver { color: var(--mute); font: 11px var(--mono); }
+    .list { flex: 1; overflow-y: auto; padding: 4px 10px 10px; scrollbar-width: thin; scrollbar-color: var(--edge-strong) transparent; }
+    .bot { position: relative; display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: 6px; padding: 10px 12px 10px 18px; cursor: pointer; color: var(--ink-2); }
+    .bot:hover { background: var(--raised); }
+    .bot.active { background: var(--raised); color: var(--ink); }
+    /* the one drawn shape: a chamfered stub on the left edge marks the running bot */
+    .bot::before { content: ''; position: absolute; left: 4px; top: 12px; bottom: 12px; width: 6px; background: var(--edge-strong); clip-path: polygon(0 0, 100% 25%, 100% 75%, 0 100%); }
+    .bot.on::before { background: var(--ok); }
+    .bot .n { font-weight: 600; font-size: 13.5px; }
+    .bot .s { display: block; font: 11px var(--mono); color: var(--mute); margin-top: 2px; }
+    .bot.on .s { color: var(--ok); }
+    .side-foot { padding: 10px 20px 16px; display: flex; gap: 14px; font-size: 12px; }
+    .side-foot a { color: var(--mute); text-decoration: none; }
+    .side-foot a:hover { color: var(--ink); }
+    .list .none { color: var(--mute); font-size: 12.5px; padding: 12px 10px; line-height: 1.6; }
+    .list .none code { font: 11.5px var(--mono); color: var(--ink-2); }
+
+    /* ---- main ---- */
+    main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+    header { display: flex; align-items: center; gap: 10px; padding: 18px 22px 10px; flex-wrap: wrap; }
+    header .title { font-weight: 600; font-size: 16px; display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+    header .title .st { font: 12px var(--mono); color: var(--mute); }
+    header .title .st.on { color: var(--ok); }
+    header .grow { flex: 1; }
+    .btn { background: var(--raised); border: 1px solid var(--edge); border-radius: 6px; padding: 7px 14px; cursor: pointer; font-size: 12.5px; }
+    .btn:hover { background: #232c27; border-color: var(--edge-strong); }
+    .btn:disabled { opacity: .4; cursor: default; }
+    .btn.primary { background: var(--ink); color: var(--bg); border-color: transparent; font-weight: 600; }
+    .btn.primary:hover { background: #ecefe8; }
+    .btn.quiet { background: none; border-color: transparent; color: var(--ink-2); }
+    .btn.quiet:hover { background: var(--raised); color: var(--ink); }
+    .seg { display: inline-flex; border: 1px solid var(--edge); border-radius: 6px; overflow: hidden; }
+    .seg button { background: none; border: 0; padding: 7px 14px; cursor: pointer; color: var(--ink-2); font-size: 12.5px; }
+    .seg button.active { background: var(--raised); color: var(--ink); }
+    details.more { position: relative; }
+    details.more > summary { list-style: none; cursor: pointer; }
+    details.more > summary::-webkit-details-marker { display: none; }
+    details.more .menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 5; background: var(--raised); border: 1px solid var(--edge-strong); border-radius: 8px; min-width: 230px; padding: 6px; display: flex; flex-direction: column; }
+    details.more .menu button, details.more .menu label { background: none; border: 0; text-align: left; padding: 8px 10px; border-radius: 5px; cursor: pointer; font-size: 12.5px; display: flex; align-items: center; gap: 8px; }
+    details.more .menu button:hover, details.more .menu label:hover { background: #232c27; }
+    details.more .menu hr { border: 0; border-top: 1px solid var(--edge); margin: 4px 0; }
+
+    .tabs { display: flex; gap: 2px; padding: 0 12px; flex-wrap: wrap; }
+    .tabs button { background: none; border: 0; padding: 6px 10px; border-radius: 5px; color: var(--mute); font-size: 12px; cursor: pointer; }
+    .tabs button:hover { color: var(--ink-2); }
+    .tabs button.active { color: var(--ink); background: var(--raised); }
+    .drawer { display: none; margin: 8px 22px 0; padding: 12px 16px; background: var(--panel); border: 1px solid var(--edge); border-radius: 8px; font-size: 12.5px; max-height: 40vh; overflow-y: auto; }
+    .drawer.show { display: block; }
+    .kv { display: grid; grid-template-columns: max-content 1fr; gap: 3px 18px; }
+    .kv .k { color: var(--mute); }
+    .kv .v { font: 12px var(--mono); color: var(--ink-2); word-break: break-all; }
+    .row { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-top: 1px solid var(--edge); }
+    .row:first-child { border-top: 0; }
+    .row .m { font: 12px var(--mono); color: var(--ink-2); }
+    .row .grow { flex: 1; min-width: 0; }
+    .row .dim { color: var(--mute); font-size: 11.5px; }
+    .field { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+    .field input { background: var(--sunk); border: 1px solid var(--edge); border-radius: 6px; color: var(--ink); padding: 8px 10px; font: 12.5px var(--mono); min-width: 0; }
+    .field input:focus { outline: none; border-color: var(--edge-strong); }
+    .hint { color: var(--mute); font-size: 12px; margin: 0 0 6px; }
+    .err { color: var(--bad); font-size: 12px; min-height: 16px; }
+
+    .notice { display: none; align-items: center; gap: 12px; margin: 8px 22px 0; padding: 9px 14px; border: 1px solid var(--edge-strong); border-radius: 8px; font-size: 13px; }
+    .notice.show { display: flex; }
+    .notice.exit { border-color: var(--bad); }
+    .notice .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .notice .x { background: none; border: 0; color: var(--mute); cursor: pointer; }
+
+    .empty { flex: 1; display: grid; place-items: center; color: var(--mute); text-align: center; padding: 20px; }
+    .empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; }
+
+    /* ---- terminal ---- */
+    .termwrap { flex: 1; min-height: 0; display: none; flex-direction: column; padding: 8px 22px 12px; }
+    .termwrap.show { display: flex; }
+    #term { flex: 1; min-height: 0; background: var(--sunk); border: 1px solid var(--edge); border-radius: 8px; padding: 10px; }
+    .xterm .xterm-viewport { background: transparent !important; }
+    .keys { display: flex; gap: 6px; flex-wrap: wrap; padding: 8px 0 0; }
+    .keys button { background: var(--raised); border: 1px solid var(--edge); border-radius: 6px; color: var(--ink-2); padding: 7px 0; min-width: 44px; font: 12px var(--mono); cursor: pointer; touch-action: manipulation; }
+    .keys button:active { background: #2a3530; color: var(--ink); }
+    .keys button.wide { min-width: 60px; padding: 7px 10px; }
+    .keys .sp { flex: 1; }
+
+    /* ---- chat ---- */
+    .chatwrap { flex: 1; min-height: 0; display: none; flex-direction: column; padding: 8px 22px 12px; }
+    .chatwrap.show { display: flex; }
+    .msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 4px; scrollbar-width: thin; scrollbar-color: var(--edge-strong) transparent; }
+    .msgs .cempty { margin: auto; color: var(--mute); font-size: 13px; text-align: center; line-height: 1.6; }
+    .bubble { max-width: 78%; padding: 9px 13px; border-radius: 10px; font-size: 13.5px; white-space: pre-wrap; word-wrap: break-word; }
+    .bubble.user { align-self: flex-end; background: var(--raised); border: 1px solid var(--edge-strong); border-bottom-right-radius: 3px; }
+    .bubble.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--edge); border-bottom-left-radius: 3px; }
+    .bubble .tools { display: block; margin-top: 6px; color: var(--mute); font: 11px var(--mono); }
+    .compose { display: flex; gap: 8px; align-items: flex-end; padding-top: 8px; }
+    .compose textarea { flex: 1; resize: none; max-height: 160px; min-height: 40px; background: var(--sunk); border: 1px solid var(--edge); border-radius: 8px; padding: 10px 12px; font: 13.5px var(--sans); color: var(--ink); }
+    .compose textarea:focus { outline: none; border-color: var(--edge-strong); }
+
+    /* ---- modal (history) ---- */
+    .modal-bg { position: fixed; inset: 0; background: rgba(8, 11, 9, .6); display: none; place-items: center; z-index: 10; }
+    .modal-bg.show { display: grid; }
+    .modal { background: var(--panel); border: 1px solid var(--edge-strong); border-radius: 10px; width: 560px; max-width: 94vw; max-height: 84vh; overflow-y: auto; padding: 20px 22px; }
+    .modal h2 { margin: 0 0 4px; font-size: 15px; }
+    .hrow { padding: 9px 0; border-top: 1px solid var(--edge); font-size: 12.5px; }
+    .hrow .top { display: flex; gap: 10px; color: var(--ink-2); }
+    .hrow .top .own { color: var(--ok); font: 11px var(--mono); }
+    .hrow .top .sz { margin-left: auto; color: var(--mute); font: 11px var(--mono); }
+    .hrow .prev { color: var(--mute); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .hrow .proj { color: var(--mute); font: 10.5px var(--mono); word-break: break-all; }
+
+    /* ---- releases (updates modal) ---- */
+    .rel { padding: 12px 0; border-top: 1px solid var(--edge); }
+    .rel:first-child { padding-top: 0; border-top: 0; }
+    .rel .relhead { display: flex; align-items: baseline; gap: 10px; }
+    .rel .tag { font: 600 12.5px var(--mono); color: var(--ink); }
+    .rel .date { color: var(--mute); font-size: 11.5px; }
+    .rel .status { margin-left: auto; font-size: 11px; color: var(--mute); }
+    .rel .status.applied { color: var(--ok); }
+    .rel .status.failed { color: var(--bad); }
+    .rel dl { margin: 8px 0 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 12.5px; }
+    .rel dl dt { color: var(--mute); }
+    .rel dl dd { margin: 0; color: var(--ink-2); }
+    .rel .actions { display: flex; gap: 8px; margin-top: 10px; }
+
+    .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 9px 16px; font-size: 13px; transition: transform .2s; z-index: 20; pointer-events: none; max-width: 92vw; }
+    .toast.show { transform: translate(-50%, 0); }
+    .toast.err { background: var(--bad); color: #fff; }
+    .drop { outline: 2px dashed var(--edge-strong); outline-offset: -6px; }
+
+    /* ---- phone ---- */
+    @media (max-width: 700px) {
+      body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      aside { border-right: 0; border-bottom: 1px solid var(--edge); flex-direction: row; align-items: center; overflow-x: auto; }
+      .brand { padding: 10px 12px; }
+      .list { display: flex; gap: 4px; padding: 6px 8px; overflow-x: auto; overflow-y: hidden; flex: 1; }
+      .bot { width: auto; white-space: nowrap; padding: 6px 10px 6px 16px; }
+      .bot .s { display: none; }
+      .side-foot { padding: 0 12px; }
+      header { padding: 10px 12px 6px; gap: 6px; }
+      header .title { font-size: 14px; flex-basis: 100%; margin-bottom: 4px; }
+      header .grow { display: none; }
+      .btn { padding: 7px 10px; }
+      .seg button { padding: 7px 11px; }
+      .tabs { padding: 0 2px; }
+      .drawer, .notice { margin-left: 12px; margin-right: 12px; }
+      .termwrap, .chatwrap { padding: 6px 8px 8px; }
+      /* even 6-column grid: no spacer, no button flung to an edge */
+      .keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+      .keys .sp { display: none; }
+      .keys button, .keys button.wide { min-width: 0; padding: 10px 0; }
+      .bubble { max-width: 90%; }
+    }
+  </style>
+</head>
+<body>
+  <aside>
+    <div class="brand"><h1>BotCorp</h1><span class="ver" id="ver"></span></div>
+    <div class="list" id="list"></div>
+    <div class="side-foot"><a href="/guide.html" target="_blank" rel="noopener">guide</a><a href="#" id="chatLink">new chat</a><a href="#" id="updatesLink">updates</a></div>
+  </aside>
+
+  <main id="main">
+    <header id="header" style="display:none">
+      <div class="title"><span id="hName"></span><span class="st" id="hState"></span></div>
+      <div class="grow"></div>
+      <div class="seg" id="viewSeg"><button id="vtChat" class="active">Chat</button><button id="vtTerm">Terminal</button></div>
+      <button class="btn primary" id="startBtn">Start</button>
+      <button class="btn" id="stopBtn">Stop</button>
+      <button class="btn" id="restartBtn">Restart</button>
+      <details class="more" id="more">
+        <summary class="btn quiet" title="more actions">more</summary>
+        <div class="menu">
+          <button id="freshBtn">Restart fresh (new session)</button>
+          <hr />
+          <button id="rcLoginBtn">Enable Remote Control (/login)</button>
+          <button id="rcStartBtn">Start Remote Control</button>
+          <hr />
+          <button id="historyBtn">Session history</button>
+          <label><input type="checkbox" id="copySel" /> Copy on select</label>
+        </div>
+      </details>
+    </header>
+    <div class="tabs" id="tabs" style="display:none">
+      <button data-drawer="details">details</button>
+      <button data-drawer="pairing" id="tabPairing">pairing</button>
+      <button data-drawer="vault">vault</button>
+      <button data-drawer="runs">runs</button>
+    </div>
+    <div class="drawer" id="drawer"></div>
+    <div class="notice" id="linkbar"><span id="linkbarText" class="grow"></span><button class="btn primary" id="linkbarBtn">Open</button><button class="x" id="linkbarClose">dismiss</button></div>
+    <div class="notice exit" id="exitbar"><span id="exitbarText" class="grow"></span><button class="btn primary" id="exitRestartBtn">Restart</button><button class="x" id="exitbarClose">dismiss</button></div>
+
+    <div class="empty" id="empty"><div><b>No bot selected</b>Pick one on the left.</div></div>
+
+    <div class="termwrap" id="termwrap">
+      <div id="term"></div>
+      <div class="keys" id="keys">
+        <button data-seq="\x1b" title="Escape">Esc</button>
+        <button data-seq="\x03" title="Ctrl+C">^C</button>
+        <button data-seq="\x0c" title="Ctrl+L redraw">^L</button>
+        <button data-seq="mode" title="cycle mode (Shift+Tab)">Mode</button>
+        <button data-seq="\t">Tab</button>
+        <button data-seq="\r" class="wide">Enter</button>
+        <span class="sp"></span>
+        <button data-seq="\x1b[D">&larr;</button>
+        <button data-seq="\x1b[A">&uarr;</button>
+        <button data-seq="\x1b[B">&darr;</button>
+        <button data-seq="\x1b[C">&rarr;</button>
+        <button id="attachBtn" class="wide" title="attach an image or file">+file</button>
+        <input type="file" id="fileInput" hidden />
+      </div>
+    </div>
+    <div class="chatwrap" id="chatwrap">
+      <div class="msgs" id="msgs"></div>
+      <div class="compose">
+        <textarea id="chatInput" rows="1" inputmode="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Message the bot" title="Enter sends, Shift+Enter for a new line"></textarea>
+        <button class="btn primary" id="chatSend">Send</button>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal-bg" id="historyBg">
+    <div class="modal">
+      <h2 id="histTitle">Sessions</h2>
+      <p class="hint">Past sessions in this bot's own config home. Read-only.</p>
+      <div id="histList"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" id="histClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="chatBg">
+    <div class="modal">
+      <h2>New chat</h2>
+      <p class="hint">Opens a plain interactive Claude in its own Windows Terminal tab on this machine's desktop — not in this browser. Over a remote cockpit you see the launch outcome here, not the tab.</p>
+      <div class="field" style="flex-direction:column;align-items:stretch">
+        <label class="hint" for="chatAccount" style="margin:0 0 4px">account</label>
+        <select id="chatAccount"></select>
+      </div>
+      <div class="field">
+        <label><input type="radio" name="chatMode" id="chatModeGeneric" checked /> Generic (plain Claude, your user settings)</label>
+        <label><input type="radio" name="chatMode" id="chatModeCodebase" /> Codebase</label>
+      </div>
+      <div id="chatCwdBox" style="display:none">
+        <div class="field" style="flex-direction:column;align-items:stretch">
+          <label class="hint" for="chatRecent" style="margin:0 0 4px">recent folder</label>
+          <select id="chatRecent"></select>
+        </div>
+        <div class="field"><input id="chatCwdInput" placeholder="or type a folder path" style="flex:1" /></div>
+      </div>
+      <div class="field"><button class="btn primary" id="chatLaunchBtn">Launch</button></div>
+      <pre id="chatOut" class="hint" style="white-space:pre-wrap;word-break:break-all;display:none"></pre>
+      <div class="err" id="chatErr"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" id="chatClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg" id="updatesBg">
+    <div class="modal">
+      <h2>Releases</h2>
+      <p class="hint">Harness updates. Nothing applies itself — Apply / Skip is an admin action, machine-wide.</p>
+      <div id="updatesList"></div>
+      <div style="display:flex;justify-content:flex-end;margin-top:12px"><button class="btn" id="updatesClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/vendor/xterm/xterm.js"></script>
+  <script src="/vendor/xterm-fit/addon-fit.js"></script>
+  <script src="/vendor/xterm-links/addon-web-links.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

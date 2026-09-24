@@ -1,0 +1,12 @@
+{
+  "name": "botcorp",
+  "description": "The BotCorp harness plugin, self-hosted from the BotCorp repository.",
+  "owner": { "name": "BotCorp" },
+  "plugins": [
+    {
+      "name": "botcorp",
+      "source": "./",
+      "description": "BotCorp harness plugin (hooks, agents, skills, tools) — the daemon loads it in place with --plugin-dir; this marketplace entry lets outsiders `claude plugin install botcorp@BotCorp` instead."
+    }
+  ]
+}

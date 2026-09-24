@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# BotCorp pre-commit guard — blocks credentials, identity strings and a bad
+# commit author from ever landing in this PUBLIC repo. Installed by
+# `git config core.hooksPath .githooks`. This protects against the MISTAKE
+# case; it is not a substitute for keeping secrets in gitignored files
+# (.vault/, .env, channels/telegram/.env).
+
+set -uo pipefail
+
+fail=0
+say() { printf '%s\n' "$*" >&2; }
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PY="${BOT_PYTHON:-python3}"
+command -v "$PY" >/dev/null 2>&1 || PY=python
+
+# --- 1. commit author must be the noreply identity ---------------------------
+# Every commit in this repo, human or bot, on any machine, uses a
+# users.noreply.github.com address (docs/engine-contract.md). Anything else
+# means a real email is about to land in PUBLIC history.
+AUTHOR_EMAIL="$(git config user.email || true)"
+case "$AUTHOR_EMAIL" in
+  *@users.noreply.github.com) : ;;
+  *)
+    say "BLOCKED: git config user.email is '$AUTHOR_EMAIL', not a users.noreply.github.com address."
+    say "         Fix it: git config user.email <id>+<login>@users.noreply.github.com"
+    say "         (find <id>+<login> at https://github.com/settings/emails)"
+    fail=1
+    ;;
+esac
+
+# --- 2. forbidden filenames + credential patterns (shared with CI) -----------
+if ! "$ROOT/scripts/secret-scan.sh" --staged; then
+  fail=1
+fi
+
+# --- 3. zero identity strings -------------------------------------------------
+if ! "$PY" "$ROOT/scripts/debrand-lint.py" --staged; then
+  fail=1
+fi
+
+if [ "$fail" -ne 0 ]; then
+  say ""
+  say "Nothing was committed."
+  exit 1
+fi
+exit 0

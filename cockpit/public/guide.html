@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>BotCorp cockpit guide</title>
+  <style>
+    :root { --bg: #111614; --panel: #161c19; --edge: rgba(215,226,210,.09); --ink: #d8ded3; --ink-2: #a2ad9f; --mute: #66716a; --ok: #9fbb94; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 44px 20px 80px; }
+    h1 { font-size: 22px; margin: 22px 0 4px; }
+    h2 { font-size: 15px; margin: 34px 0 8px; }
+    p { margin: 0 0 12px; color: var(--ink-2); }
+    code { font: 13px "Cascadia Code", Consolas, ui-monospace, monospace; background: var(--panel); border: 1px solid var(--edge); border-radius: 5px; padding: 1px 6px; color: var(--ink); }
+    ol { padding-left: 22px; color: var(--ink-2); } li { margin-bottom: 6px; }
+    a { color: var(--ink-2); }
+    .ok { color: var(--ok); }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a href="/">back to the cockpit</a>
+    <h1>How the cockpit works</h1>
+    <p>One page for every bot on this machine: its live terminal, a chat view of the same session, and the operator actions the daemon exposes.</p>
+
+    <h2>What you see</h2>
+    <p>The left column lists every bot (every <code>bots/&lt;name&gt;/bot.yaml</code>). A <span class="ok">green stub</span> means its session is up. Pick one to attach: <b>Chat</b> shows the conversation as bubbles, <b>Terminal</b> shows the raw Claude Code screen.</p>
+
+    <h2>Start, stop, restart</h2>
+    <p>These ask the daemon (through <code>botcorp start|stop|restart</code>). The cockpit never starts a session itself, so closing this page or updating the cockpit never kills a bot. <b>Restart fresh</b> (under <i>more</i>) starts a new session instead of continuing the last one.</p>
+
+    <h2>From a phone</h2>
+    <ol>
+      <li>Chat view is the default on narrow screens: type, press Enter.</li>
+      <li>In Terminal view the key row gives you Esc, Ctrl+C, Ctrl+L (redraw), Mode, Tab, Enter and arrows.</li>
+      <li><b>+file</b> (or drop, or paste) uploads an image or a file and types its path into the prompt. Add your question and press Enter.</li>
+    </ol>
+
+    <h2>Telegram</h2>
+    <p>Whoever messages the bot first gets a pairing code and appears under <b>pairing</b>. Approve them there (or type a numeric Telegram id). Nothing a stranger writes reaches the bot before that.</p>
+
+    <h2>Vault</h2>
+    <p>Secrets (the Claude OAuth token, a Telegram bot token) are stored encrypted on this machine and never shown again. Set a key to replace its value.</p>
+
+    <h2>Remote Control</h2>
+    <p>Optional. <b>Enable Remote Control</b> runs <code>/login</code> in the terminal and surfaces the link; <b>Start Remote Control</b> runs <code>/remote-control</code> and surfaces the claude.ai link for your phone. Those sessions are stored by Anthropic.</p>
+
+    <h2>Something looks stuck</h2>
+    <p>Press <b>Restart</b>. The session continues where it was. If the session exited, the red bar says so and offers a restart.</p>
+  </div>
+</body>
+</html>

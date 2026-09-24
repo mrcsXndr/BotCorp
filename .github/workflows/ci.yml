@@ -1,0 +1,126 @@
+name: ci
+
+# Required status checks for branch protection on main (docs/improvement-cycle.md):
+# validate, pytest, hooks-syntax, node-check, debrand-lint, secret-scan, pwsh-parse.
+# Job names below are pinned to those exact strings — do not rename a job
+# without updating the branch-protection required-checks list to match.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: Install Claude Code
+        run: npm i -g @anthropic-ai/claude-code
+      # UNVERIFIED: whether `plugin validate` needs auth is not confirmed from
+      # inside this session (no CI run performed here). If it turns out to
+      # require login, gate this step behind a secret token or drop it to a
+      # `continue-on-error: true` warning instead of a hard failure.
+      - name: Validate the harness plugin
+        run: claude plugin validate harness --strict
+
+  pytest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      # The node-driven tests (botyaml.mjs, sync.mjs, the CLI) import js-yaml.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - run: python -m pip install --upgrade pip pytest
+      - run: python -m pytest harness/tests -q
+
+  hooks-syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: bash -n every shell hook + script
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            bash -n "$f" || fail=1
+          done < <(find harness/hooks .githooks scripts -type f \( -name '*.sh' -o -name 'pre-commit' \) -print0)
+          exit $fail
+
+  node-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci
+      - name: node --check every .mjs/.js/.cjs outside node_modules
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r -d '' f; do
+            node --check "$f" || fail=1
+          done < <(find . -path ./node_modules -prune -o -path './bots' -prune -o -type f \( -name '*.mjs' -o -name '*.js' -o -name '*.cjs' \) -print0)
+          exit $fail
+
+  debrand-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: python scripts/debrand-lint.py --all --self-test
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Resolve the diff range for this event
+        id: range
+        shell: bash
+        run: |
+          set -uo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+            if ! git cat-file -e "$BASE" 2>/dev/null || [ "$BASE" = "0000000000000000000000000000000000000000" ]; then
+              BASE=$(git rev-parse "$HEAD~1" 2>/dev/null || echo "$HEAD")
+            fi
+          fi
+          echo "range=$BASE..$HEAD" >> "$GITHUB_OUTPUT"
+      - run: scripts/secret-scan.sh --range "${{ steps.range.outputs.range }}"
+
+  pwsh-parse:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse every .ps1 with the PowerShell language parser
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path . -Recurse -Filter *.ps1 -Exclude node_modules |
+            Where-Object { $_.FullName -notmatch '\\node_modules\\' -and $_.FullName -notmatch '\\bots\\' }
+          $fail = $false
+          foreach ($f in $files) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors -and $errors.Count -gt 0) {
+              foreach ($e in $errors) { Write-Host "::error file=$($f.FullName)::$($e.Message)" }
+              $fail = $true
+            }
+          }
+          if ($fail) { exit 1 }

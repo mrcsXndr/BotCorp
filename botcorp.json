@@ -1,0 +1,8 @@
+{
+  "name": "botcorp",
+  "version": "0.1.0",
+  "channelDefault": "stable",
+  "botYamlSchema": 1,
+  "minClaudeCode": "2.1.280",
+  "notes": "version = the release tag the daemon stamps into ~/.botcorp/state/harness.json; botYamlSchema gates harness/migrations/*; minClaudeCode is what `botcorp doctor` checks on every host."
+}

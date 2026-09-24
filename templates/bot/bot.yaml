@@ -1,0 +1,85 @@
+# bot.yaml - the only thing a bot edits about its harness.
+#
+# `botcorp sync <bot>` reads this and GENERATES .claude/settings.json (do not
+# hand-edit that file; it says so in its header). Anything not listed here
+# takes the default from daemon/botyaml.mjs DEFAULTS, so a minimal file is
+# just `name:`. Widening changes (allow_from, dm_policy, secrets, permissions)
+# made by chat are queued for operator approval in the cockpit; see
+# docs/onboarding.md. Never put a token in this file: tokens live in the
+# DPAPI vault (`botcorp secrets set <bot> oauth|telegram|hub`).
+
+name: bot-1                       # slug: [a-z0-9][a-z0-9-]{0,31}; also the folder name
+persona: "Sharp, dry, loyal. Leads with action, never over-explains."
+                                  # the generated CLAUDE.md persona block until the bot edits CLAUDE.md itself
+model: claude-opus-5-5            # -> generated settings.json "model"
+effort: high                      # low | medium | high | xhigh -> "effortLevel"
+permissions: bypass               # bypass | default (bypass = --dangerously-skip-permissions + AskUserQuestion/ExitPlanMode denied)
+
+harness:
+  channel: stable                 # stable (newest v* tag) | pinned (harness.pin)
+  pin: null                       # e.g. v1.2.0 -> per-bot worktree at bots/<name>/.harness (canary only)
+  service: daemon                 # daemon = the BotCorp daemon supervises this bot (cold-start, liveness, heal) | manual = only the cockpit/CLI starts it
+  git_pull: false                 # bounded `git pull` of THIS bot's repo at launch (memory sync across machines)
+  telegram_token_file: false      # fallback: also write <config>/channels/telegram/.env (ACL'd) if env inheritance fails
+  tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
+  hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
+  modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
+    telegram: false               # the official Telegram plugin; false = cockpit/terminal-only bot
+    board: false                  # GitHub Projects v2 board tools + poll tick (integrations.board)
+    cost_meter: true              # one sessions.csv row per session
+    usage_resume: true            # relaunch after a usage-limit window if the process died
+    alert_triage: false           # headless fix-or-card pass over memory/metrics/alerts.log
+    hub: false                    # status push to any hub (integrations.hub)
+    janitor: true                 # disk/transcript/orphan hygiene on the daemon tick
+    remote_control: false         # OFF by default; needs an interactive /login in this bot's config home
+    lessons: true                 # inject harness/lessons/INDEX.md at session start
+    debrief: false                # headless session debrief on Stop (real spend)
+    auto_commit: true             # commit the bot repo on Stop (runs its pre-commit secret scan)
+    memory_sync: false            # push memory/ to the bot's OWN remote on Stop
+    sound: false                  # play hooks/sounds/done.* on Stop
+    telemetry: true               # OpenTelemetry export to the local sink (subagent/usage observability)
+  skills: all                     # or a list; the rest are hidden via disabledSkills in the generated settings
+  agents: all
+
+integrations:
+  telegram:
+    allow_from: []                # Telegram user ids allowed to DM; the token lives in .vault/, never here
+    dm_policy: pairing            # pairing | allowlist | disabled
+    chat_id: null                 # the operator's DM chat id for outbound (tg_send.py default)
+  hub:
+    url: null                     # e.g. https://hub.example.com/api/ingest ; token = vault key hub_token
+    interval_s: 300
+  board:
+    owner: null                   # GitHub user/org login that owns the Project (v2)
+    number: null                  # the project number from its URL
+    type: user                    # user | org
+  access:                         # OPTIONAL. Cloudflare Access for an exposed cockpit. The cockpit is ONE per machine and
+    team: null                    # loopback-only by default; exposure is machine-wide and is switched with
+    aud: null                     # `botcorp cockpit expose --team <t> --aud <a> --yes` (writes <BOTCORP_HOME>/access.json).
+    frame_ancestors: null         # These keys only record which Access app this bot expects (doctor cross-checks them).
+  cloudflare:                     # OPTIONAL, doctor-only: refuse git-connected Workers Builds triggers on these Workers
+    account_id: null              # (a push would double-deploy); needs CLOUDFLARE_API_TOKEN in the env, never in this file
+    workers: []
+  google:                         # OPTIONAL, doctor-only: the account this bot's token.json should belong to
+    account: null
+
+backup:                           # OPTIONAL module, off while git_remote is null. A bot folder is NOT a git repo;
+  git_remote: null                # `botcorp backup <bot>` inits one inside it (.gitignore = the template's), commits
+  paths: [memory]                 # `paths` and pushes them here, bounded, no credential prompt (GIT_TERMINAL_PROMPT=0)
+
+automations: []                   # per-bot jobs run by the ONE daemon (docs/automations.md)
+#  - name: nightly-report
+#    trigger: {cron: "0 7 * * *"}        # cron | interval_min: N | event: alerts_log|board_ready|tg_inbound|session_stop|harness_updated
+#    command: "python tools/report.py"   # cwd = this bot folder; env = the bot env (+ vault keys listed below, for this run only)
+#    secrets: []                         # vault keys injected as env vars, e.g. [hub_token]
+#    timeout_min: 20
+#    backoff: {base_min: 10, max_min: 240}
+#    max_per_day: 12
+#    idle_gated: true                    # only when this bot's session is idle
+#    critical: false                     # true = keeps running while the account is usage-blocked
+#    enabled: true
+
+suggest:
+  weekly: false                   # weekly headless run proposing harness upgrades as suggest/<bot>/<topic> PRs
+  max_prs_per_week: 2
+  digest_bot: null                # which bot sends the weekly digest link (one machine-wide)

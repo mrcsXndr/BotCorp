@@ -1,0 +1,6 @@
+{
+  "_comment": "Telegram plugin enablement — passed EXPLICITLY by the daemon via `claude --settings` and ONLY when the launcher owns the poller lock. This must NEVER live in .claude/settings.json or .claude/settings.local.json: any settings-file enablement is auto-loaded by EVERY claude launch in this repo (including plain `claude` and headless --print spawns), which would start a second bridge and steal the single getUpdates poll slot for this bot's token. No secrets here; safe to track in git.",
+  "enabledPlugins": {
+    "telegram@claude-plugins-official": true
+  }
+}
