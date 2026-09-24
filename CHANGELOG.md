@@ -3,6 +3,13 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.1
+
+v0.2.0 plus the v0.1.4 hotfix below (`sync` accepts the `--bg` bypass
+disclaimer and workspace trust in the config home; `doctor` checks both;
+`status` measures liveness). Upgrading from v0.1.x: the v0.2.0 step (add the
+`secrets:` line) and the v0.1.4 step (`botcorp sync <bot>`) both apply.
+
 ## v0.2.0
 
 Secret-access hardening: scoping, an audit trail, an ACL check, launch
@@ -80,6 +87,33 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+## v0.1.4
+
+Hotfix (branched from v0.1.3): the first `botcorp start` of a bot on the
+reference host failed - `claude --bg` exited 1 with `--bg with
+bypassPermissions requires accepting the disclaimer first`, and a second
+gate sits behind it (`Workspace not trusted`). Both acceptances live in the
+bot's CONFIG HOME (`bots/<name>/.claude-<name>/`), which a fresh bot has
+never had a chance to accept interactively.
+
+- **`botcorp sync` (and so `new`, `import`, `adopt`) now writes both**, merged
+  into whatever is already there: `skipDangerousModePermissionPrompt: true` in
+  the config home's USER `settings.json` - only when `bot.yaml` already opts
+  the bot into `permissions: bypass`, and only there (Claude Code ignores the
+  key in the project `.claude/settings.json`) - and
+  `projects[<bot home>].hasTrustDialogAccepted: true` in the config home's
+  `.claude.json`. Verified with a real fresh-config-home `--bg` launch:
+  `claude_pid > 0`, the session listed by `claude agents`, no interactive step.
+- **`botcorp doctor`**: `<bot>: bypass disclaimer accepted` and `<bot>:
+  workspace trusted`, FAIL with `botcorp sync <bot>` as the fix.
+- **`botcorp status` measures liveness** instead of echoing the state file:
+  `running`, `claude_pid` and `poller` come from a live claude / pty process
+  (`poller=none` when none is alive, `ORPHAN` when only the Telegram poller's
+  `bot.pid` is), `status=stopped` for a dead record - a bot whose worker died
+  no longer shows a stale `poller=OWNED`.
+
+Upgrade: check out `v0.1.4`, run `botcorp sync <bot>` once per bot, then
+`botcorp start <bot>`.
 
 ## v0.1.3
 

@@ -118,6 +118,41 @@ def test_sync_settings_pin_bg_isolation_none(tmp_path):
     assert settings["worktree"] == {"bgIsolation": "none"}, r.stderr
 
 
+def test_sync_writes_bypass_disclaimer_and_workspace_trust_into_the_config_home(tmp_path):
+    """A `--bg` launch with --dangerously-skip-permissions refuses until the
+    disclaimer is accepted (USER settings of the config home, not the project
+    settings) and the workspace is trusted (.claude.json there). sync writes
+    both, MERGING into whatever the operator already keeps in those files."""
+    root = _root_with_bot(tmp_path, "epsilon", "name: epsilon\n")
+    cfg_home = root / "bots" / "epsilon" / ".claude-epsilon"
+    cfg_home.mkdir(parents=True)
+    (cfg_home / "settings.json").write_text('{"theme": "dark"}\n', encoding="utf-8")
+    (cfg_home / ".claude.json").write_text('{"userID": "u1", "projects": {"C:/elsewhere": {"hasTrustDialogAccepted": false}}}\n', encoding="utf-8")
+    r = _node(str(SYNC), "epsilon", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    us = json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+    assert us["skipDangerousModePermissionPrompt"] is True
+    assert us["theme"] == "dark"                       # merged, not regenerated
+    cj = json.loads((cfg_home / ".claude.json").read_text(encoding="utf-8"))
+    key = str(root / "bots" / "epsilon").replace("\\", "/")
+    assert cj["projects"][key]["hasTrustDialogAccepted"] is True
+    assert cj["projects"]["C:/elsewhere"]["hasTrustDialogAccepted"] is False   # other records kept
+    assert cj["userID"] == "u1"
+    # the project settings never carry it (Claude Code ignores it there)
+    proj = json.loads((root / "bots" / "epsilon" / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert "skipDangerousModePermissionPrompt" not in proj
+
+
+def test_sync_does_not_add_the_disclaimer_key_for_a_default_permissions_bot(tmp_path):
+    root = _root_with_bot(tmp_path, "zeta", "name: zeta\npermissions: default\n")
+    r = _node(str(SYNC), "zeta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    us = json.loads((root / "bots" / "zeta" / ".claude-zeta" / "settings.json").read_text(encoding="utf-8"))
+    assert "skipDangerousModePermissionPrompt" not in us
+    cj = json.loads((root / "bots" / "zeta" / ".claude-zeta" / ".claude.json").read_text(encoding="utf-8"))
+    assert cj["projects"][str(root / "bots" / "zeta").replace("\\", "/")]["hasTrustDialogAccepted"] is True
+
+
 def test_sync_settings_turn_off_cc_ui_noise(tmp_path):
     root = _root_with_bot(tmp_path, "delta", "name: delta\n")
     r = _node(str(SYNC), "delta", "--botcorp", str(root))

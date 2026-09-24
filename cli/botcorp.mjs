@@ -812,6 +812,15 @@ function botStatus(bot) {
   catch (e) { yamlError = e.message; }
   const pty = ptyLive(bot);
   const state = readJson(path.join(STATE_DIR, `${bot}.json`));
+  // Liveness is measured, never read back from the state file: a bg bot whose
+  // claude worker died leaves `poller: OWNED` behind, so the poller is only
+  // reported while a claude (or pty) process is actually alive; a live bun
+  // poller with no claude is an orphan.
+  const claudeAlive = !!(state && pidAlive(Number(state.claude_pid)));
+  let botPid = 0;
+  try { botPid = firstInt(fs.readFileSync(path.join(configDir(bot), 'channels', 'telegram', 'bot.pid'), 'utf-8')); } catch {}
+  const alive = !!pty || claudeAlive;
+  const poller = alive ? (state && state.poller) ?? null : (pidAlive(botPid) ? 'ORPHAN' : 'none');
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
   let statusAgeS = null, ctxUsedPct = null, rateLimits = null;
   if (status) {
@@ -826,9 +835,9 @@ function botStatus(bot) {
   }
   return {
     name: bot,
-    running: !!pty,
+    running: alive,
     pty: ptyPublic(pty),
-    state: state ? { status: state.status ?? null, started_by: state.started_by ?? null, poller: state.poller ?? null, claude_pid: state.claude_pid ?? null, started_at: state.started_at ?? null } : null,
+    state: state ? { status: alive ? state.status ?? null : 'stopped', started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
     telegram: !!(cfg && cfg.harness.modules.telegram),
     model: cfg ? cfg.model : null,
     vault: vaultLockState(bot),
@@ -2021,6 +2030,16 @@ async function cmdDoctor({ flags }) {
         const missing = declared.filter((k) => !present.includes(k) && !(k === 'telegram_token' && !cfg.harness.modules.telegram));
         const undeclared = present.filter((k) => !declared.includes(k));
         add(missing.length ? 'WARN' : 'PASS', `${bot}: secrets scope`, `injects ${declared.join(', ') || '(none)'}${missing.length ? `; declared but not in the vault: ${missing.join(', ')} (botcorp secrets set ${bot} <key>)` : ''}${undeclared.length ? `; in the vault but not declared, never decrypted: ${undeclared.join(', ')}` : ''}`, 'bots');
+      }
+      // a --bg launch with bypass refuses until the disclaimer is accepted (user
+      // settings of the CONFIG HOME) and the workspace is trusted (.claude.json
+      // there); both are what `botcorp sync` writes.
+      if (cfg) {
+        const us = readJson(path.join(configDir(bot), 'settings.json'));
+        if (cfg.permissions === 'bypass') add(us && us.skipDangerousModePermissionPrompt === true ? 'PASS' : 'FAIL', `${bot}: bypass disclaimer accepted`, us && us.skipDangerousModePermissionPrompt === true ? `.claude-${bot}/settings.json skipDangerousModePermissionPrompt` : `\`claude --bg --dangerously-skip-permissions\` refuses until it is: botcorp sync ${bot}`, 'bots');
+        const cj = readJson(path.join(configDir(bot), '.claude.json'));
+        const trusted = !!(cj && cj.projects && cj.projects[botHome(bot).replace(/\\/g, '/')] && cj.projects[botHome(bot).replace(/\\/g, '/')].hasTrustDialogAccepted === true);
+        add(trusted ? 'PASS' : 'FAIL', `${bot}: workspace trusted`, trusted ? `.claude-${bot}/.claude.json trusts bots/${bot}` : `a --bg launch refuses an untrusted workspace: botcorp sync ${bot}`, 'bots');
       }
       // the generated settings.json must exist (WARN if not); the config home's
       // settings.json is optional. Neither may ever carry enabledPlugins.
