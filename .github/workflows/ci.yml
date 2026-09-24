@@ -20,10 +20,7 @@ jobs:
       - run: npm ci
       - name: Install Claude Code
         run: npm i -g @anthropic-ai/claude-code
-      # UNVERIFIED: whether `plugin validate` needs auth is not confirmed from
-      # inside this session (no CI run performed here). If it turns out to
-      # require login, gate this step behind a secret token or drop it to a
-      # `continue-on-error: true` warning instead of a hard failure.
+      # Runs without auth (confirmed on the first public run, 2026-09-24).
       - name: Validate the harness plugin
         run: claude plugin validate harness --strict
 

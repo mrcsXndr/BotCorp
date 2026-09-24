@@ -1033,13 +1033,19 @@ async function cmdNew({ flags }) {
 
 // ---- export / import (a bot folder is a plain folder; the zip is how it moves) --------------
 const EXPORT_SKIP_DIRS = new Set(['.vault', '.git', 'node_modules', '__pycache__']);
+// Runtime state the target box regenerates: the recall index (rebuilt from the
+// journals at session start), per-session metrics, and the session/debrief
+// markers of the last run here. `--include-state` carries them for a real
+// migration; a plain export is a clean bot, not a snapshot of this machine.
+const EXPORT_STATE_RE = /^(memory\/(index|metrics)\/|\.claude\/(\.current_session_id$|\.debrief_))/;
 
 // Everything in bots/<bot>/ except the vault (DPAPI: useless elsewhere), any
 // config home (transcripts, plugin state, credentials; `import` re-seeds one
 // and `sync` rebuilds the Telegram allow-list from bot.yaml), a backup-module
 // `.git` (a bot folder is a plain folder on the target too; `botcorp backup`
-// re-creates it from backup.git_remote) and build junk.
-function exportEntries(bot) {
+// re-creates it from backup.git_remote), build junk and, unless asked,
+// runtime state (EXPORT_STATE_RE).
+function exportEntries(bot, { includeState = false } = {}) {
   const home = botHome(bot);
   const acc = [];
   const walk = (dir, rel) => {
@@ -1050,7 +1056,10 @@ function exportEntries(bot) {
       if (e.isDirectory()) {
         if (EXPORT_SKIP_DIRS.has(e.name) || /^\.claude-[a-z0-9-]+$/.test(e.name)) continue;
         walk(path.join(dir, e.name), r);
-      } else if (e.isFile() && !/\.pyc$/.test(e.name)) acc.push({ name: r, file: path.join(dir, e.name) });
+      } else if (e.isFile() && !/\.pyc$/.test(e.name)) {
+        if (!includeState && EXPORT_STATE_RE.test(r)) continue;
+        acc.push({ name: r, file: path.join(dir, e.name) });
+      }
     }
   };
   walk(home, '');
@@ -1066,7 +1075,7 @@ function stamp() {
 function cmdExport({ pos, flags }) {
   const bot = requireBot(pos[1]);
   const outFile = flags.out ? path.resolve(String(flags.out)) : path.join(BOTCORP_HOME, 'exports', `${bot}-${stamp()}.zip`);
-  const entries = exportEntries(bot);
+  const entries = exportEntries(bot, { includeState: !!flags['include-state'] });
   const r = zipWrite(outFile, entries);
   if (flags.json) { outJson({ bot, file: outFile, entries: entries.map((e) => e.name), bytes: r.bytes }); return 0; }
   out(`exported ${bot}: ${outFile} (${entries.length} entries, ${r.bytes} bytes)`);
@@ -1896,7 +1905,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
 
   new [--name <slug>] [--persona "..."] [--telegram] [--telegram-owner <id>] [--modules a,b] [--no-modules c]
       [--yes] [--oauth-stdin] [--no-launch] [--no-plugin-install]      (a terminal without --yes shows the catalogue checklist)
-  export <bot> [--out <zip>] [--list] | import <zip> [--as <name>]
+  export <bot> [--out <zip>] [--list] [--include-state] | import <zip> [--as <name>]
   backup <bot> [--dry-run]                                              (needs backup.git_remote in bot.yaml)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
   accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)

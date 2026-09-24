@@ -70,14 +70,18 @@ keeps out of the repo; `new` runs no `git init` (see `export` / `import` /
 6. `start <name>` (fresh) unless `--no-launch`, then prints the resulting
    catalogue table and the next steps.
 
-### `export <bot> [--out <zip>] [--list]`
+### `export <bot> [--out <zip>] [--list] [--include-state]`
 
 Zips `bots/<bot>/` for a move to another machine (or a cold copy). Default
 `<BOTCORP_HOME>/exports/<bot>-<yyyymmdd-hhmm>.zip`. EXCLUDED: `.vault/`
 (DPAPI blobs are useless elsewhere), every `.claude-*` config home
 (transcripts, plugin state, `.credentials.json`; `import` re-seeds one and
 `sync` rebuilds the Telegram allow-list from `bot.yaml`), `node_modules`,
-`__pycache__`, `*.pyc`. `.git/` is never exported or
+`__pycache__`, `*.pyc`, and — unless `--include-state` — the runtime state
+the target regenerates: `memory/index/` (the recall index, rebuilt from the
+journals at session start), `memory/metrics/`, `.claude/.current_session_id`
+and `.claude/.debrief_*`. Real memory (`memory/auto`, `memory/sessions`,
+`TDL.md`, `MEMORY.md`) is always in. `.git/` is never exported or
 imported (a bot folder is not a nested repo; `botcorp backup` re-creates one
 from `backup.git_remote`). Prints the path and the
 entry list (`--list` forces the full list past 40 entries) and the reminder

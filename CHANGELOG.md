@@ -3,6 +3,22 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.1
+
+- **CI fixed forward on the first public run**: the `secret-scan` job now
+  resolves its diff range on a root commit (`git rev-parse --verify -q`, empty
+  tree as the fallback base — a bare `rev-parse` echoed the bad revision into
+  `GITHUB_OUTPUT`), and the four scripts run by path (`.githooks/pre-commit`,
+  `scripts/secret-scan.sh`, `harness/tools/browser/ab.sh`,
+  `harness/tools/infra/orphan_rescue.sh`) are executable in the index (a
+  Windows checkout had committed them 100644). `claude plugin validate
+  --strict` was confirmed to run unauthenticated in CI, so its UNVERIFIED
+  note is gone.
+- **`export` is state-free by default**: `memory/index/` (recall index),
+  `memory/metrics/`, `.claude/.current_session_id` and `.claude/.debrief_*`
+  are left out unless `--include-state` (a real migration). Real memory stays
+  in.
+
 ## v0.1.0
 
 First public pre-release (1.0.0 follows the reboot test on the target host):

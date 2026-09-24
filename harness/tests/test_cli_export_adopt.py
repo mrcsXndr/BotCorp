@@ -39,6 +39,31 @@ def test_export_skip_dirs_and_import_drop_git():
     assert "rel.startsWith('.git/')" in text
 
 
+def test_export_state_regex_excludes_runtime_state_only():
+    """EXPORT_STATE_RE decides what a plain export leaves out; evaluate the
+    real regex under node against the exact paths the contract names."""
+    text = CLI.read_text(encoding="utf-8")
+    line = next(ln for ln in text.splitlines() if ln.strip().startswith("const EXPORT_STATE_RE = "))
+    regex_src = line.split("=", 1)[1].strip().rstrip(";")
+    excluded = ["memory/index/recall.db", "memory/metrics/sessions.csv",
+                ".claude/.current_session_id", ".claude/.debrief_last_ts", ".claude/.debrief_prompt.txt"]
+    kept = ["memory/auto/MEMORY.md", "memory/TDL.md", "memory/sessions/abc/journal.md",
+            ".claude/settings.json", "bot.yaml", "memory/metrics.md"]
+    script = (
+        f"const re = {regex_src};"
+        "const paths = JSON.parse(process.argv[1]);"
+        "console.log(JSON.stringify(paths.map((p) => re.test(p))));"
+    )
+    import json
+    r = subprocess.run(["node", "-e", script, json.dumps(excluded + kept)],
+                       capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    flags = json.loads(r.stdout)
+    assert flags[:len(excluded)] == [True] * len(excluded)
+    assert flags[len(excluded):] == [False] * len(kept)
+    assert "flags['include-state']" in text
+
+
 def test_adopt_dry_run_leaves_git_and_secrets_behind(tmp_path):
     old = tmp_path / "old"
     (old / ".git").mkdir(parents=True)
