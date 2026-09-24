@@ -10,6 +10,12 @@
 //                                                     disabledSkills, autoContinueAtUsageLimit.
 //                                                     NO hooks (the plugin has them),
 //                                                     NO enabledPlugins ever.
+//   bots/<name>/.claude-<name>/settings.json          MERGED user settings: skipDangerousModePermissionPrompt
+//                                                     when bot.yaml permissions: bypass (a --bg launch
+//                                                     refuses until the disclaimer is accepted; only
+//                                                     USER settings are honoured for it).
+//   bots/<name>/.claude-<name>/.claude.json           MERGED: projects[<bot home>].hasTrustDialogAccepted
+//                                                     (a --bg launch refuses an untrusted workspace).
 //   bots/<name>/.claude-<name>/channels/telegram/access.json
 //                                                     dmPolicy + allowFrom from bot.yaml,
 //                                                     MERGED: never drops a pending entry
@@ -111,6 +117,34 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
   return settings;
 }
 
+// The config home's USER settings (bots/<name>/.claude-<name>/settings.json)
+// are MERGED, never regenerated: the operator may keep keys there. A `--bg`
+// launch with --dangerously-skip-permissions refuses until the bypass
+// disclaimer was accepted once interactively - impossible for a fresh config
+// home the daemon starts unattended - and Claude Code honours
+// skipDangerousModePermissionPrompt from USER settings only (not the
+// project .claude/settings.json). Written only when bot.yaml already opts
+// the bot into bypass; an existing key is left alone otherwise.
+export function mergeConfigHomeSettings(existing, cfg) {
+  const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
+  if (cfg.permissions === 'bypass') cur.skipDangerousModePermissionPrompt = true;
+  return cur;
+}
+
+// The config home's .claude.json: a `--bg` launch also refuses an untrusted
+// workspace ("run `claude` in <dir> once and accept the trust prompt"). The
+// bot's own folder is trusted by definition - BotCorp made it - so the
+// project record gets hasTrustDialogAccepted, keyed the way Claude Code keys
+// it (absolute path, forward slashes); everything else in the file is kept.
+export function mergeConfigHomeClaudeJson(existing, botHome) {
+  const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
+  const projects = cur.projects && typeof cur.projects === 'object' ? { ...cur.projects } : {};
+  const key = fwd(path.resolve(botHome));
+  projects[key] = { ...(projects[key] && typeof projects[key] === 'object' ? projects[key] : {}), hasTrustDialogAccepted: true };
+  cur.projects = projects;
+  return cur;
+}
+
 // access.json merge: bot.yaml is the source for policy + allow_from, but the
 // file can carry ids the operator approved at the machine and pending pairing
 // codes the plugin wrote; a sync must never drop those.
@@ -146,6 +180,12 @@ export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.e
   // 1. generated settings.json
   const settings = buildSettings(cfg, { botcorpRoot: root, botHome, nodeExe });
   report['.claude/settings.json'] = writeIfChanged(path.join(botHome, '.claude', 'settings.json'), JSON.stringify(settings, null, 2) + '\n', dryRun);
+
+  // 1b. config-home user settings + workspace trust (merge)
+  const userSettingsPath = path.join(configDir, 'settings.json');
+  report['.claude-<name>/settings.json'] = writeIfChanged(userSettingsPath, JSON.stringify(mergeConfigHomeSettings(readJson(userSettingsPath), cfg), null, 2) + '\n', dryRun);
+  const claudeJsonPath = path.join(configDir, '.claude.json');
+  report['.claude-<name>/.claude.json'] = writeIfChanged(claudeJsonPath, JSON.stringify(mergeConfigHomeClaudeJson(readJson(claudeJsonPath), botHome), null, 2) + '\n', dryRun);
 
   // 2. access.json (merge)
   if (cfg.harness.modules.telegram) {

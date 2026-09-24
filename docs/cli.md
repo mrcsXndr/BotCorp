@@ -147,6 +147,16 @@ plugin polls (sends "Paired!", deletes the file); ids already in the file
 get no second marker, so a re-sync never re-greets anyone. Idempotent; run
 after any hand edit of `bot.yaml`.
 
+It also MERGES two files in the config home (`bots/<name>/.claude-<name>/`),
+keeping every other key the operator has there: `settings.json` gets
+`skipDangerousModePermissionPrompt: true` - only when `bot.yaml` already
+opts the bot into `permissions: bypass`, and only in these USER settings
+(Claude Code ignores the key in the project `.claude/settings.json`) - and
+`.claude.json` gets `projects[<bot home>].hasTrustDialogAccepted: true`. A
+`claude --bg --dangerously-skip-permissions` launch refuses until both the
+bypass disclaimer has been accepted and the workspace is trusted, which a
+fresh config home the daemon starts unattended can never do interactively.
+
 ### `secrets set <bot> <key>` / `secrets list <bot> [--json]` / `secrets delete <bot> <key>`
 
 Front for `daemon/secrets.ps1` (DPAPI, CurrentUser, per-bot entropy). `set`
@@ -306,9 +316,12 @@ says so). `reject` drops the entry.
 
 ### `status [<bot>] [--json]`
 
-Per bot: running (pty.json with a live host pid), pty/host pids and port,
-the daemon's `state/<bot>.json` (`status`, `started_by`, `poller`,
-`claude_pid`), telegram module, model, harness version
+Per bot: running (a live pty host pid, or the state file's `claude_pid`
+alive as a process - measured, never read back from the file), pty/host
+pids and port, the daemon's `state/<bot>.json` (`status`, `started_by`,
+`poller`, `claude_pid`; with nothing alive `status=stopped`,
+`claude_pid=-` and `poller=none`, or `poller=ORPHAN` when only the Telegram
+poller's `bot.pid` is alive), telegram module, model, harness version
 (`harness/.claude-plugin/plugin.json`), the age of `<config
 home>/botcorp/status.json` with context used %, 5 h / 7 d rate-limit usage
 and the running CC version (written by the statusline on every render), and
@@ -413,7 +426,12 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   runs a second, independent bot supervisor and allowlists its task prefix
   that way;
 - per bot: `bot.yaml` valid; vault readable (`unreadable` entries =>
-  `vault unreadable - re-enter tokens`; no `oauth_token` => WARN); no
+  `vault unreadable - re-enter tokens`; no `oauth_token` => WARN);
+  `<bot>: bypass disclaimer accepted` (with `permissions: bypass`, the config
+  home's `settings.json` must carry `skipDangerousModePermissionPrompt`) and
+  `<bot>: workspace trusted` (the config home's `.claude.json` must trust
+  `bots/<bot>`), both FAIL with `botcorp sync <bot>` as the fix - a `--bg`
+  launch refuses without them; no
   `enabledPlugins` in `bots/<bot>/.claude/settings.json` or `<config
   home>/settings.json`; `<bot>: oauth token` — the vault `oauth_token` must
   exist and must not be the machine-wide `CLAUDE_CODE_OAUTH_TOKEN` (compared
