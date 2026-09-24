@@ -62,9 +62,9 @@ doc and the tool agree.
   (`New-NetFirewallRule -DisplayName "RDP mesh only" -Direction Inbound
   -Protocol TCP -LocalPort 3389 -RemoteAddress 100.96.0.0/12 -Action Allow`),
   and leave the built-in "Remote Desktop" rules disabled or scoped the same
-  way. **[doctor]** a firewall rule exists for local port 3389 whose remote
-  address is `100.96.0.0/12` (or a subset of it), and no enabled 3389 rule
-  allows `Any`.
+  way. **[doctor]** an enabled inbound rule with `LocalPort 3389` (matched
+  on the port filter, never on the rule's name: "Chrome Remote Desktop Host"
+  is `LocalPort Any`) whose remote address covers `100.96.0.0/12`.
 - The services that must be running at boot: `TermService`, `CloudflareWARP`
   (and `Cloudflared` if a tunnel is used).
 

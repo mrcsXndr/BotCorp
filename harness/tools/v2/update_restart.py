@@ -94,10 +94,33 @@ PS_EXE = os.path.join(
     os.environ.get("SystemRoot", r"C:\Windows"),
     "System32", "WindowsPowerShell", "v1.0", "powershell.exe",
 )
+
+
+def _resolve_pwsh() -> str:
+    """Resolve an absolute path to pwsh (PowerShell 7+). A bare 'pwsh' fails to
+    spawn from a session-0 / Scheduled-Task environment where PATH is minimal
+    (ENOENT), so try the known install locations before falling back."""
+    if os.name != "nt":
+        import shutil
+        return shutil.which("pwsh") or "pwsh"
+    import shutil
+    candidates = [
+        os.path.join(os.environ.get("ProgramFiles", r"C:\Program Files"), "PowerShell", "7", "pwsh.exe"),
+        shutil.which("pwsh"),
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "WindowsApps", "pwsh.exe"),
+    ]
+    for c in candidates:
+        if c and Path(c).exists():
+            return c
+    return PS_EXE
+
+
 # The restart script itself runs under pwsh (PowerShell 7+), per the daemon's
 # own convention — distinct from PS_EXE above, which is Windows PowerShell
 # used here only for the reliable detached-spawn trick and proc-walking.
-PWSH_EXE = "pwsh"
+# Resolved to an absolute path: a bare 'pwsh' is not found via ENOENT when
+# spawned from a session-0 / Scheduled-Task environment with a minimal PATH.
+PWSH_EXE = _resolve_pwsh()
 RESTART_SCRIPT = botcorp_root() / "daemon" / "restart.ps1"
 
 

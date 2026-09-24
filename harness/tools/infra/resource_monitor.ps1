@@ -36,7 +36,30 @@ $ConfigHome = if ($env:CLAUDE_CONFIG_DIR) { $env:CLAUDE_CONFIG_DIR } else { Join
 # tg_send.py lives at <harness>/tools/tg/tg_send.py — a SIBLING TOOL, so it is
 # resolved off the harness root (two parents up from this script), not BotHome.
 $HarnessRoot = if ($env:CLAUDE_PLUGIN_ROOT) { $env:CLAUDE_PLUGIN_ROOT } else { Split-Path (Split-Path $PSScriptRoot -Parent) -Parent }
-$Py = if ($env:BOT_PYTHON) { $env:BOT_PYTHON } elseif (Get-Command python3 -ErrorAction SilentlyContinue) { 'python3' } else { 'python' }
+
+# Python resolution: BOT_PYTHON > py launcher (session-0 / Scheduled-Task PATH
+# can lack a bare python3/python entirely, but the py launcher is a stock
+# install) > a real python.exe on PATH not the WindowsApps execution-alias
+# stub > 'python3'/'python' as a last resort.
+function Resolve-Py {
+  if ($env:BOT_PYTHON) { return $env:BOT_PYTHON }
+  foreach ($launcher in @(
+    (Join-Path $env:LOCALAPPDATA 'Programs\Python\Launcher\py.exe'),
+    (Join-Path $env:SystemRoot 'py.exe')
+  )) {
+    if ($launcher -and (Test-Path $launcher)) {
+      try {
+        $resolved = (& $launcher -3 -c 'import sys; print(sys.executable)' 2>$null | Select-Object -Last 1)
+        if ($resolved -and (Test-Path $resolved)) { return $resolved }
+      } catch {}
+    }
+  }
+  $cmd = Get-Command python.exe -ErrorAction SilentlyContinue | Where-Object { $_.Source -notlike '*WindowsApps*' } | Select-Object -First 1
+  if ($cmd) { return $cmd.Source }
+  if (Get-Command python3 -ErrorAction SilentlyContinue) { return 'python3' }
+  return 'python'
+}
+$Py = Resolve-Py
 
 function Add-Issue($sev,$cat,$detail){ $script:issues += ,([ordered]@{ sev=$sev; cat=$cat; detail=$detail }) }
 
@@ -50,7 +73,7 @@ function Add-Issue($sev,$cat,$detail){ $script:issues += ,([ordered]@{ sev=$sev;
 function Invoke-Reap {
   param($Set, [switch]$Tree)
   foreach ($p in @($Set)) {
-    if ($Tree) { & cmd /c "taskkill /PID $($p.ProcessId) /T /F" 2>&1 | Out-Null }
+    if ($Tree) { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $($p.ProcessId) /T /F 2>&1 | Out-Null }
     else       { Stop-Process -Id $p.ProcessId -Force -EA SilentlyContinue }
   }
   Start-Sleep -Milliseconds 400

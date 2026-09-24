@@ -113,14 +113,18 @@ function restrictToUser(file) {
   if (process.platform !== 'win32') { try { fs.chmodSync(file, 0o600); } catch {} return; }
   const user = process.env.USERNAME;
   if (!user) return;
+  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+  const icacls = path.join(sysRoot, 'System32', 'icacls.exe');
   try {
-    execFileSync('icacls', [file, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
+    execFileSync(icacls, [file, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
   } catch { /* best effort */ }
 }
 
 function treeKill(pid) {
   if (process.platform === 'win32') {
-    const r = spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], { stdio: 'pipe', windowsHide: true, timeout: 15_000 });
+    const sysRoot = process.env.SystemRoot || 'C:\\Windows';
+    const taskkill = path.join(sysRoot, 'System32', 'taskkill.exe');
+    const r = spawnSync(taskkill, ['/T', '/F', '/PID', String(pid)], { stdio: 'pipe', windowsHide: true, timeout: 15_000 });
     return r.status === 0;
   }
   try { process.kill(-pid, 'SIGKILL'); return true; } catch { try { process.kill(pid, 'SIGKILL'); return true; } catch { return false; } }

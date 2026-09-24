@@ -47,7 +47,15 @@ own probes.
   section 2 sets active hours / no-auto-restart-with-users; it cannot stop an
   unattended restart, so a reboot is a normal event, not an incident).
 - Toolchain on the reference host: pwsh 7.6.6, node 25.2.1, python 3.14.2,
-  claude 2.1.281.
+  claude 2.1.282 (2.1.281 at the first install; nothing pins a version,
+  `botcorp.json.minClaudeCode` is the only floor).
+- From a Scheduled Task the shell's PATH is not the user's: bare
+  `powershell`, `python` and `curl.exe` spawned ENOENT there. Everything now
+  resolves system binaries absolutely (`docs/cli.md` → `doctor`).
+- The reference host runs a second, independent bot supervisor whose
+  Scheduled Tasks are also named `*Bot*`; its `<BOTCORP_HOME>/host.json`
+  allowlists that prefix in `coexist_tasks`, so `doctor` reports them as
+  INFO instead of WARN.
 
 Nothing in the survey below is strictly better on the six axes, so the
 reference host's proven model stands.

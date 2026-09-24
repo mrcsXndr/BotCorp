@@ -52,9 +52,16 @@ function Resolve-ClaudeExe {
     return $native
 }
 function Resolve-PwshExe {
+    # Kept in sync with _common.ps1's Resolve-PwshExe (chat.ps1 is deliberately
+    # standalone, so it does not dot-source it): known path -> PATH -> alias ->
+    # absolute powershell.exe, never a bare name.
+    $known = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+    if (Test-Path $known) { return $known }
     $p = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
-    if (-not $p) { $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'; $p = if (Test-Path $alias) { $alias } else { 'powershell.exe' } }
-    return $p
+    if ($p) { return $p }
+    $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+    if (Test-Path $alias) { return $alias }
+    return (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
 }
 function Mask { param([string]$V) if (-not $V) { return '' }; return '****' + $V.Substring([Math]::Max(0, $V.Length - 4)) }
 

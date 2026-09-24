@@ -123,7 +123,7 @@ function Stop-ProcessTree {
     # instead; this stays only as its implementation.
     param([int]$ProcId)
     if ($ProcId -le 0) { return $false }
-    try { & taskkill /PID $ProcId /T /F 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false }
+    try { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $ProcId /T /F 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) } catch { return $false }
 }
 
 # --- ownership guard (every kill goes through this) -------------------------------
@@ -224,27 +224,61 @@ function Get-ProcessSessionId {
 
 function Resolve-PwshExe {
     # Never a versioned WindowsApps path (breaks on every PowerShell update).
+    # A bare 'powershell'/'pwsh' name can fail to spawn from session 0 (PATH is
+    # unreliable there), so every tier below returns an ABSOLUTE path.
+    $known = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+    if (Test-Path $known) { return $known }
     $p = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
-    if (-not $p) {
-        $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
-        $p = if (Test-Path $alias) { $alias } else { 'powershell.exe' }
-    }
-    return $p
+    if ($p) { return $p }
+    $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+    if (Test-Path $alias) { return $alias }
+    return (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe')
 }
 
 function Resolve-Python {
-    # PATH first, then the newest per-user install. Pinning a version directory
-    # is a time bomb (a copy of this daemon that named a Python version that was
-    # later uninstalled had every python step die silently, fail-open).
+    # PATH is unreliable in session 0 (a bare 'python'/'py' failed to spawn
+    # there), so the py launcher and the registry are checked BEFORE PATH.
+    # Pinning a version directory is a time bomb (a copy of this daemon that
+    # named a Python version that was later uninstalled had every python step
+    # die silently, fail-open) - the registry lookup below always picks the
+    # newest installed version instead of a fixed one. `botcorp doctor` is
+    # what reports a missing python; Resolve-Python itself stays fail-open to
+    # the bare 'python' name as the last resort.
     if ($env:BOT_PYTHON -and (Test-Path $env:BOT_PYTHON)) { return $env:BOT_PYTHON }
-    $p = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
-    if ($p -and ($p -notmatch 'WindowsApps')) { return $p }
+    $py = $null
+    foreach ($c in @((Join-Path $env:SystemRoot 'py.exe'), (Join-Path $env:LOCALAPPDATA 'Programs\Python\Launcher\py.exe'))) {
+        if (Test-Path $c) { $py = $c; break }
+    }
+    if (-not $py) { $py = (Get-Command py.exe -ErrorAction SilentlyContinue).Source }
+    if ($py) {
+        try {
+            $out = (& $py -3 -c 'import sys; print(sys.executable)' 2>$null | Select-Object -First 1)
+            if ($out -and (Test-Path "$out".Trim())) { return "$out".Trim() }
+        } catch {}
+    }
+    try {
+        foreach ($base in @('HKCU:\Software\Python\PythonCore', 'HKLM:\SOFTWARE\Python\PythonCore')) {
+            $entries = Get-ItemProperty -Path (Join-Path $base '*\InstallPath') -ErrorAction SilentlyContinue
+            if (-not $entries) { continue }
+            $ranked = foreach ($e in $entries) {
+                $verLeaf = Split-Path (Split-Path $e.PSPath -Parent) -Leaf
+                $v = $null
+                if ([version]::TryParse($verLeaf, [ref]$v)) { [pscustomobject]@{ Ver = $v; Entry = $e } }
+            }
+            foreach ($r in ($ranked | Sort-Object Ver -Descending)) {
+                $e = $r.Entry
+                $exe = if (($e.PSObject.Properties.Name -contains 'ExecutablePath') -and $e.ExecutablePath) { $e.ExecutablePath } else { Join-Path $e.'(default)' 'python.exe' }
+                if ($exe -and (Test-Path $exe)) { return $exe }
+            }
+        }
+    } catch {}
     try {
         $c = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs\Python\Python3*\python.exe') -ErrorAction Stop |
              Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
         if ($c) { return $c }
     } catch {}
-    if ($p) { return $p }
+    $p = (Get-Command python.exe -ErrorAction SilentlyContinue).Source
+    if ($p -and ($p -notmatch 'WindowsApps')) { return $p }
     return 'python'
 }
 
@@ -501,7 +535,7 @@ function Invoke-Bounded {
         $done = $p.WaitForExit($TimeoutSec * 1000)
         if (-not $done) {
             try { $p.Kill($true) } catch {}
-            try { & taskkill /PID $p.Id /T /F 2>$null | Out-Null } catch {}
+            try { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $p.Id /T /F 2>$null | Out-Null } catch {}
             Write-DaemonLog "$Label`: KILLED after ${TimeoutSec}s (was holding the tick)" -Bot $Bot
         }
         $text = ''
@@ -609,7 +643,7 @@ function Get-BotEnv {
     if (-not $Paths) { $Paths = Get-BotPaths -Bot $Bot }
     $mods = ''
     try { if ($Cfg) { $mods = (@($Cfg._modules) -join ',') } } catch {}
-    return @{
+    $e = @{
         BOT_HOME          = $Paths.BotHome
         BOT_NAME          = $Bot
         BOTCORP_HOME      = $script:RtHome
@@ -621,6 +655,10 @@ function Get-BotEnv {
         GIT_TERMINAL_PROMPT = '0'
         GCM_INTERACTIVE   = 'never'
     }
+    # Absolute interpreter for hooks/tools this env feeds - PATH is unreliable
+    # in session 0, and _guard.sh already prefers BOT_PYTHON when set.
+    try { $py = Resolve-Python; if ($py -and (Test-Path $py)) { $e['BOT_PYTHON'] = $py } } catch {}
+    return $e
 }
 
 function Test-SessionBusy {

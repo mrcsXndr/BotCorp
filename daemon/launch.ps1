@@ -214,7 +214,7 @@ try {
                 $tgDir = Join-Path $ConfigDir 'channels\telegram'
                 if (-not (Test-Path $tgDir)) { New-Item -ItemType Directory -Force -Path $tgDir | Out-Null }
                 [System.IO.File]::WriteAllText((Join-Path $tgDir '.env'), "TELEGRAM_BOT_TOKEN=$tt`n")
-                & icacls (Join-Path $tgDir '.env') /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:F" 2>&1 | Out-Null
+                & (Join-Path $env:SystemRoot 'System32\icacls.exe') (Join-Path $tgDir '.env') /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:F" 2>&1 | Out-Null
                 $vaultNote += 'telegram: token file written (harness.telegram_token_file)'
             }
         } else { $vaultNote += 'telegram: module on but no vault entry -> launching WITHOUT --channels'; $canOwn = $false }
@@ -234,6 +234,8 @@ $childEnv['BOTCORP_HOME']        = $RtHome
 $childEnv['CLAUDE_CODE_ARTIFACT_AUTO_OPEN'] = '0'
 $childEnv['PYTHONIOENCODING']    = 'utf-8'
 $childEnv['GIT_TERMINAL_PROMPT'] = '0'
+$py = Resolve-Python
+if (Test-Path $py) { $childEnv['BOT_PYTHON'] = $py }
 # OpenTelemetry to the local sink (prompts/tool details stay redacted: no OTEL_LOG_* gates).
 $otelState = Join-Path $StateDir 'otel.json'
 if (($modules -contains 'telemetry') -and (Test-Path $otelState)) {

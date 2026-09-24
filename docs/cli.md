@@ -381,9 +381,23 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   >= 3.11, pwsh >= 7, git present;
 - `harness/.claude-plugin/plugin.json` readable; `claude plugin validate
   harness --strict` passes;
+- `python` / `pwsh` / `git` are reported with the absolute path they resolved
+  to. Every system binary is spawned by absolute path (`%SystemRoot%\System32`
+  for `powershell.exe`, `curl.exe`, `taskkill`, `icacls`, `wscript`; pwsh via
+  `%ProgramFiles%\PowerShell\7`, PATH, then the WindowsApps alias; python via
+  `BOT_PYTHON`, the `py -3` launcher, the `PythonCore` registry keys,
+  `%LOCALAPPDATA%\Programs\Python`, then PATH): a Scheduled-Task / session-0
+  shell has no usable PATH, and `python: FAIL not found: looked in …` names
+  every place that was tried;
 - scheduled tasks: `BotCorp-Daemon` and `BotCorp-Launch` present (WARN when
-  absent: `botcorp install`); any OTHER `*Bot*` task is a FAIL and is named
-  (two supervisors fighting over one bot is the failure this catches);
+  absent: `botcorp install`); any OTHER `*Bot*` task is a WARN and is named
+  (two supervisors fighting over one bot is what this catches) — unless it is
+  allowlisted in `host.coexist_tasks` (exact names or `*` globs, shipped
+  empty in `botcorp.json`, extended per machine by
+  `<BOTCORP_HOME>/host.json` `{"coexist_tasks": ["<OtherBot>-*"]}`), which
+  reports it as `INFO coexisting *Bot* tasks` instead. The reference host
+  runs a second, independent bot supervisor and allowlists its task prefix
+  that way;
 - per bot: `bot.yaml` valid; vault readable (`unreadable` entries =>
   `vault unreadable - re-enter tokens`; no `oauth_token` => WARN); no
   `enabledPlugins` in `bots/<bot>/.claude/settings.json` or `<config
@@ -431,11 +445,15 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   `HKLM\SOFTWARE\Cloudflare\CloudflareWARP` /
   `HKLM\SOFTWARE\Policies\Cloudflare\WARP` (WARN); RDP enabled
   (`fDenyTSConnections` = 0, FAIL) with NLA (`RDP-Tcp\UserAuthentication` =
-  1, WARN); an enabled inbound RDP firewall rule (the "Remote Desktop"
-  group, or any rule named `*RDP*` / `*3389*`: name a custom mesh-only rule
-  that way) on port 3389 whose `RemoteAddress` covers `100.96.0.0/12` (`Any`
-  counts; WARN when none: the mesh cannot reach RDP; enumerating every
-  port filter needs elevation, so the check goes rule-first);
+  1, WARN); an enabled inbound allow rule with **`LocalPort 3389`** whose
+  `RemoteAddress` covers `100.96.0.0/12` (`Any`, CIDR, the dotted-mask form
+  `100.96.0.0/255.240.0.0`, or an `a-b` range all count; WARN when none: the
+  mesh cannot reach RDP). A rule never matches on its name alone — the
+  Remote Desktop group's Shadow rule and "Chrome Remote Desktop Host" are
+  `LocalPort Any` and used to pass that way. Enumerating every port filter
+  needs elevation, so the "Remote Desktop" group and rules named `*RDP*` /
+  `*3389*` are checked first and the full per-rule scan (≈15 s per 230
+  rules) runs only when none of those looks mesh-scoped;
   `Winlogon\AutoAdminLogon` absent or 0 (FAIL when 1: no auto-login);
   `powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE` AC index = 0 (FAIL);
   hibernation off (`powercfg /a` lists it as not available, or

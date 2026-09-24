@@ -8,9 +8,12 @@
 # 2. Resolves the paths every hook needs:
 #      BOT_HOME   the bot folder (BOT_HOME > CLAUDE_PROJECT_DIR > cwd); hooks cd there
 #      HARNESS    <BotCorp>/harness (this plugin; CLAUDE_PLUGIN_ROOT when set)
-#      PY         the python interpreter (BOT_PYTHON > python3 > python), pinned
-#                 once here instead of in every hook, because the WindowsApps
-#                 `python` alias has bitten a hook that resolved it ad hoc.
+#      PY         the python interpreter (BOT_PYTHON > [Windows only] py launcher
+#                 > python3 > python), pinned once here instead of in every hook,
+#                 because the WindowsApps `python` alias has bitten a hook that
+#                 resolved it ad hoc, and a bare `python`/`python3` can be absent
+#                 entirely from a session-0 / Scheduled-Task PATH where the py
+#                 launcher still is.
 # 3. Exports PYTHONIOENCODING so Windows consoles never trip on UTF-8 output.
 #
 # STRICTLY FAIL-OPEN: nothing in here may fail the hook. No `set -e`.
@@ -37,12 +40,50 @@ fi
 export BOT_HOME
 cd "$BOT_HOME" 2>/dev/null || exit 0
 
+PY=""
 if [ -n "${BOT_PYTHON:-}" ]; then
   PY="$BOT_PYTHON"
-elif command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
-  PY="python3"
-else
-  PY="python"
+fi
+
+if [ -z "$PY" ]; then
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*)
+      # Bare `python`/`python3` can be entirely absent from a session-0 /
+      # Scheduled-Task PATH; the py launcher is a stock Windows install and
+      # survives there. Best-effort only — any failure here falls through.
+      _to_unix_path() {
+        if command -v cygpath >/dev/null 2>&1; then
+          cygpath -u "$1" 2>/dev/null
+        else
+          printf '%s' "$1" | sed 's#\\#/#g' 2>/dev/null
+        fi
+      }
+      for _py_launcher_win in "${SYSTEMROOT:-C:/Windows}/py.exe" "${LOCALAPPDATA:-}/Programs/Python/Launcher/py.exe"; do
+        [ -n "$_py_launcher_win" ] || continue
+        _py_launcher="$(_to_unix_path "$_py_launcher_win")"
+        if [ -n "$_py_launcher" ] && [ -f "$_py_launcher" ]; then
+          _py_resolved_win="$("$_py_launcher" -3 -c 'import sys; print(sys.executable)' 2>/dev/null)"
+          if [ -n "$_py_resolved_win" ]; then
+            _py_resolved="$(_to_unix_path "$_py_resolved_win")"
+            if [ -n "$_py_resolved" ] && [ -f "$_py_resolved" ]; then
+              PY="$_py_resolved"
+              break
+            fi
+          fi
+        fi
+      done
+      unset -f _to_unix_path 2>/dev/null
+      unset _py_launcher_win _py_launcher _py_resolved_win _py_resolved
+      ;;
+  esac
+fi
+
+if [ -z "$PY" ]; then
+  if command -v python3 >/dev/null 2>&1 && python3 -c 'import sys' >/dev/null 2>&1; then
+    PY="python3"
+  else
+    PY="python"
+  fi
 fi
 export PY
 export PYTHONIOENCODING=utf-8

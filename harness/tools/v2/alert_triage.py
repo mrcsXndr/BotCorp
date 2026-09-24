@@ -414,11 +414,13 @@ def scan(now: datetime | None = None, dry_run: bool = False, verbose: bool = Fal
 # ---------------------------------------------------------------- spawn + run
 
 def _claude_exe() -> str:
-    exe = shutil.which("claude")
-    if not exe:
-        fallback = os.path.join(os.environ.get("USERPROFILE", ""), ".local", "bin", "claude.exe")
-        exe = fallback if os.path.isfile(fallback) else "claude"
-    return exe
+    """Native install first: a stale npm shim on PATH can shadow it (mirrors
+    daemon/_common.ps1 Resolve-ClaudeExe)."""
+    name = "claude.exe" if os.name == "nt" else "claude"
+    native = os.path.join(os.environ.get("USERPROFILE", ""), ".local", "bin", name)
+    if os.path.isfile(native):
+        return native
+    return shutil.which("claude") or native
 
 
 def _no_window_flags() -> dict:
@@ -473,7 +475,9 @@ def run(prompt_file: Path, run_file: Path, now: datetime | None = None) -> int:
             outcome = f"rc={p.returncode}"
         except subprocess.TimeoutExpired:
             if os.name == "nt":
-                subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                taskkill = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                                         "System32", "taskkill.exe")
+                subprocess.run([taskkill, "/PID", str(p.pid), "/T", "/F"],
                                capture_output=True)
             else:
                 p.kill()

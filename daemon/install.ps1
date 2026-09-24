@@ -94,11 +94,19 @@ function ConvertTo-Plain { param([System.Security.SecureString]$S)
     try { return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
 }
 
-# pwsh for the Launch task action: the version-stable WindowsApps alias when
-# present (survives PowerShell updates), else whatever PATH gives.
-$pwshRt = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
-if (-not (Test-Path $pwshRt)) { $pwshRt = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source }
-if (-not $pwshRt) { $pwshRt = 'pwsh.exe' }
+# pwsh for the Launch task action: a known install path first, then the
+# version-stable WindowsApps alias (survives PowerShell updates), then
+# whatever PATH gives, then the ABSOLUTE Windows PowerShell 5.1 path - never
+# a bare 'pwsh.exe' (PATH is unreliable in session 0).
+$pwshRt = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
+if (-not (Test-Path $pwshRt)) {
+    $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
+    if (Test-Path $alias) { $pwshRt = $alias }
+    else {
+        $pwshRt = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
+        if (-not $pwshRt) { $pwshRt = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
+    }
+}
 
 function Register-LaunchTask {
     $action = New-ScheduledTaskAction -Execute $pwshRt -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$visibleScript`""
@@ -114,7 +122,7 @@ function Register-DaemonTask {
     if (-not (Test-Path $tpl)) { throw "template missing: $tpl" }
     $vbs = (Get-Content $tpl -Raw).Replace('{{TICK_SCRIPT}}', $tickScript).Replace('{{SCRIPT_ARGS}}', '').Replace('{{BOTCORP_HOME}}', $RtHome).Replace('{{LOCALAPPDATA_PWSH}}', (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'))
     Set-Content -Path $vbsPath -Value $vbs -Encoding ASCII
-    $action = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument "`"$vbsPath`" //B //Nologo"
+    $action = New-ScheduledTaskAction -Execute (Join-Path $env:SystemRoot 'System32\wscript.exe') -Argument "`"$vbsPath`" //B //Nologo"
     # At Startup (not At Logon: nobody logs in on a headless host) + repetition.
     $tBoot = New-ScheduledTaskTrigger -AtStartup
     $tRepeat = New-ScheduledTaskTrigger -Once -At (Get-Date).Date.AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes $IntervalMinutes)

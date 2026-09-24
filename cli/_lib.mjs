@@ -106,21 +106,37 @@ export function run(file, args, { stdin = null, timeoutMs = 60_000, env = null, 
   };
 }
 
-let _pwsh = null;
-// `pwsh` on PATH, else the WindowsApps alias, else Windows PowerShell 5.1.
-export function resolvePwsh() {
-  if (_pwsh) return _pwsh;
-  if (process.platform !== 'win32') { _pwsh = 'pwsh'; return _pwsh; }
-  const exeNames = ['pwsh.exe', 'pwsh'];
+// ---- system binaries ----------------------------------------------------------
+// Always absolute: from a Scheduled Task / session-0 shell PATH is unreliable and
+// a bare `powershell` / `python` / `curl.exe` spawned ENOENT on the reference host.
+const WIN = process.platform === 'win32';
+export const SYSTEM32 = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+export function sysExe(name) { return WIN ? path.join(SYSTEM32, name) : name.replace(/\.exe$/i, ''); }
+export const POWERSHELL_EXE = WIN ? path.join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe') : 'powershell';
+
+export function findOnPath(names, { skip = null } = {}) {
   for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
-    if (!dir) continue;
-    for (const n of exeNames) {
-      try { if (fs.statSync(path.join(dir, n)).isFile()) { _pwsh = path.join(dir, n); return _pwsh; } } catch {}
+    if (!dir || (skip && skip.test(dir))) continue;
+    for (const n of names) {
+      try { if (fs.statSync(path.join(dir, n)).isFile()) return path.join(dir, n); } catch {}
     }
   }
-  const alias = path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'pwsh.exe');
-  if (process.env.LOCALAPPDATA && fs.existsSync(alias)) { _pwsh = alias; return _pwsh; }
-  _pwsh = 'powershell';
+  return null;
+}
+function firstExisting(cands) { for (const c of cands) if (c && fs.existsSync(c)) return c; return null; }
+const PROGRAM_FILES = process.env.ProgramFiles || 'C:\\Program Files';
+
+let _pwsh = null;
+// Known install path, then PATH, then the WindowsApps alias, then Windows
+// PowerShell 5.1 by its absolute path. Never a versioned WindowsApps path
+// (breaks on every PowerShell update), never a bare name.
+export function resolvePwsh() {
+  if (_pwsh) return _pwsh;
+  if (!WIN) { _pwsh = findOnPath(['pwsh']) || 'pwsh'; return _pwsh; }
+  _pwsh = firstExisting([path.join(PROGRAM_FILES, 'PowerShell', '7', 'pwsh.exe')])
+    || findOnPath(['pwsh.exe'])
+    || firstExisting([process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Microsoft', 'WindowsApps', 'pwsh.exe')])
+    || POWERSHELL_EXE;
   return _pwsh;
 }
 
@@ -155,12 +171,93 @@ export function runClaude(args, opts = {}) {
   return run(exe, args, opts);
 }
 
+export const PYTHON_LOOKED_IN = 'BOT_PYTHON, the py launcher (%SystemRoot%\\py.exe, %LOCALAPPDATA%\\Programs\\Python\\Launcher), HKCU/HKLM Software\\Python\\PythonCore, %LOCALAPPDATA%\\Programs\\Python\\Python3*, PATH (not the WindowsApps alias)';
+
+let _python;
+// `{file, pre, version, via}` or null (doctor turns null into a FAIL naming
+// PYTHON_LOOKED_IN). BOT_PYTHON, the py launcher, the PythonCore registry, the
+// per-user install dir, then PATH minus the WindowsApps store alias.
 export function resolvePython() {
-  for (const [file, pre] of [['python', []], ['python3', []], ['py', ['-3']]]) {
-    const r = run(file, [...pre, '--version'], { timeoutMs: 15_000 });
-    if (r.code === 0 && /Python 3/.test(r.out + r.err)) return { file, pre, version: (r.out + r.err).trim() };
+  if (_python !== undefined) return _python;
+  const probe = (file, via) => {
+    if (!file) return null;
+    const r = run(file, ['--version'], { timeoutMs: 15_000 });
+    const m = (r.out + r.err).match(/Python 3\.\d+\.\d+/);
+    return r.code === 0 && m ? { file, pre: [], version: m[0], via } : null;
+  };
+  const found = () => {
+    if (process.env.BOT_PYTHON) { const p = probe(process.env.BOT_PYTHON, 'BOT_PYTHON'); if (p) return p; }
+    if (!WIN) return probe(findOnPath(['python3']), 'PATH') || probe(findOnPath(['python']), 'PATH');
+    const lad = process.env.LOCALAPPDATA || '';
+    const py = firstExisting([path.join(SYSTEM32, '..', 'py.exe'), lad && path.join(lad, 'Programs', 'Python', 'Launcher', 'py.exe')]) || findOnPath(['py.exe']);
+    if (py) {
+      const r = run(py, ['-3', '-c', 'import sys; print(sys.executable)'], { timeoutMs: 15_000 });
+      const exe = r.out.trim();
+      if (r.code === 0 && exe && fs.existsSync(exe)) { const p = probe(exe, 'py launcher'); if (p) return p; }
+    }
+    for (const hive of ['HKCU\\Software\\Python\\PythonCore', 'HKLM\\SOFTWARE\\Python\\PythonCore']) {
+      const r = run(sysExe('reg.exe'), ['query', hive, '/s', '/v', 'ExecutablePath'], { timeoutMs: 15_000 });
+      const rows = []; let ver = '';
+      for (const line of r.out.split(/\r?\n/)) {
+        const k = line.match(/PythonCore\\([0-9][0-9.]*)/i); if (k) { ver = k[1]; continue; }
+        const e = line.match(/ExecutablePath\s+REG_SZ\s+(.+?)\s*$/i); if (e && fs.existsSync(e[1])) rows.push({ ver, exe: e[1] });
+      }
+      rows.sort((a, b) => b.ver.localeCompare(a.ver, undefined, { numeric: true }));
+      for (const row of rows) { const p = probe(row.exe, `registry PythonCore ${row.ver}`); if (p) return p; }
+    }
+    if (lad) {
+      let dirs = [];
+      try { dirs = fs.readdirSync(path.join(lad, 'Programs', 'Python')).filter((d) => /^Python3\d+$/i.test(d)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })); } catch {}
+      for (const d of dirs) { const p = probe(path.join(lad, 'Programs', 'Python', d, 'python.exe'), 'per-user install'); if (p) return p; }
+    }
+    return probe(findOnPath(['python.exe', 'python3.exe'], { skip: /WindowsApps/i }), 'PATH');
+  };
+  _python = found();
+  return _python;
+}
+
+let _git;
+// PATH first, then the Git for Windows install dirs. null when absent (doctor FAILs).
+export function resolveGit() {
+  if (_git !== undefined) return _git;
+  _git = findOnPath(WIN ? ['git.exe'] : ['git']) || (WIN ? firstExisting([
+    path.join(PROGRAM_FILES, 'Git', 'cmd', 'git.exe'),
+    path.join(PROGRAM_FILES, 'Git', 'bin', 'git.exe'),
+    process.env.LOCALAPPDATA && path.join(process.env.LOCALAPPDATA, 'Programs', 'Git', 'cmd', 'git.exe'),
+  ]) : null);
+  return _git;
+}
+export function gitExe() { return resolveGit() || 'git'; }
+
+// Task-name allowlist matching (`*` wildcard; task names are case-insensitive).
+export function matchesAnyGlob(name, patterns) {
+  return (patterns || []).some((p) => new RegExp('^' + String(p).split('*').map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('.*') + '$', 'i').test(name));
+}
+
+export function ipv4ToInt(s) {
+  const p = String(s).split('.').map(Number);
+  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
+  return (((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]) >>> 0;
+}
+const MESH_LO = ipv4ToInt('100.96.0.0'), MESH_HI = ipv4ToInt('100.111.255.255');
+// Does one firewall RemoteAddress token cover the whole mesh range? Accepts
+// `Any`, CIDR, the dotted-mask form Get-NetFirewallAddressFilter prints
+// (`100.96.0.0/255.240.0.0`) and `a-b` ranges.
+export function coversMesh(addr) {
+  const a = String(addr).trim();
+  if (/^any$/i.test(a)) return true;
+  let m;
+  if ((m = a.match(/^([\d.]+)\/([\d.]+)$/))) {
+    const base = ipv4ToInt(m[1]);
+    let mask;
+    if (m[2].includes('.')) mask = ipv4ToInt(m[2]);
+    else { const bits = Number(m[2]); if (bits > 32) return false; mask = bits === 0 ? 0 : ((~0 << (32 - bits)) >>> 0); }
+    if (base === null || mask === null) return false;
+    const s = (base & mask) >>> 0, e = (s | (~mask >>> 0)) >>> 0;
+    return s <= MESH_LO && e >= MESH_HI;
   }
-  return null;
+  if ((m = a.match(/^([\d.]+)-([\d.]+)$/))) { const s = ipv4ToInt(m[1]), e = ipv4ToInt(m[2]); return s !== null && e !== null && s <= MESH_LO && e >= MESH_HI; }
+  return false;
 }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

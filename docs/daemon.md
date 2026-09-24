@@ -230,10 +230,15 @@ the attach client, never the session.
 `BOT_HOME`, `BOT_NAME`, `BOT_MODULES`, `BOTCORP_HOME`, `BOTCORP_ROOT`,
 `CLAUDE_CONFIG_DIR` (= `bots/<name>/.claude-<name>`), `CLAUDE_PLUGIN_ROOT`,
 `PYTHONIOENCODING=utf-8`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`.
-Python is resolved at runtime (PATH first, then the newest
-`%LOCALAPPDATA%\Programs\Python\Python3*`); `BOT_PYTHON` overrides. Claude Code
-is `~/.local/bin/claude.exe` first, then PATH (a stale npm shim has shadowed
-the native install before).
+Python is resolved at runtime in this order: `BOT_PYTHON` (when set and it
+exists) > the `py` launcher (`py -3 -c "import sys; print(sys.executable)"`) >
+the `HKCU`/`HKLM` `Python\PythonCore` registry (newest version) >
+`%LOCALAPPDATA%\Programs\Python\Python3*` (newest) > PATH. Claude Code is
+`~/.local/bin/claude.exe` first, then PATH (a stale npm shim has shadowed the
+native install before). System binaries (`powershell.exe`, `taskkill.exe`,
+`icacls.exe`, `wscript.exe`) are always spawned by their absolute
+`%SystemRoot%\System32` path, never a bare name - session-0 PATH is
+unreliable and bare names have failed to spawn there.
 
 Headless utility spawns (triage, debrief) use `Get-ClaudeHeadlessArgv`: `-p
 --setting-sources user --dangerously-skip-permissions [--model M]

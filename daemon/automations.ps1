@@ -196,7 +196,7 @@ function Invoke-AutomationJob {
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
         $proc = [System.Diagnostics.Process]::Start($psi)
         if ($proc.WaitForExit([int]($timeoutMin * 60000))) { $exit = $proc.ExitCode }
-        else { $timedOut = $true; try { $proc.Kill($true) } catch {}; try { & taskkill /PID $proc.Id /T /F 2>$null | Out-Null } catch {}; $exit = 124 }
+        else { $timedOut = $true; try { $proc.Kill($true) } catch {}; try { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $proc.Id /T /F 2>$null | Out-Null } catch {}; $exit = 124 }
     } catch { Log "run ${name}: launch failed: $($_.Exception.Message)"; $exit = 127; try { "launch failed: $($_.Exception.Message)" | Out-File -FilePath $logPath -Append -Encoding utf8 } catch {} }
     finally { if ($proc) { $proc.Dispose() } }
     $sw.Stop()

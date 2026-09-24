@@ -55,6 +55,20 @@ from _paths import instance_root, harness_root  # noqa: E402
 REPO = instance_root()
 PY = sys.executable
 
+
+def _resolve_curl() -> str:
+    """A bare 'curl' fails to spawn (ENOENT) from a session-0 / Scheduled-Task
+    environment with a minimal PATH; System32's curl.exe ships on Windows 10+."""
+    if os.name == "nt":
+        native = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "curl.exe")
+        if os.path.isfile(native):
+            return native
+        return shutil.which("curl") or "curl"
+    return shutil.which("curl") or "curl"
+
+
+CURL_EXE = _resolve_curl()
+
 #: Distinct from the -1 catch-all so a budget problem never reads as a broken
 #: tool. See the module docstring — this distinction is the whole fix.
 TIMED_OUT = -2
@@ -142,7 +156,7 @@ def check_http(url: str, timeout: int = 30) -> tuple[bool, str]:
     alarm.
     """
     rc, out = run(
-        ["curl", "-s", "-o", os.devnull, "-w", "%{http_code}", "--max-time", str(timeout // 2), url],
+        [CURL_EXE, "-s", "-o", os.devnull, "-w", "%{http_code}", "--max-time", str(timeout // 2), url],
         timeout=timeout,
     )
     code = out.strip()[-3:]

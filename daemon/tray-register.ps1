@@ -56,8 +56,9 @@ if (-not (Test-Path $trayScript)) { Write-Error "tray-register: daemon/tray.ps1 
 function New-Shim { param([string]$Script, [string]$ScriptArgs)
     return (Get-Content $tpl -Raw).Replace('{{TICK_SCRIPT}}', $Script).Replace('{{SCRIPT_ARGS}}', $ScriptArgs).Replace('{{BOTCORP_HOME}}', $RtHome).Replace('{{LOCALAPPDATA_PWSH}}', (Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'))
 }
-$cmd = "wscript.exe `"$vbsPath`" //B //Nologo"
-$attachCmd = "wscript.exe `"$attachVbsPath`" //B //Nologo"
+$wscriptExe = Join-Path $env:SystemRoot 'System32\wscript.exe'
+$cmd = "`"$wscriptExe`" `"$vbsPath`" //B //Nologo"
+$attachCmd = "`"$wscriptExe`" `"$attachVbsPath`" //B //Nologo"
 if ($DryRun) {
     Write-Output "tray dry-run: would write $vbsPath and set $runKey\$valueName = $cmd"
     if ($AttachAtLogin) { Write-Output "tray dry-run: would write $attachVbsPath and set $runKey\$attachValueName = $attachCmd (attach.ps1 -WaitSec 180)" }

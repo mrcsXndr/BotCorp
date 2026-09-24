@@ -47,7 +47,7 @@ function Protect-VaultDir {
     param([string]$Dir)
     try {
         $me = "$env:USERDOMAIN\$env:USERNAME"
-        & icacls $Dir /inheritance:r /grant:r "${me}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" 2>&1 | Out-Null
+        & (Join-Path $env:SystemRoot 'System32\icacls.exe') $Dir /inheritance:r /grant:r "${me}:(OI)(CI)F" "SYSTEM:(OI)(CI)F" 2>&1 | Out-Null
     } catch { Write-Warning "vault: could not set ACL on ${Dir}: $($_.Exception.Message)" }
 }
 

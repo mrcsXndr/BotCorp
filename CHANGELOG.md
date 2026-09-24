@@ -3,6 +3,37 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.2
+
+Findings from the first `botcorp doctor` run on the reference host, fixed
+before its install:
+
+- **System binaries by absolute path everywhere.** From a Scheduled-Task /
+  session-0 shell, bare `powershell` spawned ENOENT and `python` / `curl.exe`
+  were not found. The CLI, daemon, tray, hooks and python tools now resolve
+  `powershell.exe`, `curl.exe`, `taskkill`, `icacls`, `wscript`, `reg` and
+  `powercfg` under `%SystemRoot%\System32`; pwsh via `%ProgramFiles%\
+  PowerShell\7`, then PATH, then the WindowsApps alias; python via
+  `BOT_PYTHON`, the `py -3` launcher, the `PythonCore` registry, the per-user
+  install dir, then PATH (never the WindowsApps alias); git via PATH then
+  `Program Files\Git`. The launcher exports the resolved `BOT_PYTHON` to every
+  bot child so hooks inherit it. `doctor` prints the resolved path per tool and
+  a `python: FAIL not found: looked in …` that names every location tried.
+- **`host.coexist_tasks`.** Other `*Bot*` scheduled tasks are a WARN (was
+  FAIL) and, when allowlisted — `botcorp.json` `host.coexist_tasks` (shipped
+  empty) plus the machine-local `<BOTCORP_HOME>/host.json` `coexist_tasks`,
+  names or `*` globs — an INFO line instead. A second supervisor that
+  coexists by design no longer fails the doctor.
+- **`RDP firewall (mesh)` no longer passes on a rule's name.** It matched
+  "Chrome Remote Desktop Host" (`LocalPort Any`). A rule now counts only with
+  `LocalPort 3389` on its port filter (Remote Desktop group + `*RDP*`/`*3389*`
+  names first, full per-rule scan when none looks mesh-scoped), and the
+  dotted-mask `RemoteAddress` form `Get-NetFirewallAddressFilter` actually
+  prints (`100.96.0.0/255.240.0.0`) is parsed, so a real mesh-only rule is
+  recognised.
+- Nothing pins Claude Code `2.1.281`; `minClaudeCode` `2.1.280` stays the only
+  floor (the reference host is on `2.1.282`).
+
 ## v0.1.1
 
 - **CI fixed forward on the first public run**: the `secret-scan` job now

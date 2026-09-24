@@ -26,6 +26,7 @@ import {
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
@@ -762,13 +763,13 @@ function firstFreeName() {
 }
 
 function gitIdentity() {
-  const name = run('git', ['-C', ROOT, 'config', '--get', 'user.name'], { timeoutMs: 15_000 }).out.trim();
-  const email = run('git', ['-C', ROOT, 'config', '--get', 'user.email'], { timeoutMs: 15_000 }).out.trim();
+  const name = run(gitExe(), ['-C', ROOT, 'config', '--get', 'user.name'], { timeoutMs: 15_000 }).out.trim();
+  const email = run(gitExe(), ['-C', ROOT, 'config', '--get', 'user.email'], { timeoutMs: 15_000 }).out.trim();
   return name && email ? { name, email } : { name: 'botcorp', email: 'botcorp@users.noreply.github.com' };
 }
 
 function git(cwd, args, timeoutMs = 60_000) {
-  const r = run('git', ['-C', cwd, ...args], { timeoutMs, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } });
+  const r = run(gitExe(), ['-C', cwd, ...args], { timeoutMs, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } });
   if (r.code !== 0) fail(`git ${args[0]} failed (${r.code}): ${(r.err || r.out).trim()}`);
   return r;
 }
@@ -1140,20 +1141,20 @@ function cmdBackup({ pos, flags }) {
   if (!fs.existsSync(ignore)) { fs.copyFileSync(path.join(ROOT, 'templates', 'bot', '.gitignore'), ignore); out('backup: .gitignore restored from the template'); }
   // The whole point of the ignore file: a backup remote must never receive these.
   for (const p of ['.vault', `.claude-${bot}`, '.claude/settings.json']) {
-    if (run('git', ['-C', home, 'check-ignore', '-q', p], { timeoutMs: 15_000 }).code !== 0) fail(`backup: ${p} is NOT ignored in ${ignore}; refusing to commit (restore the template's .gitignore lines)`);
+    if (run(gitExe(), ['-C', home, 'check-ignore', '-q', p], { timeoutMs: 15_000 }).code !== 0) fail(`backup: ${p} is NOT ignored in ${ignore}; refusing to commit (restore the template's .gitignore lines)`);
   }
   const id = gitIdentity();
   git(home, ['config', 'user.name', id.name]);
   git(home, ['config', 'user.email', id.email]);
-  const cur = run('git', ['-C', home, 'remote', 'get-url', 'origin'], { timeoutMs: 15_000 });
+  const cur = run(gitExe(), ['-C', home, 'remote', 'get-url', 'origin'], { timeoutMs: 15_000 });
   if (cur.code !== 0) git(home, ['remote', 'add', 'origin', remote]);
   else if (cur.out.trim() !== remote) { git(home, ['remote', 'set-url', 'origin', remote]); out(`backup: origin url updated`); }
   const present = paths.filter((p) => fs.existsSync(path.join(home, p)));
   git(home, ['add', '-A', '--', '.gitignore', ...present]);
-  const staged = run('git', ['-C', home, 'diff', '--cached', '--quiet'], { timeoutMs: 30_000 }).code !== 0;
+  const staged = run(gitExe(), ['-C', home, 'diff', '--cached', '--quiet'], { timeoutMs: 30_000 }).code !== 0;
   if (staged) { git(home, ['commit', '-q', '-m', `backup ${new Date().toISOString()}`]); out('backup: committed'); }
   else out('backup: nothing new to commit');
-  const push = run('git', ['-C', home, '-c', 'credential.interactive=never', '-c', 'core.askPass=', 'push', '-q', '-u', 'origin', 'HEAD:main'], { timeoutMs: 120_000, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } });
+  const push = run(gitExe(), ['-C', home, '-c', 'credential.interactive=never', '-c', 'core.askPass=', 'push', '-q', '-u', 'origin', 'HEAD:main'], { timeoutMs: 120_000, env: { GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' } });
   if (push.timedOut) fail('backup: git push timed out after 120 s (no credential prompt is ever answered here; use a token URL or a stored credential)');
   if (push.code !== 0) fail(`backup: git push failed (${push.code}): ${(push.err || push.out).trim().slice(0, 300)}`);
   out(`backup: pushed to ${remote}`);
@@ -1466,7 +1467,7 @@ function cmdSuggest({ pos, flags }) {
   const dry = !!flags['dry-run'];
   const wt = path.join(BOTCORP_HOME, 'work', topic);
   const branch = `suggest/${bot}/${topic}`;
-  const hasOrigin = run('git', ['-C', ROOT, 'rev-parse', '--verify', '-q', 'origin/main'], { timeoutMs: 15_000 }).code === 0;
+  const hasOrigin = run(gitExe(), ['-C', ROOT, 'rev-parse', '--verify', '-q', 'origin/main'], { timeoutMs: 15_000 }).code === 0;
   const base = hasOrigin ? 'origin/main' : 'HEAD';
   const lesson = flags.lesson ? path.resolve(String(flags.lesson)) : null;
   if (lesson && !fs.existsSync(lesson)) fail(`suggest: lesson file ${lesson} not found`);
@@ -1535,17 +1536,35 @@ try {
 try { $r.rdp_deny = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server' -ErrorAction Stop).fDenyTSConnections } catch { $r.rdp_deny = $null }
 try { $r.rdp_nla = (Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -ErrorAction Stop).UserAuthentication } catch { $r.rdp_nla = $null }
 try {
-  # Rule-first: enumerating every port filter is denied non-elevated (protected rules), per-rule filters are not.
-  # Candidates = the built-in Remote Desktop group plus any rule named after RDP/3389 (name a custom mesh rule that way).
-  $cands = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction Stop | Where-Object { $_.DisplayGroup -like '*Remote Desktop*' -or $_.DisplayName -match 'RDP|Remote Desktop|3389' -or $_.Name -match 'RDP|RemoteDesktop|3389' })
-  $r.fw = @(foreach ($rule in $cands) {
-    $ports = @(($rule | Get-NetFirewallPortFilter -ErrorAction Stop).LocalPort)
-    if ($ports -contains '3389' -or $ports -contains 'Any') { @{ name = $rule.DisplayName; profile = "$($rule.Profile)"; ports = $ports; remote = @(($rule | Get-NetFirewallAddressFilter -ErrorAction Stop).RemoteAddress) } }
-  })
+  # Enumerating every port filter is denied non-elevated (protected rules); per-rule filters are not.
+  # A rule counts only with LocalPort 3389 on it: the Remote Desktop group's Shadow rule and e.g.
+  # "Chrome Remote Desktop Host" are LocalPort Any and used to pass on their name alone.
+  # Fast pass = the built-in Remote Desktop group + rules named after RDP/3389; a full per-rule scan
+  # (~15 s on 230 rules) only when the fast pass has no rule whose RemoteAddress looks like the mesh.
+  $all = @(Get-NetFirewallRule -Direction Inbound -Enabled True -Action Allow -ErrorAction Stop)
+  $rdp3389 = {
+    param($rules)
+    @(foreach ($rule in $rules) {
+      try {
+        $ports = @(($rule | Get-NetFirewallPortFilter -ErrorAction Stop).LocalPort)
+        if ($ports -contains '3389') { @{ name = $rule.DisplayName; group = "$($rule.DisplayGroup)"; profile = "$($rule.Profile)"; ports = $ports; remote = @(($rule | Get-NetFirewallAddressFilter -ErrorAction Stop).RemoteAddress) } }
+      } catch {}
+    })
+  }
+  $named = @($all | Where-Object { $_.DisplayGroup -eq 'Remote Desktop' -or $_.DisplayName -match 'RDP|3389' -or $_.Name -match 'RDP|RemoteDesktop|3389' })
+  $r.fw = @(& $rdp3389 $named)
+  $r.fw_scan = "named ($($named.Count) of $($all.Count) rules)"
+  $meshLike = @($r.fw | Where-Object { @($_.remote) | Where-Object { $_ -eq 'Any' -or $_ -like '100.*' } })
+  if ($meshLike.Count -eq 0) {
+    $namedIds = @($named | ForEach-Object { $_.Name })
+    $r.fw = @($r.fw) + @(& $rdp3389 @($all | Where-Object { $namedIds -notcontains $_.Name }))
+    $r.fw_scan = "full ($($all.Count) rules)"
+  }
 } catch { $r.fw = $null; $r.fw_err = "$($_.Exception.Message)" }
 try { $r.autologon = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon' -ErrorAction Stop).AutoAdminLogon } catch { $r.autologon = $null }
-try { $r.standby = (& powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>&1) -join "\`n" } catch { $r.standby = $null }
-try { $r.hib_a = (& powercfg /a 2>&1) -join "\`n" } catch { $r.hib_a = $null }
+$powercfg = Join-Path $env:SystemRoot 'System32\\powercfg.exe'
+try { $r.standby = (& $powercfg /q SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2>&1) -join "\`n" } catch { $r.standby = $null }
+try { $r.hib_a = (& $powercfg /a 2>&1) -join "\`n" } catch { $r.hib_a = $null }
 try { $p = Get-ItemProperty -Path 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Power' -ErrorAction Stop; $r.hib_enabled = $p.HibernateEnabled; $r.hiberboot = $p.HiberbootEnabled } catch { $r.hib_enabled = $null; $r.hiberboot = $null }
 $r | ConvertTo-Json -Depth 6 -Compress
 `;
@@ -1560,36 +1579,26 @@ function resolveWarpCli() {
   return fs.existsSync(pf) ? pf : null;
 }
 
-function ipv4ToInt(s) {
-  const p = String(s).split('.').map(Number);
-  if (p.length !== 4 || p.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return null;
-  return (((p[0] << 24) >>> 0) + (p[1] << 16) + (p[2] << 8) + p[3]) >>> 0;
-}
-const MESH_LO = ipv4ToInt('100.96.0.0'), MESH_HI = ipv4ToInt('100.111.255.255');
-// Does one firewall RemoteAddress token cover the whole mesh range?
-function coversMesh(addr) {
-  const a = String(addr).trim();
-  if (/^any$/i.test(a)) return true;
-  let m;
-  if ((m = a.match(/^([\d.]+)\/(\d+)$/))) {
-    const base = ipv4ToInt(m[1]), bits = Number(m[2]);
-    if (base === null || bits > 32) return false;
-    const mask = bits === 0 ? 0 : ((~0 << (32 - bits)) >>> 0);
-    const s = (base & mask) >>> 0, e = (s | (~mask >>> 0)) >>> 0;
-    return s <= MESH_LO && e >= MESH_HI;
-  }
-  if ((m = a.match(/^([\d.]+)-([\d.]+)$/))) { const s = ipv4ToInt(m[1]), e = ipv4ToInt(m[2]); return s !== null && e !== null && s <= MESH_LO && e >= MESH_HI; }
-  return false;
-}
-
 function firstLine(s) { return String(s || '').split(/\r?\n/).map((l) => l.trim()).find(Boolean) || ''; }
+
+// Scheduled tasks named *Bot* that coexist with BotCorp by design (another
+// product's supervisor on the same box). Shipped default in botcorp.json
+// `host.coexist_tasks` (empty) plus the machine-local <BOTCORP_HOME>/host.json
+// `coexist_tasks`; entries are exact names or `*` globs.
+function coexistTasks() {
+  const file = path.join(BOTCORP_HOME, 'host.json');
+  const list = (v) => (Array.isArray(v) ? v.map(String).filter(Boolean) : []);
+  const shipped = list(((readJson(path.join(ROOT, 'botcorp.json')) || {}).host || {}).coexist_tasks);
+  const local = list((readJson(file) || {}).coexist_tasks);
+  return { patterns: [...new Set([...shipped, ...local])], file };
+}
 
 function hostChecks(add) {
   const A = (level, name, detail) => add(level, `host: ${name}`, detail, 'host');
-  const ps = runPwshCommand(HOST_PS, { timeoutMs: 90_000 });
+  const ps = runPwshCommand(HOST_PS, { timeoutMs: 150_000 });   // a full firewall scan alone can take ~15-40 s
   let h = null;
   try { h = JSON.parse(ps.out.trim().split(/\r?\n/).pop()); } catch {}
-  const psWhy = ps.timedOut ? 'pwsh timed out after 90 s' : firstLine(ps.err || ps.out).slice(0, 120) || 'no output';
+  const psWhy = ps.timedOut ? 'pwsh timed out after 150 s' : firstLine(ps.err || ps.out).slice(0, 120) || 'no output';
   const unread = (name, why) => A('WARN', name, `could not read (${why})`);
   const v = (k) => (h && h[k] !== undefined ? h[k] : null);
 
@@ -1623,8 +1632,8 @@ function hostChecks(add) {
   else {
     const hits = fw.filter((r) => (r.remote || []).some(coversMesh));
     A(hits.length ? 'PASS' : 'WARN', 'RDP firewall (mesh)', hits.length
-      ? `${hits.map((r) => r.name).join(', ')}: RemoteAddress covers 100.96.0.0/12`
-      : `${fw.length} enabled inbound RDP rule(s) (Remote Desktop group or named *RDP*/*3389*), none with RemoteAddress covering 100.96.0.0/12${fw.length ? ' (' + fw.map((r) => `${r.name}: ${(r.remote || []).join('|') || '?'}`).join('; ').slice(0, 200) + ')' : ''}`);
+      ? `${hits.map((r) => `${r.name} [${(r.remote || []).join('|')}]`).join(', ')}: LocalPort 3389, RemoteAddress covers 100.96.0.0/12`
+      : `${fw.length} enabled inbound rule(s) with LocalPort 3389 (scan: ${v('fw_scan') || '?'}), none with RemoteAddress covering 100.96.0.0/12${fw.length ? ' (' + fw.map((r) => `${r.name}: ${(r.remote || []).join('|') || '?'}`).join('; ').slice(0, 200) + ')' : ''}`);
   }
 
   const auto = v('autologon');
@@ -1792,12 +1801,13 @@ async function cmdDoctor({ flags }) {
     add(nv[0] >= 20 ? 'PASS' : 'FAIL', 'node', `${process.versions.node} (min 20)`);
     const py = resolvePython();
     const pyv = py && semver(py.version);
-    add(pyv && (pyv[0] > 3 || (pyv[0] === 3 && pyv[1] >= 11)) ? 'PASS' : 'FAIL', 'python', py ? `${py.version} (min 3.11)` : 'not found');
+    add(pyv && (pyv[0] > 3 || (pyv[0] === 3 && pyv[1] >= 11)) ? 'PASS' : 'FAIL', 'python', py ? `${py.version} (min 3.11) at ${py.file} (via ${py.via})` : `not found: looked in ${PYTHON_LOOKED_IN}`);
     const pv = runPwshCommand('$PSVersionTable.PSVersion.ToString()', { timeoutMs: 30_000 });
     const psv = semver(pv.out);
-    add(psv && psv[0] >= 7 ? 'PASS' : 'FAIL', 'pwsh', psv ? `${psv.join('.')} (min 7)` : `not runnable: ${(pv.err || pv.out).trim().slice(0, 120)}`);
-    const gv = run('git', ['--version'], { timeoutMs: 15_000 });
-    add(gv.code === 0 ? 'PASS' : 'FAIL', 'git', gv.code === 0 ? gv.out.trim() : 'not found');
+    add(psv && psv[0] >= 7 ? 'PASS' : 'FAIL', 'pwsh', psv ? `${psv.join('.')} (min 7) at ${resolvePwsh()}` : `not runnable (${resolvePwsh()}): ${(pv.err || pv.out).trim().slice(0, 120)}`);
+    const gitPath = resolveGit();
+    const gv = gitPath ? run(gitPath, ['--version'], { timeoutMs: 15_000 }) : null;
+    add(gv && gv.code === 0 ? 'PASS' : 'FAIL', 'git', gv && gv.code === 0 ? `${gv.out.trim()} at ${gitPath}` : 'not found on PATH or under Program Files\\Git');
 
     // harness
     const pj = readJson(path.join(ROOT, 'harness', '.claude-plugin', 'plugin.json'));
@@ -1805,17 +1815,24 @@ async function cmdDoctor({ flags }) {
     const pvld = runClaude(['plugin', 'validate', 'harness', '--strict'], { timeoutMs: 90_000, cwd: ROOT });
     add(pvld.code === 0 ? 'PASS' : 'FAIL', 'claude plugin validate harness --strict', (pvld.out + pvld.err).trim().split(/\r?\n/).slice(-1)[0] || `exit ${pvld.code}`);
 
-    // scheduled tasks: ours present (WARN if not), nothing else *Bot* (FAIL)
+    // scheduled tasks: ours present (WARN if not); any other *Bot* task is a WARN
+    // (another supervisor?) unless host.coexist_tasks allowlists it (then INFO)
     const tasks = runPwshCommand("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like '*Bot*' } | ForEach-Object { $_.TaskName }", { timeoutMs: 60_000 });
     const names = tasks.out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     for (const t of ['BotCorp-Daemon', 'BotCorp-Launch']) add(names.includes(t) ? 'PASS' : 'WARN', `task ${t}`, names.includes(t) ? 'registered' : 'absent (botcorp install)');
+    const coexist = coexistTasks();
     const foreign = names.filter((n) => !['BotCorp-Daemon', 'BotCorp-Launch'].includes(n));
-    add(foreign.length ? 'FAIL' : 'PASS', 'foreign *Bot* tasks', foreign.length ? foreign.join(', ') : 'none');
+    const allowed = foreign.filter((n) => matchesAnyGlob(n, coexist.patterns));
+    const unexpected = foreign.filter((n) => !allowed.includes(n));
+    if (allowed.length) add('INFO', 'coexisting *Bot* tasks', `${allowed.join(', ')} (allowlisted by host.coexist_tasks: ${coexist.patterns.join(', ')})`);
+    add(unexpected.length ? 'WARN' : 'PASS', 'foreign *Bot* tasks', unexpected.length
+      ? `${unexpected.join(', ')} (another supervisor for the same bot? if they coexist by design, allowlist the name or a *-glob in host.coexist_tasks: botcorp.json or ${coexist.file})`
+      : 'none');
 
     // harness edited in place
     const rootIsGit = fs.existsSync(path.join(ROOT, '.git'));
     if (rootIsGit) {
-      const st = run('git', ['-C', ROOT, 'status', '--porcelain'], { timeoutMs: 30_000 });
+      const st = run(gitExe(), ['-C', ROOT, 'status', '--porcelain'], { timeoutMs: 30_000 });
       add(st.out.trim() ? 'WARN' : 'PASS', 'harness edited in place', st.out.trim() ? `${st.out.trim().split(/\r?\n/).length} modified path(s) in ${ROOT}` : 'clean');
     } else add('WARN', 'harness edited in place', `${ROOT} is not a git checkout (cannot tell)`);
 
@@ -1842,7 +1859,7 @@ async function cmdDoctor({ flags }) {
         add(j.enabledPlugins ? 'FAIL' : 'PASS', `${bot}: enabledPlugins`, j.enabledPlugins ? `${rel} has enabledPlugins (a plain \`claude\` there would steal the poller)` : `${rel} clean`, 'bots');
       }
       if (rootIsGit) {
-        const r = run('git', ['-C', ROOT, 'check-ignore', '-q', `bots/${bot}/.vault`], { timeoutMs: 15_000 });
+        const r = run(gitExe(), ['-C', ROOT, 'check-ignore', '-q', `bots/${bot}/.vault`], { timeoutMs: 15_000 });
         add(r.code === 0 ? 'PASS' : 'FAIL', `${bot}: BotCorp ignores bots/${bot}/.vault`, r.code === 0 ? 'yes' : 'NO', 'bots');
       }
       if (!cfg) continue;
@@ -1856,7 +1873,7 @@ async function cmdDoctor({ flags }) {
       // the backup module makes the folder a repo; then the vault and the config home must be ignored THERE
       if (cfg.backup.git_remote && fs.existsSync(path.join(botHome(bot), '.git'))) {
         for (const p of ['.vault', `.claude-${bot}`]) {
-          const r = run('git', ['-C', botHome(bot), 'check-ignore', '-q', p], { timeoutMs: 15_000 });
+          const r = run(gitExe(), ['-C', botHome(bot), 'check-ignore', '-q', p], { timeoutMs: 15_000 });
           add(r.code === 0 ? 'PASS' : 'FAIL', `${bot}: backup repo ignores ${p}`, r.code === 0 ? 'yes' : `NO - a push would send it to ${cfg.backup.git_remote}`, 'bots');
         }
       }
