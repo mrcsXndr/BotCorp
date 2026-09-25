@@ -48,7 +48,7 @@ never secrets:
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... session=... claude_pid=...` |
-| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status`, `started_by`, `poller`, `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version` |
+| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status`, `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
 | `state/<bot>/automations.json`, `runs.jsonl`, `events/`, `jobs/` | automations.ps1 | see docs/automations.md |
@@ -129,7 +129,26 @@ client holds it. Hence, before `claude --bg`, `launch.ps1 -Bg`:
   stopped` in `launches.log`);
 - a live daemon WITH live sessions (after a 10 s settle wait) -> left alone
   and a `WARN ... inherits the DAEMON's env` line; `botcorp stop <bot>` stops
-  every session of the bot, after which the next start is clean.
+  every session in the bot's config home (whatever its cwd: the roster is per
+  config home), after which the daemon exits and the next start is clean.
+
+**Which env a session actually got.** Claude Code strips
+`CLAUDE_CODE_OAUTH_TOKEN` from its hooks' environment (a `claude -p` run on a
+token got a 401 from the API while its SessionStart hook saw no such
+variable), so a session cannot report its OAuth token. It can report
+`BOT_LAUNCHER_PID` and the Telegram token: the `session-env` SessionStart hook
+writes their last 4 characters to `<config home>/botcorp/session-env.json`,
+keyed by session id. Every launch writes what it injected (OAuth last 4 and
+its source `vault` / `inherited` / `none`, Telegram last 4) to
+`<config home>/botcorp/launch-env.json`, keyed by its pid. The session's
+launcher pid names the env block it came from, so that launch's row is the
+OAuth token the session runs on. `launch.ps1 -Bg` logs `env: OK` (this
+launch's env), `STALE` (an earlier launch's: it started the daemon), `FOREIGN`
+(no `BOT_LAUNCHER_PID`: the daemon was started by some other `claude` client)
+or `UNKNOWN`; `botcorp status` prints an `env:` line and `botcorp doctor` a
+`<bot>: session env` check that FAILs when the OAuth token came from the
+environment or differs from the vault, when the Telegram token is missing or
+differs although the launch passed `--channels`, or when the env is FOREIGN.
 
 Not a way round it: the per-session dispatch record the daemon keeps
 (`<config home>/daemon/roster.json` `workers.<id>.dispatch.env`, mirrored in

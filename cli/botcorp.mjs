@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -702,6 +702,7 @@ function botStatus(bot) {
     if (parents) underClaude = isDescendant(parents, botPid, root);
   }
   const poller = pollerVerdict({ alive, telegram, recorded: (state && state.poller) ?? null, botPid, botPidAlive, underClaude });
+  const sessionEnv = sessionEnvOf(bot, state, alive, telegram);
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
   let statusAgeS = null, ctxUsedPct = null, rateLimits = null;
   if (status) {
@@ -721,12 +722,24 @@ function botStatus(bot) {
     state: state ? { status: alive ? state.status ?? null : 'stopped', started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
     telegram,
     poller_pid: botPidAlive ? botPid : null,
+    session_env: alive ? { env: sessionEnv.env, oauth_last4: sessionEnv.oauth, detail: sessionEnv.detail } : null,
     model: cfg ? cfg.model : null,
     harness_version: harnessVersion(),
     yaml_error: yamlError,
     status_json: status ? { age_s: statusAgeS, ctx_used_pct: ctxUsedPct, rate_limits: rateLimits, version: status.version ?? null } : null,
     approvals_pending: readApprovals(bot).length,
   };
+}
+
+// sessionEnvVerdict over the config home's session-env.json / launch-env.json
+// (both last 4 only). `extra` = { vault, machineOauth } when doctor has read them.
+function sessionEnvOf(bot, state, running, telegram, extra = {}) {
+  const dir = path.join(configDir(bot), 'botcorp');
+  const rec = pickSessionEnvRecord((readJson(path.join(dir, 'session-env.json')) || {}).sessions, state && state.session_id, state && state.started_at);
+  const launches = (readJson(path.join(dir, 'launch-env.json')) || {}).launches || {};
+  const launch = rec && rec.launcher_pid ? launches[String(rec.launcher_pid)] || null : null;
+  const expectTg = telegram && !['FOREIGN', 'NONE'].includes(state && state.poller);
+  return sessionEnvVerdict({ running, rec, launch, lastLauncherPid: (state && state.env_launcher_pid) ?? null, expectTg, ...extra });
 }
 
 function pct(v) { return v === null || v === undefined ? '?' : `${Math.round(Number(v))}%`; }
@@ -737,6 +750,7 @@ function printStatus(s) {
   if (s.pty) out(`  pty: pid=${s.pty.ptyPid} host=${s.pty.pid} ws=127.0.0.1:${s.pty.port} mode=${s.pty.mode} since=${s.pty.startedAt}`);
   if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
+  if (s.session_env) out(`  env: ${s.session_env.env}  ${s.session_env.detail}`);
   out(`  telegram: ${s.telegram ? 'on' : 'off'}  model: ${s.model ?? '?'}  harness: ${s.harness_version ? 'v' + s.harness_version : '?'}`);
   if (s.yaml_error) out(`  bot.yaml: INVALID - ${s.yaml_error}`);
   if (s.status_json) {
@@ -1952,6 +1966,13 @@ async function cmdDoctor({ flags }) {
         add(r.code === 0 ? 'PASS' : 'FAIL', `${bot}: BotCorp ignores bots/${bot}/.vault`, r.code === 0 ? 'yes' : 'NO', 'bots');
       }
       if (!cfg) continue;
+      const s = botStatus(bot);
+      // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
+      {
+        const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };
+        const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4 });
+        add(v.level, `${bot}: session env`, `${v.env ? `${v.env}: ` : ''}${v.detail}${v.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log: the "bg:" daemon line and the "env:" line)` : ''}`, 'bots');
+      }
       if (cfg.harness.tray) add(trayEntries.has(`BotCorp-Tray-${bot}`) ? 'PASS' : 'WARN', `${bot}: tray`, trayEntries.has(`BotCorp-Tray-${bot}`) ? 'HKCU Run entry registered' : `harness.tray is on but no HKCU Run entry (botcorp tray ${bot} on)`, 'bots');
       else add('INFO', `${bot}: tray`, 'off (harness.tray: false)', 'bots');
       if (cfg.harness.modules.telegram) {
@@ -1961,7 +1982,6 @@ async function cmdDoctor({ flags }) {
         const installed = telegramPluginInstalled(bot);
         add(installed ? 'PASS' : 'FAIL', `${bot}: telegram plugin installed`, installed ? `telegram@claude-plugins-official in .claude-${bot}/plugins` : `not in .claude-${bot}/plugins, so --channels starts nothing: botcorp sync ${bot}`, 'bots');
         // measured, like `status`: the plugin's bot.pid alive under this bot's claude
-        const s = botStatus(bot);
         const poller = s.state && s.state.poller;
         if (!s.running) add('INFO', `${bot}: telegram channel running`, 'bot not running', 'bots');
         else if (poller === 'OWNED') add('PASS', `${bot}: telegram channel running`, `bot.pid ${s.poller_pid} under claude ${s.state.claude_pid ?? (s.pty && s.pty.ptyPid)}`, 'bots');

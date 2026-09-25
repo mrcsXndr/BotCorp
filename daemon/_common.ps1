@@ -554,6 +554,67 @@ function Complete-TgTokenFile {
     return @{ Deleted = $deleted; Up = [bool]$p.Up; BotPid = $p.BotPid }
 }
 
+# --- which env did the session get? ----------------------------------------------
+# Claude Code strips CLAUDE_CODE_OAUTH_TOKEN from its hooks' env (probe
+# 2026-09-25: a `claude -p` run on a token got 401 from the API, its
+# SessionStart hook saw no such variable), so a session cannot report its OAuth
+# token. It can report BOT_LAUNCHER_PID and the Telegram token
+# (<config>/botcorp/session-env.json, hooks/session-env.sh). The launcher pid
+# names the env block the session came from, and every launch records what it
+# put in that block (last 4 only) in <config>/botcorp/launch-env.json, so
+# launch-env[session.launcher_pid] is the OAuth token the session runs on.
+function ConvertTo-UtcTime {
+    # A JSON "at": pwsh 7 has parsed ISO text into [datetime]/[DateTimeOffset], 5.1 leaves the string.
+    param($Value)
+    try {
+        if ($Value -is [DateTimeOffset]) { return $Value.UtcDateTime }
+        if ($Value -is [datetime]) { return $Value.ToUniversalTime() }
+        return ([DateTimeOffset]::Parse("$Value", [Globalization.CultureInfo]::InvariantCulture)).UtcDateTime
+    } catch { return [datetime]::MinValue }
+}
+
+function Add-LaunchEnvRecord {
+    # Records this launch's env (last 4 only; source vault | inherited | none),
+    # keyed by launcher pid, newest $Keep kept. Fail-open.
+    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [int]$Keep = 20)
+    try {
+        $path = Join-Path $ConfigDir 'botcorp\launch-env.json'
+        $all = @{}
+        $j = Read-JsonFile -Path $path
+        if ($j -and $j.launches) { foreach ($p in $j.launches.PSObject.Properties) { $all[$p.Name] = $p.Value } }
+        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }) }
+        $kept = [ordered]@{}
+        foreach ($k in @($all.Keys | Sort-Object { ConvertTo-UtcTime $all[$_].at } -Descending | Select-Object -First $Keep)) { $kept[$k] = $all[$k] }
+        return (Write-JsonFile -Path $path -Object @{ launches = $kept })
+    } catch { return $false }
+}
+
+function Get-SessionEnvRecord {
+    # Of the session-env.json rows written at or after $Since, the one of
+    # $SessionId, else the newest (a `--resume` that started a copy has a
+    # session id the launcher never saw). $null when there is none.
+    param([Parameter(Mandatory)][string]$ConfigDir, [string]$SessionId, [datetime]$Since = [datetime]::MinValue)
+    $j = Read-JsonFile -Path (Join-Path $ConfigDir 'botcorp\session-env.json')
+    if (-not $j -or -not $j.sessions) { return $null }
+    $after = @($j.sessions.PSObject.Properties | ForEach-Object { $_.Value } |
+        Where-Object { try { (ConvertTo-UtcTime $_.at) -ge $Since.ToUniversalTime() } catch { $false } } | Sort-Object { ConvertTo-UtcTime $_.at } -Descending)
+    if ($SessionId) { $hit = @($after | Where-Object { "$($_.session_id)" -eq $SessionId }); if ($hit.Count) { return $hit[0] } }
+    if ($after.Count) { return $after[0] }
+    return $null
+}
+
+function Get-SessionEnvCheck {
+    # Did the session get THIS launch's env? Verdict OK | STALE (an earlier
+    # launch's: the daemon was started by it) | FOREIGN (no BOT_LAUNCHER_PID:
+    # a daemon started outside BotCorp) | UNKNOWN (no record), plus a log line.
+    param($Record, [int]$LauncherPid)
+    if (-not $Record) { return @{ Verdict = 'UNKNOWN'; Text = 'no session-env record (the session-env hook did not run yet, or is disabled)' } }
+    $tg = $(if ($Record.telegram_last4) { "telegram ****$($Record.telegram_last4)" } else { 'no telegram token' })
+    if (-not $Record.launcher_pid) { return @{ Verdict = 'FOREIGN'; Text = "session $($Record.session_id) did not get a BotCorp launch's env (no BOT_LAUNCHER_PID: the config home's daemon was started by another claude client), $tg; its OAuth account is not this bot's vault token" } }
+    if ([int]$Record.launcher_pid -eq $LauncherPid) { return @{ Verdict = 'OK'; Text = "session $($Record.session_id) carries this launch's env, $tg" } }
+    return @{ Verdict = 'STALE'; Text = "session $($Record.session_id) carries the env of an earlier launch (pid $($Record.launcher_pid)), not this one's, ${tg}: the daemon was started by that launch" }
+}
+
 function Get-BotSessionKind {
     # bot.yaml harness.session: bg (default) | pty - HOW the bot's Claude Code
     # process runs (background session under the supervisor, or inside our
@@ -604,15 +665,16 @@ function Stop-BgSession {
         while ((Get-Date) -lt $until -and (Test-ProcAlive $cpid @('claude'))) { Start-Sleep -Milliseconds 500 }
         if (Test-ProcAlive $cpid @('claude')) { [void](Stop-BotProcessTree -ProcId $cpid -Bot $Bot -Why 'bg stop: claude pid still alive after claude stop') }
     }
-    # Every OTHER live session of this bot (cwd = bot home, in its own config
-    # home: a `--resume` that started a copy, an unrecorded earlier launch)
-    # goes too. Each keeps the config home's daemon alive, and the next
-    # launch's session would run with that daemon's old env (Get-BgDaemon).
+    # Every OTHER live session in this bot's config home goes too (a `--resume`
+    # that started a copy, an unrecorded earlier launch, a `claude --bg` run by
+    # hand from any folder): the roster is per config home, so all of it is
+    # this bot's. Each keeps the daemon alive, and the next launch's session
+    # would run with that daemon's old env (Get-BgDaemon).
     if ((Get-BgDaemon -ConfigDir $Paths.ConfigDir).Alive) {
         $agents = Get-BgAgents -Bot $Bot -Paths $Paths -TimeoutSec 20
         foreach ($a in @($agents)) {
             try {
-                if (-not $a -or ("$($a.id)" -eq $bgId) -or ("$($a.cwd)".TrimEnd('\') -ine $Paths.BotHome.TrimEnd('\')) -or -not (Test-BgAgentAlive $a)) { continue }
+                if (-not $a -or ("$($a.id)" -eq $bgId) -or -not (Test-BgAgentAlive $a)) { continue }
                 $r = Invoke-Bounded -Exe (Resolve-ClaudeExe) -Arguments @('stop', "$($a.id)") -TimeoutSec $TimeoutSec -Label 'claude stop' -Capture -Env @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir } -WorkingDirectory $Paths.BotHome -Bot $Bot
                 Write-DaemonLog "claude stop $($a.id) (unrecorded session of this bot, pid $($a.pid)): exit=$($r.ExitCode)" -Bot $Bot
             } catch {}

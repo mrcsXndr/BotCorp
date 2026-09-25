@@ -3,6 +3,29 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.7
+
+- **`status` / `doctor` show which env the running session got.** Claude Code
+  strips `CLAUDE_CODE_OAUTH_TOKEN` from its hooks, so a new `session-env`
+  SessionStart hook records the session's `BOT_LAUNCHER_PID` and Telegram
+  token (last 4) in `<config home>/botcorp/session-env.json`, and every launch
+  records what it injected (OAuth last 4 + source, Telegram last 4) in
+  `<config home>/botcorp/launch-env.json`; the launcher pid ties the two, so
+  the OAuth token a session runs on is known without it ever being read back.
+  `launch.ps1 -Bg` logs `env: OK | STALE | FOREIGN | UNKNOWN`, `status` prints
+  `env: OK  env of the latest launch: oauth ****xxxx (vault), telegram
+  ****yyyy`, and doctor's new `<bot>: session env` FAILs a session whose OAuth
+  came from the environment (a machine-wide token) or is not the vault's,
+  whose Telegram token is missing or wrong although it launched with
+  `--channels`, or whose env did not come from a BotCorp launch at all.
+- **`botcorp stop` stops every session in the bot's config home**, not only
+  those whose cwd is the bot folder: the roster is per config home, and any
+  live session there keeps the daemon (and its env) alive for the next start.
+
+Upgrade: check out `v0.1.7`, then per bot `botcorp stop <bot>` and `botcorp
+start <bot>` (the session-env hook runs from the next session on; until then
+doctor's `session env` is WARN `UNKNOWN`).
+
 ## v0.1.6
 
 - **Opt-in debug log for a launch.** `botcorp start <bot> --debug` /
