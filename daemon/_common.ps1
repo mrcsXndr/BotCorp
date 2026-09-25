@@ -303,11 +303,21 @@ function Get-ClaudeEnv {
     # $Secrets: hashtable key -> plaintext (only the keys the launcher decided
     # this bot needs), mapped to Claude Code's env names. The launcher masks
     # them when it prints and never puts them on a command line.
+    # Env names: the two Claude Code / plugin names, else the key upper-cased
+    # (hub_token -> HUB_TOKEN, the same rule automations.ps1 applies).
     param([string]$ConfigDir, [hashtable]$Secrets = @{})
     $e = @{ CLAUDE_CONFIG_DIR = $ConfigDir }
-    if ($Secrets.ContainsKey('oauth_token'))    { $e['CLAUDE_CODE_OAUTH_TOKEN'] = $Secrets['oauth_token'] }
-    if ($Secrets.ContainsKey('telegram_token')) { $e['TELEGRAM_BOT_TOKEN']      = $Secrets['telegram_token'] }
+    foreach ($k in $Secrets.Keys) { $e[(Get-SecretEnvName $k)] = $Secrets[$k] }
     return $e
+}
+
+function Get-SecretEnvName {
+    param([string]$Key)
+    switch ($Key) {
+        'oauth_token'    { return 'CLAUDE_CODE_OAUTH_TOKEN' }
+        'telegram_token' { return 'TELEGRAM_BOT_TOKEN' }
+        default          { return "$Key".ToUpperInvariant() }
+    }
 }
 
 function Get-ClaudeArgv {
@@ -661,9 +671,12 @@ function Get-BgPins {
 }
 
 function Set-BgPin {
-    # Pin $BgId (and unpin $Replace, the previous session BotCorp pinned for this
-    # bot, when it differs). -> 'pinned' | 'already' | 'failed: <why>'.
-    # An unreadable pins.json is not overwritten: the fleet view owns it too.
+    # Pin $BgId, and unpin $Replace: the previous session BotCorp itself pinned
+    # for this bot (state pinned_bg_id), never anything else in the file.
+    # -> 'pinned' (BotCorp added it) | 'already' (it was pinned before, maybe by
+    # the operator) | 'failed: <why>'. A pins.json that is not an array of short
+    # ids is left alone (the fleet view owns it too; a changed format is a FAIL,
+    # not a guess), and the write is read back before it counts.
     param([Parameter(Mandatory)][string]$ConfigDir, [Parameter(Mandatory)][string]$BgId, [string]$Replace = '')
     if ($BgId -notmatch '^[0-9a-f]{6,12}$') { return "failed: '$BgId' is not a short session id" }
     try {
@@ -673,19 +686,41 @@ function Set-BgPin {
             $raw = Get-Content -LiteralPath $f -Raw -ErrorAction Stop
             if ("$raw".Trim()) {
                 $j = ConvertFrom-Json -InputObject $raw -NoEnumerate -ErrorAction Stop
-                if ($null -ne $j -and $j -isnot [array]) { return 'failed: jobs/pins.json is not a JSON array (left alone)' }
-                $cur = @(@($j) | Where-Object { $_ -is [string] -and $_ })
+                if ($null -ne $j -and $j -isnot [array]) { return 'failed: jobs/pins.json is not a JSON array - Claude Code may have changed its format (left alone)' }
+                if (@(@($j) | Where-Object { $_ -isnot [string] }).Count) { return 'failed: jobs/pins.json holds something other than short ids - Claude Code may have changed its format (left alone)' }
+                $cur = @(@($j) | Where-Object { $_ })
             }
         }
+        $had = $cur -contains $BgId
         $next = @($cur | Where-Object { -not ($Replace -and $_ -eq $Replace -and $Replace -ne $BgId) })
-        if ($next -contains $BgId -and $next.Count -eq $cur.Count) { return 'already' }
-        if ($next -notcontains $BgId) { $next += $BgId }
+        if ($had -and $next.Count -eq $cur.Count) { return 'already' }
+        if (-not $had) { $next += $BgId }
         New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
         $tmp = "$f.botcorp.tmp"
         [System.IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject @($next) -Depth 2))
         Move-Item -LiteralPath $tmp -Destination $f -Force
-        return 'pinned'
+        if ((Get-BgPins -ConfigDir $ConfigDir) -notcontains $BgId) { return 'failed: jobs/pins.json did not hold the id when read back' }
+        return $(if ($had) { 'already' } else { 'pinned' })
     } catch { return "failed: $($_.Exception.Message)" }
+}
+
+function Get-BgConversationId {
+    # The session id to record after a bg launch: a resume keeps the id it
+    # resumed (the live roster row may report the worker's own id, which the
+    # next bare resume would not find); a fresh session takes the roster's.
+    param([string]$ResumeId, [string]$WorkerSid)
+    if ($ResumeId) { return $ResumeId }
+    return $WorkerSid
+}
+
+function Get-BgPinOwner {
+    # What state pinned_bg_id should say after Set-BgPin: the id when BotCorp
+    # pinned it (now, or earlier: $Prev is that id), else '' - a pin the
+    # operator made is theirs, and BotCorp never unpins it.
+    param([string]$Result, [string]$BgId, [string]$Prev = '')
+    if ($Result -eq 'pinned') { return $BgId }
+    if ($Result -eq 'already' -and $Prev -eq $BgId) { return $BgId }
+    return ''
 }
 
 # --- boot kick-off ------------------------------------------------------------------
@@ -767,14 +802,16 @@ function Get-BgBlock {
     # login, a dialog, a permission) - '' when it is not, or when that cannot
     # be read. From Claude Code's own job record <config>/jobs/<short>/state.json
     # (the fleet view's "Needs input"): tempo 'blocked' with a `needs` other than
-    # "send a prompt to start" (an idle session waiting for its next prompt).
+    # "send a prompt to start". That one is Claude Code's plain idle (its
+    # constant for a session waiting for its next prompt), so `blocked` alone is
+    # not a failure.
     param([Parameter(Mandatory)][string]$ConfigDir, [string]$BgId)
     if ($BgId -notmatch '^[0-9a-f]{6,12}$') { return '' }
     try {
         $j = Read-JsonFile -Path (Join-Path (Join-Path (Join-Path $ConfigDir 'jobs') $BgId) 'state.json')
         if (-not $j) { return '' }
         $needs = "$($j.needs)".Trim()
-        if ("$($j.tempo)" -eq 'blocked' -and $needs -and $needs -ne 'send a prompt to start') { return $needs }
+        if ("$($j.tempo)" -eq 'blocked' -and $needs -and $needs -notlike '*send a prompt to start*') { return $needs }
     } catch {}
     return ''
 }
@@ -827,14 +864,15 @@ function ConvertTo-UtcTime {
 
 function Add-LaunchEnvRecord {
     # Records this launch's env (last 4 only; source vault | inherited | none),
-    # keyed by launcher pid, newest $Keep kept. Fail-open.
-    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [int]$Keep = 20)
+    # keyed by launcher pid, newest $Keep kept. Fail-open. $SecretEnv = the
+    # env var NAMES of the vault keys it injected (bot.yaml secrets:), never values.
+    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [string[]]$SecretEnv = @(), [int]$Keep = 20)
     try {
         $path = Join-Path $ConfigDir 'botcorp\launch-env.json'
         $all = @{}
         $j = Read-JsonFile -Path $path
         if ($j -and $j.launches) { foreach ($p in $j.launches.PSObject.Properties) { $all[$p.Name] = $p.Value } }
-        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }) }
+        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }); secret_env = @($SecretEnv | Where-Object { $_ }) }
         $kept = [ordered]@{}
         foreach ($k in @($all.Keys | Sort-Object { ConvertTo-UtcTime $all[$_].at } -Descending | Select-Object -First $Keep)) { $kept[$k] = $all[$k] }
         return (Write-JsonFile -Path $path -Object @{ launches = $kept })

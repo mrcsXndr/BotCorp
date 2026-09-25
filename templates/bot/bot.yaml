@@ -24,6 +24,7 @@ harness:
   debug: false                    # every launch writes a Claude Code debug log to <config>/debug/ (plugin stderr included); one launch: botcorp start --debug
   bun_path: ''                    # bun.exe for the Telegram plugin if it is neither on PATH nor in %USERPROFILE%\.bun\bin
   boot_prompt: null               # once per host boot, a daemon cold-start seeds this prompt: null = a telegram bot sends one "back online" line; '' = off
+  resume_prompt: null             # every other unattended bg launch (daemon cold-start / restart): null = one short turn (re-arm watchers, carry on, reply "ok"); '' = off
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
   hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
@@ -74,7 +75,7 @@ automations: []                   # per-bot jobs run by the ONE daemon (docs/aut
 #  - name: nightly-report
 #    trigger: {cron: "0 7 * * *"}        # cron | interval_min: N | event: alerts_log|board_ready|tg_inbound|session_stop|harness_updated
 #    command: "python tools/report.py"   # cwd = this bot folder; env = the bot env (+ vault keys listed below, for this run only)
-#    secrets: []                         # vault keys injected as env vars, e.g. [hub_token]
+#    secrets: []                         # vault keys injected as env vars, e.g. [hub_token]; each must be in secrets: below
 #    timeout_min: 20
 #    backoff: {base_min: 10, max_min: 240}
 #    max_per_day: 12
@@ -82,7 +83,14 @@ automations: []                   # per-bot jobs run by the ONE daemon (docs/aut
 #    critical: false                     # true = keeps running while the account is usage-blocked
 #    enabled: true
 
+secrets: [oauth_token, telegram_token]   # the ONLY vault keys ever decrypted into this bot's session. The launcher
+                                  # injects them into the session env: oauth_token -> CLAUDE_CODE_OAUTH_TOKEN,
+                                  # telegram_token -> TELEGRAM_BOT_TOKEN (with modules.telegram), any other key ->
+                                  # its UPPERCASE name (hub_token -> HUB_TOKEN). Keys an automation lists
+                                  # under automations[].secrets must be declared here too. Vault entries not listed
+                                  # here are never injected. Values: `botcorp secrets set <name> <key>`.
+
 suggest:
-  weekly: false                   # weekly headless run proposing harness upgrades as suggest/<bot>/<topic> PRs
+  weekly: false                  # weekly headless run proposing harness upgrades as suggest/<bot>/<topic> PRs
   max_prs_per_week: 2
   digest_bot: null                # which bot sends the weekly digest link (one machine-wide)

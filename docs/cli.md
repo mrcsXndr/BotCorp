@@ -348,6 +348,10 @@ HOST rebooted (never on a routine relaunch or a `start`): `null` (default) =
 a telegram bot sends one "back online after reboot" line via
 `tools/tg/tg_send.py`, `''` = off, a string = that prompt (`{boot}` / `{now}`
 substituted). Once per boot per bot (docs/daemon.md, "Boot kick-off").
+`harness.resume_prompt` is the short turn every other unattended bg launch
+(daemon cold-start / restart) seeds instead: `null` = re-arm the watchers the
+rules describe, pick up an interrupted task, else reply "ok"; `''` = off
+(docs/daemon.md, "Resume seed").
 
 A bg bot's session resumes WITHOUT flags while the config home's roster holds
 it (running or stopped): its saved options apply, and any flag would make
@@ -396,7 +400,10 @@ from the bot's claude (bg) or pty root - the plugin writes that file only
 after its token check - otherwise `DEAD`; `FOREIGN` when the launch went
 without `--channels` because another live process held the owner-lock,
 `UNKNOWN` when the process tree could not be read. `--json` adds
-`poller_pid`. Then the telegram module, model, harness version
+`poller_pid`. A running bot also gets `secrets env:`: the env var NAMES
+(never values) of the vault keys in the session's env, read from the record
+of the launch whose env the session runs on (`launch-env.json`
+`secret_env`), plus any `secrets:` key missing from it. Then the telegram module, model, harness version
 (`harness/.claude-plugin/plugin.json`), the age of `<config
 home>/botcorp/status.json` with context used %, 5 h / 7 d rate-limit usage
 and the running CC version (written by the statusline on every render), and
@@ -512,7 +519,11 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   fine); `<bot>: oauth token` — the vault `oauth_token` must
   exist and must not be the machine-wide `CLAUDE_CODE_OAUTH_TOKEN` (compared
   on the last 4 characters only); FAIL means the bot would run on another
-  bot's account; `<bot>: google account` — with `integrations.google.account`
+  bot's account; `<bot>: secrets scope` - the keys `bot.yaml` `secrets:`
+  injects into the session, WARN for a declared key with no vault entry, and
+  the vault entries it leaves out (named, never injected); `<bot>: session
+  secrets env` - the same names-only list as `status`'s `secrets env:` line,
+  WARN when a declared key is not in the running session's env; `<bot>: google account` — with `integrations.google.account`
   set, Drive `about.user.emailAddress` for `bots/<bot>/token.json` must equal
   it; `bots/<bot>/.vault` ignored by the BotCorp checkout
   when it is a git repo (a bot folder is not a repo, so there is no per-bot

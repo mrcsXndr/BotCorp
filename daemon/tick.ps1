@@ -478,7 +478,7 @@ function Invoke-BotTick {
             $prevPin = ''; try { if ($st -and ($st.PSObject.Properties.Name -contains 'pinned_bg_id')) { $prevPin = "$($st.pinned_bg_id)" } } catch {}
             $pin = Set-BgPin -ConfigDir $P.ConfigDir -BgId $bgId -Replace $prevPin
             Write-DaemonLog "bg session $bgId was not pinned -> $pin (Claude Code's supervisor retires an unpinned idle background session after 60 min)" -Bot $Bot
-            if ($pin -in @('pinned', 'already')) { Write-BotState -Bot $Bot -Updates @{ pinned_bg_id = $bgId } }
+            if ($pin -in @('pinned', 'already')) { $own = Get-BgPinOwner -Result $pin -BgId $bgId -Prev $prevPin; Write-BotState -Bot $Bot -Updates @{ pinned_bg_id = $(if ($own) { $own } else { $null }) } }
         }
         $blocked = Get-BgBlock -ConfigDir $P.ConfigDir -BgId $bgId
         $wasBlocked = ''; try { if ($st -and ($st.PSObject.Properties.Name -contains 'session_blocked') -and $st.session_blocked) { $wasBlocked = "$($st.session_blocked)" } } catch {}

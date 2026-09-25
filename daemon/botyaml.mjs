@@ -39,6 +39,7 @@ export const DEFAULTS = {
     debug: false,                   // every launch gets --debug-file <config>/debug/<stamp>.txt (the plugin's stderr included); `botcorp start --debug` for one launch
     bun_path: '',                   // bun.exe for the Telegram plugin when it is neither on PATH nor in %USERPROFILE%\.bun\bin ('' = look there)
     boot_prompt: null,              // the ONE prompt a daemon cold-start after a host reboot seeds (once per boot): null = BOOT_PROMPT_DEFAULT for a telegram bot, nothing otherwise; '' = off; {boot} / {now} are filled in
+    resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     modules: {
@@ -59,6 +60,11 @@ export const DEFAULTS = {
     google: { account: null },                       // doctor: which account the bot's token.json should belong to
   },
   automations: [],
+  // The ONLY vault keys the launcher decrypts into the session env
+  // (oauth_token -> CLAUDE_CODE_OAUTH_TOKEN, telegram_token -> TELEGRAM_BOT_TOKEN,
+  // any other key -> its UPPERCASE name, e.g. hub_token -> HUB_TOKEN).
+  // automations[].secrets must be a subset.
+  secrets: ['oauth_token', 'telegram_token'],
   // Optional module, OFF while git_remote is null: `botcorp backup <bot>` commits
   // `paths` inside bots/<name>/ and pushes them (the folder is not a repo otherwise).
   backup: { git_remote: null, paths: ['memory'] },
@@ -105,6 +111,7 @@ export function validate(cfg) {
   if (typeof cfg.harness.debug !== 'boolean') errs.push(`harness.debug: true | false (got ${JSON.stringify(cfg.harness.debug)})`);
   if (typeof cfg.harness.bun_path !== 'string') errs.push(`harness.bun_path: a path to bun.exe, or '' (got ${JSON.stringify(cfg.harness.bun_path)})`);
   if (cfg.harness.boot_prompt !== null && typeof cfg.harness.boot_prompt !== 'string') errs.push(`harness.boot_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.boot_prompt)})`);
+  if (cfg.harness.resume_prompt !== null && typeof cfg.harness.resume_prompt !== 'string') errs.push(`harness.resume_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.resume_prompt)})`);
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
     const known = hookNames();
@@ -118,11 +125,18 @@ export function validate(cfg) {
   const remote = cfg.backup.git_remote;
   if (remote !== null && !(typeof remote === 'string' && /^(https:\/\/|ssh:\/\/|git@)/.test(remote))) errs.push('backup.git_remote: null or an https:// / ssh:// / git@ URL');
   if (!Array.isArray(cfg.backup.paths) || !cfg.backup.paths.length || !cfg.backup.paths.every((p) => typeof p === 'string' && p && !p.startsWith('/') && !p.includes('..'))) errs.push('backup.paths: non-empty list of relative paths');
+  const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
+  if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
   if (!Array.isArray(cfg.automations)) errs.push('automations: must be a list');
   for (const [i, a] of (Array.isArray(cfg.automations) ? cfg.automations : []).entries()) {
     if (!a || typeof a !== 'object') { errs.push(`automations[${i}]: must be a mapping`); continue; }
     if (!a.name || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(a.name)) errs.push(`automations[${i}].name: slug required`);
     if (!a.command) errs.push(`automations[${i}].command: required`);
+    if (a.secrets !== undefined) {
+      const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
+      const extra = (Array.isArray(a.secrets) ? a.secrets.map(String) : [String(a.secrets)]).filter((k) => !declared.has(k));
+      if (extra.length) errs.push(`automations[${i}].secrets: ${extra.join(', ')} not declared in the bot's secrets: list (only declared keys are ever decrypted for this bot)`);
+    }
     const t = a.trigger || {};
     if (!t.cron && !t.interval_min && !t.event) errs.push(`automations[${i}].trigger: cron | interval_min | event required`);
   }
@@ -144,6 +158,7 @@ export function enabledModules(cfg) {
 export const BOOT_PROMPT_DEFAULT = 'The host rebooted (at {boot}) and BotCorp restarted this session at {now}. '
   + 'Send your operator ONE short Telegram line with python tools/tg/tg_send.py: "back online after reboot, {now}", '
   + 'then "all checks OK" or what failed (python tools/tg/tg_send.py --check, and whatever memory/TDL.md says was in flight). '
+  + 'Re-read your rules and re-arm any background watchers they describe (a background task does not survive a restart). '
   + 'Then carry on with your normal duties; send nothing else about the reboot.';
 
 // The effective boot prompt: '' = none.
@@ -151,6 +166,23 @@ export function bootPrompt(cfg) {
   const p = cfg.harness.boot_prompt;
   if (typeof p === 'string') return p.trim();
   return cfg.harness.modules.telegram ? BOOT_PROMPT_DEFAULT : '';
+}
+
+// An unattended bg launch with no other seed would come up waiting for "a
+// prompt to start" and do nothing until one arrives, and any background
+// watcher the bot had armed died with the old session (it would stay deaf).
+// It gets this instead: one short turn, never a message. Pinning keeps these
+// launches rare (a restart after a crash or a dead poller), and nothing sends
+// it on a schedule.
+export const RESUME_PROMPT_DEFAULT = 'BotCorp restarted this background session at {now} ({reason}). '
+  + 'Re-read your rules and re-arm any background watchers they describe (a background task does not survive a restart). '
+  + 'If you were in the middle of a task, pick it back up. Otherwise reply with just "ok" and wait for the next message. '
+  + 'Do not message anyone about this restart.';
+
+// The effective resume prompt: '' = none.
+export function resumePrompt(cfg) {
+  const p = cfg.harness.resume_prompt;
+  return typeof p === 'string' ? p.trim() : RESUME_PROMPT_DEFAULT;
 }
 
 function getPath(obj, dotted) {
@@ -176,6 +208,7 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || proce
   }
   cfg._modules = enabledModules(cfg);
   cfg._boot_prompt = bootPrompt(cfg);
+  cfg._resume_prompt = resumePrompt(cfg);
   cfg._errors = errs;
   console.log(JSON.stringify(cfg));
 }

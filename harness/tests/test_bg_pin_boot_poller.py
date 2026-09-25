@@ -81,17 +81,44 @@ def test_set_bg_pin_adds_is_idempotent_replaces_only_its_own_and_keeps_the_rest(
     assert _ps(f"Set-BgPin -ConfigDir {q} -BgId 'cccc3333'").startswith("failed: jobs/pins.json is not a JSON array")
     assert json.loads(pins.read_text(encoding="utf-8")) == {"not": "an array"}
     assert _ps(f"Set-BgPin -ConfigDir {q} -BgId 'not-an-id!'").startswith("failed:")
+    pins.write_text('[{"short": "cccc3333"}]', encoding="utf-8")                # a changed format: never rewritten
+    assert "changed its format" in _ps(f"Set-BgPin -ConfigDir {q} -BgId 'cccc3333'")
+    assert json.loads(pins.read_text(encoding="utf-8")) == [{"short": "cccc3333"}]
     pins.write_text("[]", encoding="utf-8")
     assert _ps(f"Set-BgPin -ConfigDir {q} -BgId 'dddd4444'") == "pinned"
     assert json.loads(pins.read_text(encoding="utf-8")) == ["dddd4444"]
+    # the session is already pinned and BotCorp's previous one is dropped: still 'already'
+    pins.write_text(json.dumps(["aaaa1111", "bbbb2222"]), encoding="utf-8")
+    assert _ps(f"Set-BgPin -ConfigDir {q} -BgId 'bbbb2222' -Replace 'aaaa1111'") == "already"
+    assert json.loads(pins.read_text(encoding="utf-8")) == ["bbbb2222"]
+
+
+@needs_pwsh
+def test_a_resume_keeps_the_resumed_conversation_id():
+    # the reference host: roster row a81bcdda, a new live worker id on every wake, one transcript
+    assert _ps("Get-BgConversationId -ResumeId 'a81bcdda-0000' -WorkerSid 'fe30a774-0000'") == "a81bcdda-0000"
+    assert _ps("Get-BgConversationId -ResumeId '' -WorkerSid 'fe30a774-0000'") == "fe30a774-0000"   # fresh
+    assert _ps("'[' + (Get-BgConversationId -ResumeId '' -WorkerSid '') + ']'") == "[]"
+
+
+@needs_pwsh
+def test_botcorp_owns_only_the_pins_it_made():
+    # pinned_bg_id after Set-BgPin: BotCorp's own pin (now or earlier) only; an
+    # operator's pin is never recorded, so it is never the -Replace of a later launch
+    assert _ps("Get-BgPinOwner -Result 'pinned' -BgId 'aaaa1111'") == "aaaa1111"
+    assert _ps("Get-BgPinOwner -Result 'already' -BgId 'aaaa1111' -Prev 'aaaa1111'") == "aaaa1111"
+    assert _ps("'[' + (Get-BgPinOwner -Result 'already' -BgId 'aaaa1111' -Prev '') + ']'") == "[]"
+    assert _ps("'[' + (Get-BgPinOwner -Result 'failed: x' -BgId 'aaaa1111' -Prev 'aaaa1111') + ']'") == "[]"
 
 
 @needs_node
 def test_doctor_pin_and_block_verdicts():
     got = _node("[m.bgPinVerdict({running: true, bgId: 'aaaa1111', pins: ['aaaa1111']}), m.bgPinVerdict({running: true, bgId: 'aaaa1111', pins: []}),"
-                " m.bgPinVerdict({running: true, bgId: 'aaaa1111', pins: null}), m.bgPinVerdict({running: false}), m.bgPinVerdict({running: true})]")
-    assert [g["level"] for g in got] == ["PASS", "FAIL", "FAIL", "INFO", "WARN"]
+                " m.bgPinVerdict({running: true, bgId: 'aaaa1111', pins: null}), m.bgPinVerdict({running: false}), m.bgPinVerdict({running: true}),"
+                " m.bgPinVerdict({running: true, bgId: 'aaaa1111', pins: null, pinsError: 'is not a JSON array'})]")
+    assert [g["level"] for g in got] == ["PASS", "FAIL", "FAIL", "INFO", "WARN", "FAIL"]
     assert "retires it after 60 min idle" in got[1]["detail"]
+    assert "changed its pin format" in got[5]["detail"]
     blk = _node("[m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: 'send a prompt to start'}}),"
                 " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: 'login required - run /login'}}),"
                 " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'active', state: 'working'}}),"
@@ -150,6 +177,22 @@ def test_boot_prompt_default_off_and_custom(tmp_path):
     assert eff(tg + "  boot_prompt: ''\n")[0] == ""                   # off
     assert eff("name: b\nharness:\n  boot_prompt: 'check in at {now}'\n")[0] == "check in at {now}"
     assert eff("name: b\nharness:\n  boot_prompt: 5\n")[1]
+
+
+@needs_node
+def test_resume_prompt_default_is_one_trivial_turn_off_and_custom(tmp_path):
+    def eff(yaml_text: str):
+        f = tmp_path / "bot.yaml"
+        f.write_text(yaml_text, encoding="utf-8")
+        r = subprocess.run(["node", str(BOTYAML), str(f)], capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr
+        j = json.loads(r.stdout)
+        return j["_resume_prompt"], j["_errors"]
+    p, errs = eff("name: b\n")
+    assert not errs and '"ok"' in p and "{now}" in p and "{reason}" in p and "Do not message anyone" in p
+    assert eff("name: b\nharness:\n  resume_prompt: ''\n")[0] == ""
+    assert eff("name: b\nharness:\n  resume_prompt: 'go on'\n")[0] == "go on"
+    assert eff("name: b\nharness:\n  resume_prompt: [1]\n")[1]
 
 
 # --- B + C through the real scripts ---------------------------------------------------------
@@ -264,19 +307,22 @@ def test_a_real_tick_pins_a_live_unpinned_session_and_logs_blocked(repo_bot, fak
 @needs_node
 def test_a_daemon_cold_start_after_a_boot_passes_the_boot_prompt(repo_bot):
     name, home, rt, env = repo_bot
-    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  boot_prompt: 'BOOTCHECK {{now}}'\n  modules:\n    telegram: false\n", encoding="utf-8")
+    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  boot_prompt: 'BOOTCHECK {{now}}'\n  resume_prompt: 'RESUMECHECK {{reason}}'\n  modules:\n    telegram: false\n", encoding="utf-8")
     state = rt / "state" / f"{name}.json"
     launch = ["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "launch.ps1"), "-Bot", name, "-Bg", "-DryRun"]
     state.write_text(json.dumps({"bot": name, "status": "exited", "started_at": "2000-01-01T00:00:00.0000000+00:00"}), encoding="utf-8")
     cold = subprocess.run(launch + ["-StartedBy", "daemon-cold"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
     assert cold.returncode == 0, cold.stderr
     argv = next(ln for ln in cold.stdout.splitlines() if ln.strip().startswith("argv:"))
-    assert "BOOTCHECK 20" in argv and "{now}" not in argv
+    assert "BOOTCHECK 20" in argv and "{now}" not in argv and "RESUMECHECK" not in argv   # the boot seed is the one prompt
     assert "seeding the boot prompt" in cold.stdout
     manual = subprocess.run(launch + ["-StartedBy", "cli"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
     assert manual.returncode == 0, manual.stderr
-    assert "BOOTCHECK" not in manual.stdout
-    # launched since this boot: a routine relaunch seeds nothing
+    assert "BOOTCHECK" not in manual.stdout and "RESUMECHECK" not in manual.stdout   # someone is there to prompt it
+    # launched since this boot: a routine unattended relaunch gets the trivial resume seed, not the boot one
     state.write_text(json.dumps({"bot": name, "status": "exited", "started_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}), encoding="utf-8")
-    again = subprocess.run(launch + ["-StartedBy", "daemon-cold"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
-    assert again.returncode == 0 and "BOOTCHECK" not in again.stdout
+    for who, why in (("daemon-cold", "the daemon found it not running"), ("daemon-restart", "the daemon restarted it")):
+        again = subprocess.run(launch + ["-StartedBy", who], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+        assert again.returncode == 0, again.stderr
+        argv = next(ln for ln in again.stdout.splitlines() if ln.strip().startswith("argv:"))
+        assert "BOOTCHECK" not in argv and f"RESUMECHECK {why}" in argv, who

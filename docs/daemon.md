@@ -47,7 +47,7 @@ never secrets:
 | Path | Written by | Meaning |
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
-| `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... session=... claude_pid=...` |
+| `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
 | `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status`, `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
@@ -132,6 +132,23 @@ client holds it. Hence, before `claude --bg`, `launch.ps1 -Bg`:
   every session in the bot's config home (whatever its cwd: the roster is per
   config home), after which the daemon exits and the next start is clean.
 
+**Session secrets.** `bot.yaml` `secrets:` (default `[oauth_token,
+telegram_token]`) names the ONLY vault keys a launch decrypts, in process,
+into the session env: `oauth_token` -> `CLAUDE_CODE_OAUTH_TOKEN`,
+`telegram_token` -> `TELEGRAM_BOT_TOKEN` (with the telegram module), any
+other key -> its UPPERCASE name (`hcloud_token` -> `HCLOUD_TOKEN`,
+`Get-SecretEnvName`). `launches.log` gets one masked line per declared key
+(`<key>: vault ok (****last4)` or `declared in secrets: but no vault entry`),
+`undeclared vault key(s) NOT injected: <names>` for entries the list leaves
+out (never a value), and the bg `env: OK ...; N vault key(s) in the session
+env: <NAMES>` line. Leaving `oauth_token` / `telegram_token` out means no
+OAuth token / no `--channels`. `automations[].secrets` must be a subset. A
+new key reaches a running bot only through a launch that starts the config
+home's Claude Code daemon fresh (below): `botcorp stop <bot>; botcorp start
+<bot>`, then check the `env: OK` line. Doctor: `<bot>: secrets scope` and
+`<bot>: session secrets env` (the names the running session's env holds,
+also `botcorp status`'s `secrets env:` line; never a value).
+
 **Which env a session actually got.** Claude Code strips
 `CLAUDE_CODE_OAUTH_TOKEN` from its hooks' environment (a `claude -p` run on a
 token got a 401 from the API while its SessionStart hook saw no such
@@ -170,12 +187,16 @@ with no live claude process running the session is `bg: FAIL` and exit 3
 (`Get-BgLaunchResult`); doctor's `<bot>: session alive` FAILs a bot whose
 state says running, or whose last launch failed, with no claude process.
 
-A resume can come back under a NEW session id (the roster reports the id
-only after the launch). The launch then logs `bg: resumed as <new> (fork of
-<old>): <new> is the conversation of record now` and records `<new>` as
-`session_id`, so the next resume targets it; the same id logs `resumed <id>
-(same session id)`, no roster id logs `unconfirmed`. It never claims "same
-conversation" before it has measured it.
+A bare resume keeps the conversation: the transcript, the SessionStart hook's
+session id and the roster row all stay on the resumed id. While the woken
+worker runs, its live roster row can report a DIFFERENT `sessionId` (the
+reference host saw a new one on every wake: `d1329bd4`, `fe30a774`, ...);
+that is the worker's id, not a new conversation, and recording it would make
+the next resume miss the roster row and start a copy. So the launch logs
+`bg: id=<short> conversation=<resumed id> worker_session=<live id>
+claude_pid=<n>` and `bg: resumed conversation <id>; the live roster row
+reports worker session <x> ...`, and `session_id` stays the resumed id. Only
+a fresh session takes its id from the roster.
 
 **Idle retirement and the pin.** Claude Code's bg supervisor (2.1.282)
 retires a SETTLED worker (idle, or blocked waiting on input) once its job has
@@ -189,8 +210,17 @@ supervisor re-reads every sweep (the file `claude agents` writes with ctrl+t;
 there is no CLI flag). `launch.ps1 -Bg` pins the new session and unpins the
 one it replaced (`bg: pin <id> -> pinned`), and every tick re-pins a live
 session missing from the file (`bg session <id> was not pinned -> pinned`),
-which heals a running bot without a restart. A pins.json that is not a JSON
-array is left alone and reported. Doctor: `<bot>: bg session pinned`.
+which heals a running bot without a restart. The write is atomic, keeps every
+other entry, and is read back before it counts; BotCorp only ever unpins an
+id it pinned itself (`state/<bot>.json` `pinned_bg_id`), never one the
+operator pinned. pins.json is Claude Code's internal format: a file that is
+not a JSON array of short ids is left alone, and the launch / tick line and
+doctor's `<bot>: bg session pinned` FAIL saying the format may have changed.
+Two limits of the pin (CC 2.1.282): under persistent low memory the
+supervisor retires pinned settled workers as a last resort, and a pinned idle
+worker whose CLI version is stale is respawned; the tick cold-starts / keeps
+the bot either way. A background task inside the session (a watcher script)
+does not exempt it; only the pin does.
 
 **Blocked sessions.** A job whose `tempo` is `blocked` on anything but "send a
 prompt to start" (a login, a permission, a question) waits for a human that
@@ -212,13 +242,23 @@ daemon-cold`) finds that the host booted (`Win32_OperatingSystem`
 with `harness.boot_prompt` (`{boot}` and `{now}` are substituted; appended to
 a usage-resume seed when both apply). `null` (default) = a bot with the
 telegram module sends ONE short `tools/tg/tg_send.py` line ("back online after
-reboot, <time>", then "all checks OK" or what failed) and carries on; `''` =
+reboot, <time>", then "all checks OK" or what failed), re-arms the background
+watchers its rules describe and carries on; `''` =
 off; any other string is the prompt. It fires at most once per boot per bot:
 `state/<bot>.json` records `boot_kick_boot` (the boot time) and
 `boot_kick_at`; `boot_kick_pending` carries a kick whose launch failed to the
 next attempt within the same boot. Routine relaunches (restart, heal, usage
 resume, `botcorp start`) never kick. Log: `boot: host booted <t> ... seeding
 the boot prompt`.
+
+**Resume seed.** Every other unattended bg launch (`daemon-cold`,
+`daemon-restart`) with no other seed gets `harness.resume_prompt`: by default
+one short turn that re-reads the bot's rules and re-arms the background
+watchers they describe (a background task dies with the session it ran in, so
+a bot that was waiting on one would stay deaf), picks up an interrupted task,
+else replies "ok" and waits; it never messages anyone. `''` = off. Without a
+seed a resumed session sits at "idle - send a prompt to start". Pinning keeps
+these launches rare; nothing sends it on a schedule. Log: `resume seed: ...`.
 
 **bun.** The Telegram plugin's `.mcp.json` starts its server with a bare
 `bun`. bun's installer puts it in `%USERPROFILE%\.bun\bin`, which a daemon /

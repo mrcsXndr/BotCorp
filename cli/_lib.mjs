@@ -191,12 +191,37 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
 // unpinned idle background session 60 min after its last activity (the
 // reference host's "dies every ~63 min"); the pin set is <config>/jobs/pins.json
 // (daemon/_common.ps1 Set-BgPin), which the launcher and every tick maintain.
-export function bgPinVerdict({ running, bgId = '', pins = null }) {
+// `pinsError` = the file exists but is not a JSON array of short ids: BotCorp's
+// pin is written into Claude Code's internal format, so a changed format FAILs
+// loudly instead of reading as "not pinned yet".
+export function bgPinVerdict({ running, bgId = '', pins = null, pinsError = '' }) {
   if (!running) return { level: 'INFO', detail: 'not running' };
   if (!bgId) return { level: 'WARN', detail: 'no bg_id recorded, so the pin cannot be checked' };
+  if (pinsError) return { level: 'FAIL', detail: `.claude-<bot>/jobs/pins.json ${pinsError} - Claude Code may have changed its pin format, so BotCorp cannot pin session ${bgId} and it will be retired after 60 min idle. BotCorp leaves the file alone; report it upstream` };
   if (pins === null) return { level: 'FAIL', detail: `session ${bgId} is not pinned (no readable jobs/pins.json): Claude Code retires it after 60 min idle. The daemon tick pins it within one tick; or botcorp start <bot>` };
   if (pins.includes(bgId)) return { level: 'PASS', detail: `session ${bgId} in .claude-<bot>/jobs/pins.json (not retired for idleness)` };
   return { level: 'FAIL', detail: `session ${bgId} is not pinned: Claude Code retires it after 60 min idle. The daemon tick pins it within one tick; or botcorp start <bot>` };
+}
+
+// `status` secrets line / doctor `<bot>: session secrets env`: the env var
+// NAMES (never values) of the vault keys in the running session's env, from the
+// launch it came from (launch-env.json `secret_env`). `declaredEnv` = the names
+// bot.yaml secrets: maps to; one missing from the session is a WARN (a stale
+// daemon env, or the key has no vault entry).
+// daemon/_common.ps1 Get-SecretEnvName, the same rule.
+export function secretEnvName(key) {
+  return key === 'oauth_token' ? 'CLAUDE_CODE_OAUTH_TOKEN' : key === 'telegram_token' ? 'TELEGRAM_BOT_TOKEN' : String(key).toUpperCase();
+}
+
+export function sessionSecretEnvVerdict({ running, launch, declaredEnv = [] }) {
+  if (!running) return { level: 'INFO', detail: 'not running' };
+  if (!launch) return { level: 'INFO', detail: 'unknown: no launch record for this session (started before v0.1.13, or outside BotCorp)' };
+  if (!Array.isArray(launch.secret_env)) return { level: 'INFO', detail: `unknown: launch ${launch.launcher_pid} predates the record` };
+  const names = launch.secret_env.map(String);
+  const shape = `${names.length}${names.length ? `: ${names.join(', ')}` : ''} (from launch ${launch.launcher_pid}, the env this session runs on)`;
+  const missing = declaredEnv.filter((n) => !names.includes(n));
+  if (missing.length) return { level: 'WARN', detail: `${shape}; declared in secrets: but not in the session env: ${missing.join(', ')} (no vault entry, or the session predates the key: botcorp stop <bot>; botcorp start <bot>)` };
+  return { level: 'PASS', detail: shape };
 }
 
 // doctor `<bot>: session not blocked`: Claude Code's own job record
@@ -207,7 +232,7 @@ export function bgBlockVerdict({ running, bgId = '', job = null }) {
   if (!running) return { level: 'INFO', detail: 'not running' };
   if (!job) return { level: 'INFO', detail: `no job record for ${bgId || 'the session'} (cannot tell)` };
   const needs = String(job.needs || '').trim();
-  if (job.tempo === 'blocked' && needs && needs !== 'send a prompt to start') return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+  if (job.tempo === 'blocked' && needs && !needs.includes('send a prompt to start')) return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
   return { level: 'PASS', detail: `session ${bgId} ${job.tempo === 'blocked' ? 'idle, waiting for its next prompt' : `is ${job.tempo || job.state || 'running'}`}` };
 }
 

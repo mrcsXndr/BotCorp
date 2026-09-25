@@ -59,7 +59,10 @@ streak and the interval/cron schedule resumes from the end of that run.
   `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, and every key listed in
   `secrets:` decrypted in-process from the bot's DPAPI vault and injected as
   `<KEY>` (env names are case-insensitive on Windows; `hub_token` ->
-  `HUB_TOKEN`). Secrets never touch a command line or a log.
+  `HUB_TOKEN`). Secrets never touch a command line or a log. Every key an
+  automation lists must also be in the bot's top-level `secrets:` list
+  (`bot.yaml` validation rejects it otherwise); that list is also what the
+  launcher injects into the SESSION env (docs/daemon.md, "Session secrets").
 - `timeout_min > 0.5` -> the run is spawned DETACHED with its own waiter
   (`automations.ps1 -Bot <bot> -ExecJob <job file>`, internal) so the daemon
   mutex is never held across it; shorter runs execute inline. On overrun the
