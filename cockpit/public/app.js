@@ -330,7 +330,13 @@ function openTerminal(name) {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.t === 'o') { state.term.write(msg.d); scanForAuthUrl(msg.d); }
     else if (msg.t === 'hello') { el('exitbar').classList.remove('show'); }
-    else if (msg.t === 'stopped') { state.term.writeln('\x1b[90mstopped. Start launches it through the daemon.\x1b[0m'); }
+    else if (msg.t === 'stopped') {
+      // no pty-host; a live bg session has none by design
+      const b = current();
+      state.term.writeln(b && b.running
+        ? `\x1b[90mbackground session, no terminal attached here (on the host: claude attach ${String(b.bgId || '<bg id>').replace(/[^\w<> -]/g, '')}). The chat view follows it.\x1b[0m`
+        : '\x1b[90mstopped. Start launches it through the daemon.\x1b[0m');
+    }
     else if (msg.t === 'exit') { showExit(msg.code); refresh(); }
     else if (msg.t === 'detached') { state.term.writeln('\r\n\x1b[90mdetached\x1b[0m'); }
     else if (msg.t === 'chat') { onChatPush(msg); }
