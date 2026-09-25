@@ -28,6 +28,16 @@ let settings = { copyOnSelect: false };
 try { settings = { ...settings, ...JSON.parse(localStorage.getItem('cockpit.settings') || '{}') }; } catch {}
 function saveSettings() { try { localStorage.setItem('cockpit.settings', JSON.stringify(settings)); } catch {} }
 
+// Theme (theme.js applied it before first paint): auto -> light -> dark.
+const THEMES = ['auto', 'light', 'dark'];
+function renderThemeBtn() { el('themeBtn').textContent = 'theme: ' + (window.CockpitTheme ? window.CockpitTheme.get() : 'auto'); }
+el('themeBtn').onclick = () => {
+  if (!window.CockpitTheme) return;
+  window.CockpitTheme.set(THEMES[(THEMES.indexOf(window.CockpitTheme.get()) + 1) % THEMES.length]);
+  renderThemeBtn();
+};
+renderThemeBtn();
+
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
@@ -47,8 +57,12 @@ function toast(msg, isErr) {
 /* ---- bot list (single 5 s poll; everything per-bot arrives over the socket) ---- */
 let lastSnapshot = '';
 async function refresh() {
-  try { state.bots = await api('GET', '/api/bots'); } catch (e) { return; }
-  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram]), state.selected]);
+  try { state.bots = await api('GET', '/api/bots'); } catch (e) {
+    // keep a list that already rendered; only the first load shows the failure
+    if (!lastSnapshot) el('list').innerHTML = `<p class="errbox">Could not load the bots: ${esc(e.message)}. Retrying.</p>`;
+    return;
+  }
+  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
     const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
@@ -61,19 +75,51 @@ function renderList() {
   const list = el('list');
   list.innerHTML = '';
   if (!state.bots.length) {
-    list.innerHTML = '<div class="none">No bots yet. Create one: <code>botcorp new</code></div>';
+    list.innerHTML = '<div class="none">No bots yet. Create one with <code>botcorp new</code>.</div>';
     return;
   }
   for (const b of state.bots) {
     const btn = document.createElement('button');
-    btn.className = 'bot' + (b.running ? ' on' : '') + (state.selected === b.name ? ' active' : '');
-    btn.innerHTML = `<span class="n">${esc(b.name)}</span><span class="s">${b.running ? 'running · pid ' + esc(b.pid) : 'stopped'}</span>`;
+    const s = botState(b);
+    btn.className = 'bot ' + s.cls + (state.selected === b.name ? ' active' : '');
+    btn.innerHTML = `<span class="n">${esc(b.name)}</span><span class="s">${esc(s.short)}</span>`;
     btn.onclick = () => select(b.name);
     list.appendChild(btn);
   }
 }
 
 function current() { return state.bots.find((b) => b.name === state.selected); }
+
+// running = a pty-host OR a live claude --bg session (the server measures it the
+// way `botcorp doctor` does); blocked = that session waits on a person.
+function botState(b) {
+  if (b.running && b.blocked) return { cls: 'on blocked', short: 'waiting on you', long: 'waiting on you' };
+  if (b.running) {
+    const how = b.kind === 'bg' ? `background session${b.bgId ? ' ' + b.bgId : ''}` : `pid ${b.pid}${b.mode ? ' · ' + b.mode : ''}`;
+    return { cls: 'on', short: b.kind === 'bg' ? 'running · background' : `running · pid ${b.pid}`, long: `running · ${how}` };
+  }
+  return { cls: b.down ? 'down' : '', short: 'stopped', long: 'stopped' };
+}
+
+// doctor `telegram channel running`: OWNED = a poller runs under this bot's claude.
+const POLLER_WHY = {
+  OWNED: 'the Telegram poller runs under this bot\'s session',
+  DEAD: 'no live Telegram poller under this bot\'s session',
+  FOREIGN: 'another process holds this bot\'s Telegram token',
+  NONE: 'the session started without its Telegram channel',
+  ORPHAN: 'a Telegram poller is left over with no session',
+  UNKNOWN: 'cannot tell (the process list was unavailable)',
+  none: 'the session is not running',
+};
+function renderTelegram(b) {
+  const chip = el('hTg');
+  if (!b.poller) { chip.style.display = 'none'; return; }
+  const up = b.poller.up;
+  chip.style.display = '';
+  chip.className = 'chip ' + (up ? 'ok' : b.running ? 'bad' : '');
+  chip.textContent = up ? 'Telegram on' : b.poller.state === 'UNKNOWN' ? 'Telegram ?' : 'Telegram off';
+  chip.title = POLLER_WHY[b.poller.state] || String(b.poller.state || '');
+}
 
 function renderHeader() {
   const b = current();
@@ -82,12 +128,17 @@ function renderHeader() {
   el('tabs').style.display = 'flex';
   el('empty').style.display = 'none';
   el('hName').textContent = b.displayName && b.displayName !== b.name ? `${b.displayName} (${b.name})` : b.name;
-  const bg = b.service === 'bg' && b.bgId;
+  const s = botState(b);
   const st = el('hState');
-  st.textContent = b.running ? (bg ? `background session ${b.bgId} (attach)` : `running · pid ${b.pid}${b.mode ? ' · ' + b.mode : ''}`) : 'stopped';
-  st.className = 'st' + (b.running ? ' on' : '');
+  st.textContent = s.long;
+  st.className = 'st ' + s.cls;
+  st.title = b.down || '';
+  renderTelegram(b);
+  el('waitbar').classList.toggle('show', !!(b.running && b.blocked));
+  el('waitbarText').textContent = b.running && b.blocked ? `Waiting on you: ${b.blocked.needs}` : '';
+  el('waitbarText').title = b.running && b.blocked ? b.blocked.detail : '';
+  // Never Start a live session: a second one means two Telegram pollers.
   el('startBtn').disabled = b.running;
-  el('startBtn').textContent = bg ? 'Attach' : 'Start';
   el('stopBtn').disabled = !b.running;
   el('restartBtn').disabled = !b.running;
   el('tabPairing').style.display = b.telegram ? '' : 'none';
@@ -133,11 +184,15 @@ async function renderDrawer(which) {
         ['telegram', b.telegram ? 'enabled' : 'off'], ['remote control', b.remoteControl ? 'enabled' : 'off'],
         ['modules', Object.entries(b.modules || {}).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'],
         ['daemon state', b.state ? JSON.stringify(b.state) : 'none written yet'],
-        ['pty host', b.running ? `pid ${b.hostPid}, since ${new Date(b.startedAt).toLocaleString()}` : 'not running'],
+        ['session', b.running ? `${b.kind === 'bg' ? 'background' : 'pty'}, pid ${b.pid}${b.startedAt ? `, since ${new Date(b.startedAt).toLocaleString()}` : ''}` : (b.down || 'not running')],
       ];
-      if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError]);
-      box.innerHTML = `<div class="kv">${rows.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('')}</div>`;
+      if (b.running && b.kind === 'pty') rows.push(['pty host', `pid ${b.hostPid}`]);
+      if (b.poller) rows.push(['telegram poller', `${b.poller.state}: ${POLLER_WHY[b.poller.state] || ''}`]);
+      if (b.blocked) rows.push(['blocked', b.blocked.detail]);
+      if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError, 'bad']);
+      box.innerHTML = `<div class="kv">${rows.map(([k, v, cls]) => `<span class="k">${esc(k)}</span><span class="v${cls ? ' ' + cls : ''}">${esc(v)}</span>`).join('')}</div>`;
     } else if (which === 'pairing') {
+      box.innerHTML = '<p class="loading">Loading pairing</p>';
       const p = await api('GET', `/api/bots/${b.name}/pairing`);
       if (!p.present) { box.innerHTML = `<p class="hint">${esc(p.reason)}</p>`; return; }
       const age = (s) => s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
@@ -148,26 +203,26 @@ async function renderDrawer(which) {
         const expired = q.expiresInS != null && q.expiresInS <= 0;
         html += `<div class="row"><span class="m">${esc(q.senderId)}</span><span class="dim grow">code ${esc(q.code)} · ${age(q.ageS)}${expired ? ' · expired' : ''}</span><button class="btn" data-pair="${esc(q.senderId)}">Approve</button><button class="btn quiet" data-deny="${esc(q.senderId)}">Deny</button></div>`;
       }
-      html += '<div class="field"><input id="pairId" placeholder="or a Telegram user id (@userinfobot tells you yours)" inputmode="numeric" style="flex:1" /><button class="btn" id="pairManual">Approve id</button></div><div class="err" id="pairErr"></div>';
+      html += '<div class="field"><input id="pairId" class="grow" placeholder="or a Telegram user id (@userinfobot tells you yours)" inputmode="numeric" /><button class="btn" id="pairManual">Approve id</button></div><div class="err" id="pairErr"></div>';
       box.innerHTML = html;
       box.querySelectorAll('[data-pair]').forEach((btn) => { btn.onclick = () => approve(b.name, btn.dataset.pair); });
       box.querySelectorAll('[data-deny]').forEach((btn) => { btn.onclick = () => deny(b.name, btn.dataset.deny); });
       el('pairManual').onclick = () => approve(b.name, el('pairId').value.trim());
     } else if (which === 'vault') {
-      box.innerHTML = '<p class="hint">loading</p>';
+      box.innerHTML = '<p class="loading">Loading the vault</p>';
       const list = await api('GET', `/api/bots/${b.name}/secrets`);
       let lock = null;
       try { lock = await api('GET', `/api/bots/${b.name}/secrets/lock`); } catch {}
       let html = '<p class="hint">Values are encrypted at rest and never shown. Set a key to replace its value.</p>';
       if (lock) {
-        html += `<div class="row"><span class="grow" style="font-weight:600">Vault lock</span><span class="dim">${esc(lock.mode)} v${esc(lock.version)}</span><span class="m" style="color:${lock.locked ? 'var(--bad)' : 'var(--ok)'}">${lock.locked ? 'LOCKED' : 'unlocked'}</span></div>`;
+        html += `<div class="row"><span class="grow h">Vault lock</span><span class="dim num">${esc(lock.mode)} v${esc(lock.version)}</span><span class="out ${lock.locked ? 'bad' : 'ok'}">${lock.locked ? 'LOCKED' : 'unlocked'}</span></div>`;
         html += `<p class="hint">${esc(lock.detail)}</p>`;
-        if (lock.locked) html += '<div class="field"><input id="unlockPass" type="password" placeholder="operator passphrase" style="flex:1" autocomplete="off" /><button class="btn" id="unlockBtn">Unlock until reboot</button></div><div class="err" id="unlockErr"></div>';
+        if (lock.locked) html += '<div class="field"><input id="unlockPass" class="grow" type="password" placeholder="operator passphrase" autocomplete="off" /><button class="btn" id="unlockBtn">Unlock until reboot</button></div><div class="err" id="unlockErr"></div>';
       }
-      html += list.length ? list.map((s) => `<div class="row"><span class="m grow">${esc(s.key)}</span><span class="dim">${esc(s.masked)}</span></div>`).join('') : '<p class="hint">No secrets yet.</p>';
-      html += '<div class="field"><input id="secKey" placeholder="key (oauth_token, telegram_token, ...)" /><input id="secVal" type="password" placeholder="value" style="flex:1" autocomplete="off" /><button class="btn" id="secSave">Set</button></div><div class="err" id="secErr"></div>';
-      html += '<div class="row" style="margin-top:10px"><span class="grow" style="font-weight:600">Secret access</span><button class="btn quiet" id="auditRefresh">Refresh</button></div>';
-      html += '<div id="auditRows"><p class="hint">loading</p></div>';
+      html += list.length ? list.map((s) => `<div class="row"><span class="m grow">${esc(s.key)}</span><span class="dim num">${esc(s.masked)}</span></div>`).join('') : '<p class="hint">No secrets yet.</p>';
+      html += '<div class="field"><input id="secKey" class="key" placeholder="key, e.g. oauth_token" /><input id="secVal" class="grow" type="password" placeholder="value" autocomplete="off" /><button class="btn" id="secSave">Set</button></div><div class="err" id="secErr"></div>';
+      html += '<div class="row sec"><span class="grow h">Secret access</span><button class="btn quiet" id="auditRefresh">Refresh</button></div>';
+      html += '<div id="auditRows"><p class="loading">Loading access records</p></div>';
       box.innerHTML = html;
       el('secSave').onclick = async () => {
         el('secErr').textContent = '';
@@ -191,20 +246,21 @@ async function renderDrawer(which) {
       };
       loadAudit(b.name);
     } else if (which === 'runs') {
+      box.innerHTML = '<p class="loading">Loading runs</p>';
       const r = await api('GET', `/api/bots/${b.name}/automations`);
       let html = '';
       if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.kind === 'prompt' ? ', prompt' : ''}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
       if (!r.present) html += '<p class="hint">No runs recorded yet (the daemon writes them).</p>';
       for (const run of r.runs.slice().reverse()) {
-        // A prompt automation's record carries `result`: sent | failed: ... | skipped: <reason>.
-        const res = typeof run.result === 'string' ? run.result : null;
+        // a prompt automation records `result` (sent / skipped: why / failed: why); a command, its exit code
+        const res = typeof run.result === 'string' ? run.result : '';
         const outcome = res ? res.split(':')[0] : `exit ${run.exit}`;
-        const color = res ? (res === 'sent' ? 'var(--ok)' : res.startsWith('skipped') ? 'var(--warn)' : 'var(--bad)') : (run.exit === 0 ? 'var(--ok)' : 'var(--bad)');
-        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow">${esc(run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="m" style="color:${color}">${esc(outcome)}</span></div>${run.summary ? `<div class="dim" style="padding:0 0 6px">${esc(run.summary)}</div>` : ''}`;
+        const cls = res ? (res === 'sent' ? 'ok' : res.startsWith('skipped') ? 'warn' : 'bad') : run.exit === 0 ? 'ok' : 'bad';
+        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow num" title="${esc(run.start || run.ts || '')}">${esc(fmtWhen(run.start || run.ts) || run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="out ${cls}">${esc(outcome)}</span></div>${run.summary ? `<div class="run-sum">${esc(run.summary)}</div>` : ''}`;
       }
       box.innerHTML = html || '<p class="hint">Nothing here.</p>';
     }
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 
 async function loadAudit(bot) {
@@ -213,8 +269,8 @@ async function loadAudit(bot) {
   try {
     const rows = await api('GET', `/api/bots/${bot}/secrets/audit?limit=100`);
     if (!rows.length) { box.innerHTML = '<p class="hint">No secret access recorded yet.</p>'; return; }
-    box.innerHTML = rows.map((r) => `<div class="row"><span class="m">${esc(r.ts || '')}</span><span class="m grow">${esc(r.key || '')}</span><span class="dim">${esc(r.reason || '')}</span><span class="dim">pid ${esc(r.pid ?? '?')}</span><span class="m" style="color:${r.ok === false ? 'var(--bad)' : 'var(--ok)'}">${r.ok === false ? 'FAILED' : 'ok'}</span></div>`).join('');
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+    box.innerHTML = rows.map((r) => `<div class="row"><span class="dim num" title="${esc(r.ts || '')}">${esc(fmtWhen(r.ts) || r.ts || '')}</span><span class="m grow">${esc(r.key || '')}</span><span class="dim">${esc(r.reason || '')}</span><span class="dim num">pid ${esc(r.pid ?? '?')}</span><span class="out ${r.ok === false ? 'bad' : 'ok'}">${r.ok === false ? 'FAILED' : 'ok'}</span></div>`).join('');
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 
 async function approve(bot, senderId) {
@@ -240,9 +296,11 @@ async function deny(bot, senderId) {
 /* ---- terminal ---- */
 function ensureTerm() {
   if (state.term) return;
+  // The terminal's colours are the --term-* tokens (tokens.css), the same in both themes.
+  const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const term = new window.Terminal({
-    fontFamily: '"Cascadia Code", Consolas, ui-monospace, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000,
-    theme: { background: '#0d100e', foreground: '#d8ded3', cursor: '#9fbb94', selectionBackground: '#2f4a3a' },
+    fontFamily: tok('--font-mono'), fontSize: 13, cursorBlink: true, scrollback: 5000,
+    theme: { background: tok('--term-bg'), foreground: tok('--term-fg'), cursor: tok('--term-cursor'), selectionBackground: tok('--term-selection') },
   });
   const fit = new FitAddonCtor();
   term.loadAddon(fit);
@@ -315,10 +373,17 @@ function openTerminal(name) {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.t === 'o') { state.term.write(msg.d); scanForAuthUrl(msg.d); }
     else if (msg.t === 'hello') { el('exitbar').classList.remove('show'); }
-    else if (msg.t === 'stopped') { state.term.writeln('\x1b[90mstopped. Start launches it through the daemon.\x1b[0m'); }
+    else if (msg.t === 'stopped') {
+      // no pty-host; a live bg session has none by design
+      const b = current();
+      state.term.writeln(b && b.running
+        ? `\x1b[90mbackground session, no terminal attached here (on the host: claude attach ${String(b.bgId || '<bg id>').replace(/[^\w<> -]/g, '')}). The chat view follows it.\x1b[0m`
+        : '\x1b[90mstopped. Start launches it through the daemon.\x1b[0m');
+    }
     else if (msg.t === 'exit') { showExit(msg.code); refresh(); }
     else if (msg.t === 'detached') { state.term.writeln('\r\n\x1b[90mdetached\x1b[0m'); }
     else if (msg.t === 'chat') { onChatPush(msg); }
+    else if (msg.t === 'status') { state.status = msg; renderStats(); }
     else if (msg.t === 'err') { state.term.writeln(`\r\n\x1b[31m${msg.m}\x1b[0m`); }
   };
   ws.onclose = () => {
@@ -391,14 +456,57 @@ el('vtChat').onclick = () => setView('chat');
 el('vtTerm').onclick = () => setView('term');
 
 function resetChat() {
-  state.pendingUser = null; state.chatFile = null;
-  el('msgs').innerHTML = '<div class="cempty">loading</div>';
+  state.pendingUser = null; state.chatFile = null; state.status = null;
+  el('msgs').innerHTML = '<div class="cempty">Loading the conversation</div>';
+  renderStats();
+}
+
+function fmtWhen(ts) {
+  const d = new Date(ts);
+  if (!ts || isNaN(d)) return '';
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${t}`;
 }
 
 function bubble(turn) {
   const d = document.createElement('div');
   d.className = 'bubble ' + (turn.role === 'user' ? 'user' : 'assistant');
-  d.textContent = turn.text;   // transcript text is untrusted: never innerHTML
+  // Channel messages (Telegram, ...): "Telegram · user · 16:34", then one
+  // labelled line per attachment ("Voice note 0:12", "File report.pdf"). The
+  // server sends labels, never a path or a file id.
+  if (turn.meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts)].filter(Boolean).join(' · ');
+    d.appendChild(m);
+    for (const it of turn.meta.media || []) {
+      const item = typeof it === 'string' ? { label: it } : it;
+      const line = document.createElement('div');
+      line.className = 'att';
+      const k = document.createElement('span');
+      k.className = 'att-k';
+      k.textContent = String(item.label || 'Attachment');
+      line.appendChild(k);
+      if (item.detail) {
+        const dd = document.createElement('span');
+        dd.className = 'att-d';
+        dd.textContent = String(item.detail);
+        line.appendChild(dd);
+      }
+      d.appendChild(line);
+      if (item.kind === 'voice') d.classList.add('voice');
+    }
+  }
+  if (turn.text) {
+    const body = document.createElement('div');
+    body.className = 'md';
+    // Transcript text is untrusted. md.js escapes every input character and emits
+    // only its own fixed tag set, so its output is the one thing that may go
+    // through innerHTML here; without it, plain text.
+    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(turn.text);
+    else body.textContent = turn.text;
+    d.appendChild(body);
+  }
   if (turn.tools?.length) {
     const t = document.createElement('span');
     t.className = 'tools';
@@ -408,10 +516,80 @@ function bubble(turn) {
   return d;
 }
 
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+}
+
+// A background agent/command reporting back (<task-notification>, parsed on the
+// server): a system event in the assistant lane, not a user turn. Every field
+// is untrusted: textContent, except the result, which goes through md.js.
+const TASK_STATES = ['completed', 'failed', 'running', 'killed', 'stopped'];
+function taskCard(turn) {
+  const t = turn.task || {};
+  const d = document.createElement('div');
+  d.className = 'bubble assistant task';
+  const head = document.createElement('div');
+  head.className = 'task-head';
+  const st = document.createElement('span');
+  st.className = 'task-st ' + (TASK_STATES.includes(t.status) ? t.status : 'other');
+  st.textContent = String(t.status || 'unknown');
+  const title = document.createElement('span');
+  title.className = 'task-title';
+  title.textContent = String(t.summary || 'Background task');
+  head.append(st, title);
+  d.appendChild(head);
+  const bits = [fmtWhen(turn.ts)];
+  if (Number.isFinite(t.durationMs)) bits.push(fmtDuration(t.durationMs));
+  if (Number.isFinite(t.tokens)) bits.push(`${fmtTok(t.tokens)} tokens`);
+  if (Number.isFinite(t.toolUses)) bits.push(`${t.toolUses} tool uses`);
+  const meta = document.createElement('div');
+  meta.className = 'task-meta';
+  meta.textContent = bits.filter(Boolean).join(' · ');
+  d.appendChild(meta);
+  if (t.result) {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = 'Result';
+    const body = document.createElement('div');
+    body.className = 'md';
+    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(String(t.result));
+    else body.textContent = String(t.result);
+    det.append(sum, body);
+    d.appendChild(det);
+  }
+  return d;
+}
+
+// A voice-note transcript (the bot ran the transcriber; the server passes its
+// output on as a `transcript` turn) goes under the voice note it belongs to:
+// the oldest one still without a transcript that came after the last one that
+// has one. With no such note it stands alone in the operator lane.
+function addTranscript(box, turn) {
+  const notes = [...box.querySelectorAll('.bubble.voice')];
+  let lastDone = -1;
+  notes.forEach((n, i) => { if (n.querySelector('.att-t')) lastDone = i; });
+  let host = notes.slice(lastDone + 1).find((n) => !n.querySelector('.att-t'));
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'bubble user';
+    box.appendChild(host);
+  }
+  const t = document.createElement('div');
+  t.className = 'att-t';
+  const label = document.createElement('span');
+  label.className = 'att-tl';
+  label.textContent = 'Transcript';
+  const body = document.createElement('div');
+  body.textContent = String(turn.text || '');
+  t.append(label, body);
+  host.appendChild(t);
+}
+
 function onChatPush(msg) {
   const box = el('msgs');
-  if (msg.available === false) { box.innerHTML = `<div class="cempty">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
-  if (msg.rotated) { box.innerHTML = '<div class="cempty">new session, reloading</div>'; state.pendingUser = null; return; }
+  if (msg.available === false) { box.innerHTML = `<div class="cempty err">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
+  if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.pendingUser = null; return; }
   if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; return; }
   if (msg.initial) box.innerHTML = '';
   const ph = box.querySelector('.cempty');
@@ -419,7 +597,8 @@ function onChatPush(msg) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   for (const turn of msg.turns) {
     if (turn.role === 'user' && state.pendingUser && turn.text.trim() === state.pendingUser) { state.pendingUser = null; continue; }
-    box.appendChild(bubble(turn));
+    if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
+    box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
   if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
 }
@@ -442,6 +621,49 @@ function sendChat() {
 el('chatSend').onclick = sendChat;
 el('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
 el('chatInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(160, this.scrollHeight) + 'px'; });
+
+/* ---- status chips: pushed by the server (cockpit/chatstatus.mjs) over the same
+   socket when they change; ages and reset countdowns are computed here. A value
+   the server could not read arrives as {na: why} and shows as n/a. ---- */
+const fmtTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+function fmtIn(s) {
+  if (s <= 0) return 'now';
+  if (s < 60) return '<1m';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+const fmtAgo = (s) => (s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`);
+const level = (p) => (p >= 90 ? ' bad' : p >= 75 ? ' warn' : '');
+const tip = (...lines) => lines.filter(Boolean).join('\n');
+const statHtml = (k, v, r, title, cls = '') => `<button class="stat" title="${esc(title)}"><span class="k">${esc(k)}</span><span class="v${cls}">${esc(v)}</span>${r ? `<span class="r">${esc(r)}</span>` : ''}</button>`;
+
+function renderStats() {
+  const box = el('stats');
+  const s = state.status;
+  if (!s) { box.innerHTML = ''; return; }
+  if (s.error) { box.innerHTML = statHtml('status', 'n/a', '', s.error); return; }
+  const now = Date.now() / 1000;
+  const age = s.ts ? now - s.ts : null;
+  const read = age === null ? '' : `status.json written ${fmtAgo(age)}`;
+  const out = [];
+  const c = s.context;
+  out.push(c.na ? statHtml('context', 'n/a', '', c.na)
+    : statHtml('context', `${c.pct}%`, `${fmtTok(c.used)} / ${fmtTok(c.window)}`, tip(`${c.used.toLocaleString()} of ${c.window.toLocaleString()} tokens`, `window: ${c.source}`, read), level(c.pct)));
+  for (const [k, name, w] of [['5h', '5-hour', s.fiveHour], ['7d', '7-day', s.sevenDay]]) {
+    out.push(w.na ? statHtml(k, 'n/a', '', w.na)
+      : statHtml(k, `${Math.round(w.pct)}%`, w.resetsAt ? `↻ ${fmtIn(w.resetsAt - now)}` : '', tip(`${w.pct}% of the ${name} limit used`, w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : 'reset time not reported', read), level(w.pct)));
+  }
+  const a = s.account;
+  out.push(a.na ? statHtml('account', 'n/a', '', a.na) : statHtml('account', a.email || `token ****${a.tokenLast4}`, '', a.source));
+  const m = s.model, e = s.effort;
+  out.push(statHtml('model', m.na ? 'n/a' : m.name, e.na ? '' : e.level,
+    tip(m.na ? `model: ${m.na}` : `model ${m.id || m.name}, from ${m.source}`, e.na ? `effort: ${e.na}` : `effort ${e.level}, from ${e.source}`)));
+  box.innerHTML = out.join('');
+  box.classList.toggle('stale', age !== null && age > 900);
+}
+// Tooltips do not exist on a phone: a tap shows the same text as a toast.
+el('stats').onclick = (e) => { const b = e.target.closest('.stat'); if (b) toast(b.title); };
+setInterval(renderStats, 30000);
 
 /* ---- lifecycle (through the server, through the CLI) ---- */
 async function lifecycle(action, fresh = false) {
@@ -475,7 +697,7 @@ document.addEventListener('click', (e) => { const m = el('more'); if (m.open && 
 
 /* ---- releases (machine-wide, not per-bot) ---- */
 function relCard(r) {
-  const statusCls = r.status === 'applied' ? 'applied' : r.status === 'failed' ? 'failed' : '';
+  const statusCls = ['applied', 'failed', 'pending'].includes(r.status) ? r.status : '';
   const actions = r.status === 'pending' ? `<div class="actions"><button class="btn primary" data-apply="${esc(r.tag)}">Apply</button><button class="btn" data-skip="${esc(r.tag)}">Skip</button></div>` : '';
   return `<div class="rel">
     <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(r.status)}</span></div>
@@ -489,13 +711,13 @@ function relCard(r) {
 }
 async function loadUpdates() {
   const box = el('updatesList');
-  box.innerHTML = '<p class="hint">loading</p>';
+  box.innerHTML = '<p class="loading">Loading releases</p>';
   try {
     const { releases } = await api('GET', '/api/updates');
     box.innerHTML = releases.length ? releases.map(relCard).join('') : '<p class="hint">No releases recorded yet.</p>';
     box.querySelectorAll('[data-apply]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.apply, 'apply'); });
     box.querySelectorAll('[data-skip]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.skip, 'skip'); });
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 async function updateAction(tag, action) {
   try {
@@ -511,7 +733,7 @@ el('updatesBg').onclick = (e) => { if (e.target === el('updatesBg')) el('updates
 /* ---- new chat modal ---- */
 async function loadChatAccounts() {
   const sel = el('chatAccount');
-  sel.innerHTML = '<option>loading...</option>';
+  sel.innerHTML = '<option>Loading accounts</option>';
   try {
     const { accounts, error } = await api('GET', '/api/accounts');
     if (!accounts.length) {
@@ -572,21 +794,21 @@ el('historyBtn').onclick = async () => {
   if (!state.selected) return;
   el('histTitle').textContent = `Sessions: ${state.selected}`;
   const box = el('histList');
-  box.innerHTML = '<p class="hint">loading</p>';
+  box.innerHTML = '<p class="loading">Loading sessions</p>';
   el('historyBg').classList.add('show');
   try {
     const sessions = await api('GET', `/api/bots/${state.selected}/sessions`);
     box.innerHTML = sessions.length ? '' : '<p class="hint">No sessions yet.</p>';
     for (const s of sessions) {
       const d = new Date(s.mtime);
-      box.insertAdjacentHTML('beforeend', `<div class="hrow"><div class="top"><span>${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>${s.own ? '<span class="own">bot home</span>' : ''}<span class="sz">${(s.size / 1024).toFixed(0)} KB</span></div><div class="prev">${esc(s.preview) || '(no preview)'}</div>${s.own ? '' : `<div class="proj">${esc(s.project)}</div>`}</div>`);
+      box.insertAdjacentHTML('beforeend', `<div class="hrow"><div class="top"><span class="num">${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>${s.own ? '<span class="own">bot home</span>' : ''}<span class="sz">${(s.size / 1024).toFixed(0)} KB</span></div><div class="prev">${esc(s.preview) || '(no preview)'}</div>${s.own ? '' : `<div class="proj">${esc(s.project)}</div>`}</div>`);
     }
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 };
 el('histClose').onclick = () => el('historyBg').classList.remove('show');
 el('historyBg').onclick = (e) => { if (e.target === el('historyBg')) el('historyBg').classList.remove('show'); };
 
 /* ---- boot ---- */
-api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via Access' : 'loopback only'].filter(Boolean).join(' · '); }).catch(() => {});
+api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via\xa0Access' : 'loopback\xa0only'].filter(Boolean).join('\xa0· '); }).catch(() => {});
 refresh();
 setInterval(refresh, 5000);

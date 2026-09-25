@@ -19,7 +19,8 @@ Locked behaviour:
   bot.pid = DEAD, no claude pid = UNKNOWN, FOREIGN / NONE kept;
 - the tick's own code path (-ProbeOnly) logs that verdict, not UNKNOWN;
 - a real tick pins a live unpinned session (keeping other pins) and logs,
-  once, the BLOCKED line for a job waiting on a login;
+  once, the BLOCKED line for a job waiting on a login; it runs over a temp
+  bots dir (BOTCORP_BOTS_DIR), so the checkout's own bots are never ticked;
 - Get-BgBlock / bgBlockVerdict: waiting for the next prompt is not blocked,
   a login or a dialog is;
 - a daemon cold-start after a boot passes the boot prompt to claude (launch
@@ -30,6 +31,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -198,19 +200,18 @@ def test_resume_prompt_default_is_one_trivial_turn_off_and_custom(tmp_path):
 # --- B + C through the real scripts ---------------------------------------------------------
 @pytest.fixture
 def repo_bot(tmp_path):
-    """A throwaway bot in the checkout's bots/ (the tick and the launcher only
-    look there) with an isolated runtime home; removed afterwards."""
+    """A throwaway bot in a temp bots dir (BOTCORP_BOTS_DIR: the tick and the
+    launcher see only it, never the checkout's own bots) with an isolated
+    runtime home."""
     name = f"zz-t{secrets.token_hex(3)}"
-    home = ASSEMBLY / "bots" / name
+    home = tmp_path / "bots" / name
     home.mkdir(parents=True)
     rt = tmp_path / "rt"
     (rt / "state").mkdir(parents=True)
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
     env["BOTCORP_HOME"] = str(rt)
-    try:
-        yield name, home, rt, env
-    finally:
-        shutil.rmtree(home, ignore_errors=True)
+    env["BOTCORP_BOTS_DIR"] = str(tmp_path / "bots")
+    yield name, home, rt, env
 
 
 @pytest.fixture
@@ -297,6 +298,7 @@ def test_a_real_tick_pins_a_live_unpinned_session_and_logs_blocked(repo_bot, fak
     assert r.returncode == 0, r.stderr
     log = (rt / "daemon.log").read_text(encoding="utf-8")
     assert "ACTION=OTEL-START" not in log and "ACTION=START" not in log, log[-2000:]
+    assert set(re.findall(r"\[([a-z0-9-]+)\]", log)) == {name}, log[-2000:]   # the checkout's own bots never ticked
     assert json.loads((jobs / "pins.json").read_text(encoding="utf-8")) == ["0ther1", "abc123"]
     assert "bg session abc123 was not pinned -> pinned" in log
     assert "BLOCKED: session abc123 waits on 'login required - run /login'" in log

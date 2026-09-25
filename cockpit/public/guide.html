@@ -4,28 +4,37 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
   <title>BotCorp cockpit guide</title>
+  <script src="/theme.js"></script>
+  <link rel="stylesheet" href="/tokens.css" />
   <style>
-    :root { --bg: #111614; --panel: #161c19; --edge: rgba(215,226,210,.09); --ink: #d8ded3; --ink-2: #a2ad9f; --mute: #66716a; --ok: #9fbb94; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.7 system-ui, -apple-system, "Segoe UI", sans-serif; }
-    .wrap { max-width: 640px; margin: 0 auto; padding: 44px 20px 80px; }
-    h1 { font-size: 22px; margin: 22px 0 4px; }
-    h2 { font-size: 15px; margin: 34px 0 8px; }
-    p { margin: 0 0 12px; color: var(--ink-2); }
-    code { font: 13px "Cascadia Code", Consolas, ui-monospace, monospace; background: var(--panel); border: 1px solid var(--edge); border-radius: 5px; padding: 1px 6px; color: var(--ink); }
-    ol { padding-left: 22px; color: var(--ink-2); } li { margin-bottom: 6px; }
-    a { color: var(--ink-2); }
-    .ok { color: var(--ok); }
+    body { margin: 0; background: var(--bg); color: var(--text); font: var(--fs-body)/1.7 var(--font-sans); -webkit-font-smoothing: antialiased; }
+    ::selection { background: var(--selection); }
+    .wrap { max-width: 640px; margin: 0 auto; padding: 40px var(--sp-4) 80px; }
+    .back { font-size: var(--fs-ui); }
+    h1 { font-size: 22px; font-weight: 650; letter-spacing: -.01em; margin: var(--sp-6) 0 var(--sp-1); }
+    h2 { font-size: var(--fs-lg); font-weight: 600; margin: var(--sp-8) 0 var(--sp-2); }
+    p { margin: 0 0 var(--sp-3); color: var(--text-2); }
+    b { color: var(--text); font-weight: 600; }
+    code { font: 13px var(--font-mono); background: var(--field); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 1px 5px; color: var(--text); }
+    ol { padding-left: 22px; color: var(--text-2); margin: 0 0 var(--sp-3); }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent); text-underline-offset: 2px; }
+    a:hover { color: var(--accent-hover); }
+    a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
+    .ok { color: var(--ok); font-weight: 600; }
+    .bad { color: var(--bad); font-weight: 600; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <a href="/">back to the cockpit</a>
+    <a class="back" href="/">Back to the cockpit</a>
     <h1>How the cockpit works</h1>
     <p>One page for every bot on this machine: its live terminal, a chat view of the same session, and the operator actions the daemon exposes.</p>
 
     <h2>What you see</h2>
-    <p>The left column lists every bot (every <code>bots/&lt;name&gt;/bot.yaml</code>). A <span class="ok">green stub</span> means its session is up. Pick one to attach: <b>Chat</b> shows the conversation as bubbles, <b>Terminal</b> shows the raw Claude Code screen.</p>
+    <p>The left column lists every bot (every <code>bots/&lt;name&gt;/bot.yaml</code>). The small stub on the left of a row shows its state: <span class="ok">green</span> means the session is up, amber means it waits on you, <span class="bad">red</span> means it is down. Pick one to attach: <b>Chat</b> shows the conversation as bubbles, <b>Terminal</b> shows the raw Claude Code screen.</p>
+    <p>Voice notes, photos and files sent over Telegram show as a labelled line in your bubble. A voice note gets its transcript underneath once the bot has transcribed it.</p>
 
     <h2>Start, stop, restart</h2>
     <p>These ask the daemon (through <code>botcorp start|stop|restart</code>). The cockpit never starts a session itself, so closing this page or updating the cockpit never kills a bot. <b>Restart fresh</b> (under <i>more</i>) starts a new session instead of continuing the last one.</p>
@@ -46,8 +55,11 @@
     <h2>Remote Control</h2>
     <p>Optional. <b>Enable Remote Control</b> runs <code>/login</code> in the terminal and surfaces the link; <b>Start Remote Control</b> runs <code>/remote-control</code> and surfaces the claude.ai link for your phone. Those sessions are stored by Anthropic.</p>
 
+    <h2>Light or dark</h2>
+    <p>The cockpit follows your system setting. The theme button at the bottom of the bot column cycles auto, light and dark, and this browser remembers the pick.</p>
+
     <h2>Something looks stuck</h2>
-    <p>Press <b>Restart</b>. The session continues where it was. If the session exited, the red bar says so and offers a restart.</p>
+    <p>Press <b>Restart</b>. The session continues where it was. If the session exited, a red notice above the chat says so and offers a restart.</p>
   </div>
 </body>
 </html>

@@ -16,11 +16,14 @@
 # Test seam: BOTCORP_FAKE_NOW=<ISO timestamp> overrides "now" for SCHEDULING
 # decisions only (Get-DaemonNow). Log stamps, process ages and file mtimes
 # stay real, so the seam cannot make a live process look dead.
+# Test seam: BOTCORP_BOTS_DIR=<dir> replaces <checkout>/bots for the daemon and
+# the launcher only (the CLI and the cockpit always read <checkout>/bots), so a
+# test's real tick sees its own bots and never the checkout's.
 
 Set-StrictMode -Off
 
 $script:BotCorp   = Split-Path $PSScriptRoot -Parent
-$script:BotsDir   = Join-Path $script:BotCorp 'bots'
+$script:BotsDir   = if ($env:BOTCORP_BOTS_DIR) { $env:BOTCORP_BOTS_DIR } else { Join-Path $script:BotCorp 'bots' }
 $script:Harness   = Join-Path $script:BotCorp 'harness'
 $script:RtHome    = if ($env:BOTCORP_HOME) { $env:BOTCORP_HOME } else { Join-Path $env:USERPROFILE '.botcorp' }
 $script:StateDir  = Join-Path $script:RtHome 'state'
@@ -1117,7 +1120,17 @@ function Get-BotConfig {
         if (-not $node) { Write-DaemonLog 'node.exe not found - cannot read bot.yaml' -Bot $Bot; return $null }
         $yaml = Join-Path (Join-Path $script:BotsDir $Bot) 'bot.yaml'
         $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $PSScriptRoot 'botyaml.mjs'), $yaml) -TimeoutSec 30 -Label 'botyaml' -Capture -Bot $Bot -WorkingDirectory $script:BotCorp
-        if ($r.ExitCode -ne 0) { Write-DaemonLog "bot.yaml unreadable: $(($r.Output -split "`n" | Select-Object -First 1))" -Bot $Bot; return $null }
+        if ($r.ExitCode -ne 0) {
+            # A missing package is not a bad bot.yaml: node's first line is then a
+            # node:internal frame, so name the cause and the fix instead.
+            $why = ($r.Output -split "`n" | Select-Object -First 1)
+            $mnf = [regex]::Match("$($r.Output)", "Cannot find (?:package|module) '([^']+)'")
+            if ($mnf.Success -or "$($r.Output)" -match 'MODULE_NOT_FOUND') {
+                $pkg = if ($mnf.Success) { " '$($mnf.Groups[1].Value)'" } else { '' }
+                $why = "MODULE_NOT_FOUND$pkg - node_modules in $script:BotCorp is missing or incomplete (botcorp doctor: node_modules). Fix: npm ci in $script:BotCorp"
+            }
+            Write-DaemonLog "bot.yaml unreadable: $why" -Bot $Bot; return $null
+        }
         $cfg = $r.Output | ConvertFrom-Json
         if ($cfg._errors -and @($cfg._errors).Count -gt 0) { Write-DaemonLog "bot.yaml invalid: $(@($cfg._errors) -join '; ')" -Bot $Bot; return $null }
         return $cfg

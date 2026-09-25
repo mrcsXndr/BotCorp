@@ -1,0 +1,94 @@
+/* ==== BotCorp design tokens: "Quiet Sage" (cockpit/public/DESIGN.md) ==========
+   Every colour, size, radius, shadow and duration the cockpit pages use comes
+   from here; component rules never carry a raw colour. Light is the default;
+   dark by the OS setting or the viewer's pick (theme.js sets html[data-theme]).
+   The terminal stays dark in both (--term-*). */
+:root {
+  color-scheme: light;
+  /* colour roles */
+  --bg: #F7F8F6;              /* the page */
+  --side: #EEF1EC;            /* the bot column */
+  --surface: #FFFFFF;         /* cards, assistant bubbles, menus, modals, buttons */
+  --field: #FBFCFB;           /* inputs, code */
+  --task: #F7F8F6;            /* task cards: on the page tone */
+  --hover: rgba(28, 35, 32, .05);
+  --line: #DDE3DC;            /* hairline edges */
+  --line-strong: #C9D1C8;     /* inputs, buttons, chips */
+  --text: #1C2320;
+  --text-2: #56625B;
+  --text-3: #7F8A83;
+  --accent: #2E6A54;          /* the one accent: a deep, quiet green */
+  --accent-hover: #255845;
+  --accent-ink: #FFFFFF;      /* text on the accent */
+  --accent-soft: #E4EEE8;     /* the operator's own bubbles */
+  --accent-soft-line: #C8DBD0;
+  --ok: #2A7A4B;
+  --warn: #9A5B00;
+  --warn-soft: #FFF7E8;
+  --warn-line: #EBCB93;
+  --bad: #B3261E;
+  --bad-soft: #FCEEEC;
+  --bad-line: #EBB8B3;
+  --bad-ink: #FFFFFF;         /* text on --bad */
+  --selection: #CFE2D7;
+  --scrim: rgba(28, 35, 32, .38);
+  /* the terminal: the TUI's own dark surface in both themes */
+  --term-bg: #0E110F;
+  --term-fg: #D8DED9;
+  --term-cursor: #8FC4AB;
+  --term-selection: #2C4338;
+  /* type: the system face; mono only for numbers and code */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+  --fs-xs: 11.5px;            /* meta, captions */
+  --fs-sm: 12.5px;            /* secondary UI, tables */
+  --fs-ui: 13.5px;            /* controls, lists */
+  --fs-body: 14.5px;          /* chat text */
+  --fs-lg: 16px;              /* modal titles */
+  --fs-xl: 18px;              /* the bot name */
+  --lh-body: 1.6;
+  --lh-ui: 1.4;
+  /* spacing */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+  /* radii: 4 chips, 6 buttons and inputs, 10 cards; no pills */
+  --r-xs: 4px;
+  --r-btn: 6px;
+  --r-card: 10px;
+  /* elevation: tight and downward, never a halo */
+  --shadow-1: 0 1px 2px rgba(28, 35, 32, .07);
+  --shadow-2: 0 1px 2px rgba(28, 35, 32, .07), 0 8px 24px -12px rgba(28, 35, 32, .22);
+  /* the chamfered state stub on a bot row */
+  --stub: polygon(0 0, 100% 3px, 100% calc(100% - 3px), 0 100%);
+  /* motion */
+  --t-fast: 120ms;
+  --t-med: 200ms;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121513; --side: #0E110F; --surface: #1A1F1C; --field: #151916; --task: #121513;
+    --hover: rgba(228, 233, 229, .05);
+    --line: #29302B; --line-strong: #38413B;
+    --text: #E4E9E5; --text-2: #A3AEA7; --text-3: #76817A;
+    --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
+    --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
+    --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;
+    --selection: #2C4338; --scrim: rgba(0, 0, 0, .55);
+    --shadow-1: 0 1px 0 rgba(0, 0, 0, .35);
+    --shadow-2: 0 1px 0 rgba(0, 0, 0, .35), 0 10px 28px -12px rgba(0, 0, 0, .7);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121513; --side: #0E110F; --surface: #1A1F1C; --field: #151916; --task: #121513;
+  --hover: rgba(228, 233, 229, .05);
+  --line: #29302B; --line-strong: #38413B;
+  --text: #E4E9E5; --text-2: #A3AEA7; --text-3: #76817A;
+  --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
+  --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
+  --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;
+  --selection: #2C4338; --scrim: rgba(0, 0, 0, .55);
+  --shadow-1: 0 1px 0 rgba(0, 0, 0, .35);
+  --shadow-2: 0 1px 0 rgba(0, 0, 0, .35), 0 10px 28px -12px rgba(0, 0, 0, .7);
+}

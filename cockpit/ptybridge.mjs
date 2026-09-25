@@ -7,14 +7,17 @@
 // plus cockpit-side pushes on the same socket, so the client needs no polling
 // while it holds a socket:
 //   {t:'chat', ...chatState}   new transcript turns (tailed server-side)
+//   {t:'status', ...chatStatus} header chips, sent when they change
 //   {t:'stopped'}              no pty-host is up for this bot
 
 import WebSocket from 'ws';
 import { ptyEndpoint } from './bots.mjs';
 import { chatState } from './chat.mjs';
+import { chatStatus } from './chatstatus.mjs';
 
 const MAX_INPUT_FRAME = 1024 * 1024;
 const CHAT_TICK_MS = 1500;
+const STATUS_TICK_MS = 5000;
 
 function send(ws, obj) { try { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {} }
 
@@ -25,9 +28,12 @@ export async function bridge(bot, browser, { chat = true } = {}) {
   let chatCursor = 0;
   let chatFile = null;
   let chatBusy = false;
+  let statusTimer = null;
+  let lastStatus = '';
 
   const closeAll = () => {
     if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
+    if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
     try { upstream?.close(); } catch {}
     try { browser.close(); } catch {}
   };
@@ -73,5 +79,13 @@ export async function bridge(bot, browser, { chat = true } = {}) {
     };
     await tick();
     chatTimer = setInterval(tick, CHAT_TICK_MS);
+
+    const statusTick = async () => {
+      if (browser.readyState !== 1) return;
+      const st = JSON.stringify(await chatStatus(bot));
+      if (st !== lastStatus) { lastStatus = st; send(browser, { t: 'status', ...JSON.parse(st) }); }
+    };
+    await statusTick();
+    if (browser.readyState === 1) statusTimer = setInterval(statusTick, STATUS_TICK_MS);
   }
 }
