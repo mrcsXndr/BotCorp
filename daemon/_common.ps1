@@ -389,13 +389,25 @@ function Get-BgAgents {
         $env = @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir }
         $r = Invoke-Bounded -Exe $exe -Arguments @('agents', '--json') -TimeoutSec $TimeoutSec -Label 'claude agents' -Capture -Env $env -WorkingDirectory $Paths.BotHome -Bot $Bot
         if ($r.Killed -or $null -eq $r.ExitCode) { return $null }
-        $txt = "$($r.Output)".Trim()
+        return (ConvertFrom-BgRoster -Text "$($r.Output)")
+    } catch { return $null }
+}
+
+function ConvertFrom-BgRoster {
+    # `claude agents --json` output -> a FLAT array of rows. The comma: an empty
+    # roster must come back as an EMPTY ARRAY (known: none), never as $null
+    # (unknown). (Piping into `ConvertFrom-Json -NoEnumerate` inside @() nested
+    # the whole roster as ONE element, so no row ever matched by id and
+    # Test-BgAgentAlive was always false.) Unparsable -> $null.
+    param([string]$Text)
+    try {
+        $txt = "$Text".Trim()
         $i = $txt.IndexOf('['); if ($i -lt 0) { return ,@() }
         $j = $txt.LastIndexOf(']'); if ($j -lt $i) { return ,@() }
-        # -NoEnumerate + the comma: an empty roster must come back as an EMPTY
-        # ARRAY (known: none), never as $null (unknown) - the pipeline would
-        # otherwise unroll `[]` into nothing.
-        $arr = @(($txt.Substring($i, $j - $i + 1)) | ConvertFrom-Json -NoEnumerate)
+        # piped through Where-Object: flat on pwsh 7 (which enumerates) AND on
+        # Windows PowerShell 5.1 (which returns the array as one object)
+        $parsed = ConvertFrom-Json -InputObject ($txt.Substring($i, $j - $i + 1))
+        $arr = @($parsed | Where-Object { $null -ne $_ })
         return ,$arr
     } catch { return $null }
 }
@@ -426,6 +438,113 @@ function Test-BgAgentAlive {
     try { if (($Agent.PSObject.Properties.Name -contains 'pid') -and $Agent.pid -and (Test-ProcAlive ([int]$Agent.pid) @('claude'))) { return $true } } catch {}
     try { if (($Agent.PSObject.Properties.Name -contains 'state') -and ("$($Agent.state)" -in @('working', 'blocked'))) { return $true } } catch {}
     return $false
+}
+
+# --- the config home's Claude Code daemon ----------------------------------------------
+# `claude --bg` hands the session to a supervisor ("daemon") that is PER CONFIG
+# HOME (<config>/daemon.lock, daemon.log) and spawns EVERY worker with the
+# environment of the client that STARTED the daemon. A later `claude --bg`
+# client's env never reaches its session (probe 2026-09-25, CC 2.1.282: a
+# session spawned by an already-running daemon carried the first client's
+# BOT_LAUNCHER_PID and no TELEGRAM_BOT_TOKEN, so the Telegram plugin exited
+# "TELEGRAM_BOT_TOKEN required": no bun child, no bot.pid, statusline red).
+# The daemon idles out 5 s after its last worker and client are gone; an
+# attached client (`claude attach`, the cockpit) keeps it - and its env - alive.
+function Get-BgDaemon {
+    # @{ Pid; Alive; StartedAt; SpawnedByPid } from <config>/daemon.lock.
+    # Alive = that pid is a live `claude daemon run` (pid reuse guarded).
+    param([Parameter(Mandatory)][string]$ConfigDir)
+    $d = @{ Pid = 0; Alive = $false; StartedAt = $null; SpawnedByPid = 0 }
+    try {
+        $j = Read-JsonFile -Path (Join-Path $ConfigDir 'daemon.lock')
+        if (-not $j -or -not $j.pid) { return $d }
+        $d.Pid = [int]$j.pid
+        try { if ($j.startedAt) { $d.StartedAt = [DateTimeOffset]::FromUnixTimeMilliseconds([int64]$j.startedAt).LocalDateTime.ToString('s') } } catch {}
+        try { if ($j.spawnedBy -and $j.spawnedBy.pid) { $d.SpawnedByPid = [int]$j.spawnedBy.pid } } catch {}
+        if (-not (Test-ProcAlive $d.Pid @('claude'))) { return $d }
+        $cmd = ''
+        try { $cmd = "$((Get-CimInstance Win32_Process -Filter "ProcessId=$($d.Pid)" -ErrorAction Stop).CommandLine)" } catch {}
+        # an unreadable command line (another session's process) still counts as the daemon
+        $d.Alive = (-not $cmd) -or ($cmd -match '\bdaemon\s+run\b')
+    } catch {}
+    return $d
+}
+
+function Get-BgDaemonAction {
+    # What a bg launch does about the config home's daemon BEFORE `claude --bg`:
+    #   spawn    no live daemon: `claude --bg` starts one with THIS launch's env
+    #   recycle  a live daemon with no live session: stop it first, so the one
+    #            this launch starts carries this launch's env (vault tokens)
+    #   inherit  a live daemon with live sessions (or a roster that could not
+    #            be read, -1): never stopped from here; the new session gets
+    #            the DAEMON's env, not this launch's
+    param([bool]$DaemonAlive, [int]$LiveWorkers)
+    if (-not $DaemonAlive) { return 'spawn' }
+    if ($LiveWorkers -eq 0) { return 'recycle' }
+    return 'inherit'
+}
+
+function Stop-BgDaemon {
+    # `claude daemon stop --any` under the bot's config home, then wait for the
+    # pid to go. $true when it is gone. Only ever called for a daemon with no
+    # live session (Get-BgDaemonAction 'recycle').
+    param([Parameter(Mandatory)][string]$Bot, [Parameter(Mandatory)][hashtable]$Paths, [int]$DaemonPid, [int]$WaitSec = 15)
+    try {
+        $r = Invoke-Bounded -Exe (Resolve-ClaudeExe) -Arguments @('daemon', 'stop', '--any') -TimeoutSec 30 -Label 'claude daemon stop' -Capture -Env @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir } -WorkingDirectory $Paths.BotHome -Bot $Bot
+        $until = (Get-Date).AddSeconds($WaitSec)
+        while ((Get-Date) -lt $until -and (Test-ProcAlive $DaemonPid @('claude'))) { Start-Sleep -Milliseconds 500 }
+        return (-not (Test-ProcAlive $DaemonPid @('claude')))
+    } catch { return $false }
+}
+
+# --- the Telegram poller ------------------------------------------------------------
+function Test-ProcDescendant {
+    # Is $ProcId $AncestorId itself or somewhere below it (ParentProcessId walk)?
+    param([int]$ProcId, [int]$AncestorId, [int]$MaxDepth = 12)
+    if ($ProcId -le 0 -or $AncestorId -le 0) { return $false }
+    $cur = $ProcId
+    for ($i = 0; $i -le $MaxDepth -and $cur -gt 4; $i++) {
+        if ($cur -eq $AncestorId) { return $true }
+        try { $cur = [int](Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction Stop).ParentProcessId } catch { return $false }
+    }
+    return $false
+}
+
+function Get-TgPoller {
+    # The plugin writes channels/telegram/bot.pid (its bun server.ts pid) only
+    # AFTER its token check. Up = that pid is alive AND below $ClaudePid.
+    param([Parameter(Mandatory)][string]$BotPidFile, [int]$ClaudePid)
+    $botPid = 0
+    try { if (Test-Path $BotPidFile) { $botPid = Get-FirstPid ((Get-Content $BotPidFile -ErrorAction Stop | Select-Object -First 1)) } } catch {}
+    $alive = Test-ProcAlive $botPid
+    return @{ BotPid = $botPid; Alive = $alive; Up = ($alive -and (Test-ProcDescendant -ProcId $botPid -AncestorId $ClaudePid)) }
+}
+
+function Wait-TgPoller {
+    # Poll Get-TgPoller until it is up or $TimeoutSec passed (the plugin
+    # connects a few seconds into the session). No claude pid = not up.
+    param([Parameter(Mandatory)][string]$BotPidFile, [int]$ClaudePid, [int]$TimeoutSec = 30)
+    $p = @{ BotPid = 0; Alive = $false; Up = $false }
+    if ($ClaudePid -le 0) { return $p }
+    $until = (Get-Date).AddSeconds($TimeoutSec)
+    while ($true) {
+        $p = Get-TgPoller -BotPidFile $BotPidFile -ClaudePid $ClaudePid
+        if ($p.Up -or (Get-Date) -ge $until) { return $p }
+        Start-Sleep -Milliseconds 1000
+    }
+}
+
+function Complete-TgTokenFile {
+    # harness.telegram_token_file: the ACL'd <config>/channels/telegram/.env is
+    # needed only until the plugin has read it. Wait (bounded) for the poller to
+    # come up under $ClaudePid, then delete the file WHATEVER happened - the
+    # token never stays on disk at rest. Returns @{ Deleted; Up; BotPid }.
+    param([Parameter(Mandatory)][string]$TokenFile, [Parameter(Mandatory)][string]$BotPidFile, [int]$ClaudePid, [int]$TimeoutSec = 30)
+    $p = Wait-TgPoller -BotPidFile $BotPidFile -ClaudePid $ClaudePid -TimeoutSec $TimeoutSec
+    $deleted = $true
+    try { if (Test-Path $TokenFile) { Remove-Item -LiteralPath $TokenFile -Force -ErrorAction Stop } } catch { $deleted = $false }
+    if (Test-Path $TokenFile) { $deleted = $false }
+    return @{ Deleted = $deleted; Up = [bool]$p.Up; BotPid = $p.BotPid }
 }
 
 function Get-BotSessionKind {
@@ -477,6 +596,20 @@ function Stop-BgSession {
         $until = (Get-Date).AddSeconds(10)
         while ((Get-Date) -lt $until -and (Test-ProcAlive $cpid @('claude'))) { Start-Sleep -Milliseconds 500 }
         if (Test-ProcAlive $cpid @('claude')) { [void](Stop-BotProcessTree -ProcId $cpid -Bot $Bot -Why 'bg stop: claude pid still alive after claude stop') }
+    }
+    # Every OTHER live session of this bot (cwd = bot home, in its own config
+    # home: a `--resume` that started a copy, an unrecorded earlier launch)
+    # goes too. Each keeps the config home's daemon alive, and the next
+    # launch's session would run with that daemon's old env (Get-BgDaemon).
+    if ((Get-BgDaemon -ConfigDir $Paths.ConfigDir).Alive) {
+        $agents = Get-BgAgents -Bot $Bot -Paths $Paths -TimeoutSec 20
+        foreach ($a in @($agents)) {
+            try {
+                if (-not $a -or ("$($a.id)" -eq $bgId) -or ("$($a.cwd)".TrimEnd('\') -ine $Paths.BotHome.TrimEnd('\')) -or -not (Test-BgAgentAlive $a)) { continue }
+                $r = Invoke-Bounded -Exe (Resolve-ClaudeExe) -Arguments @('stop', "$($a.id)") -TimeoutSec $TimeoutSec -Label 'claude stop' -Capture -Env @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir } -WorkingDirectory $Paths.BotHome -Bot $Bot
+                Write-DaemonLog "claude stop $($a.id) (unrecorded session of this bot, pid $($a.pid)): exit=$($r.ExitCode)" -Bot $Bot
+            } catch {}
+        }
     }
     return (-not ($cpid -gt 0 -and (Test-ProcAlive $cpid @('claude'))))
 }

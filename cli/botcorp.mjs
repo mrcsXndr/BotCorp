@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -66,6 +66,20 @@ function doSync(bot, dryRun = false) {
   for (const [k, v] of Object.entries(r.report)) out(`${v.padEnd(14)} ${k}`);
   out(`sync: ${bot} ${dryRun ? '(dry-run) ' : ''}ok`);
   return r;
+}
+
+// `botcorp sync`: the generated files, plus the Telegram plugin in the config
+// home when the module is on and it is missing (an imported or adopted bot).
+// Not in daemon/sync.mjs: the tick runs that one and must not touch the network.
+function cmdSync({ pos, flags }) {
+  const bot = requireBot(pos[1]);
+  const dryRun = !!flags['dry-run'];
+  doSync(bot, dryRun);
+  let telegram = false;
+  try { telegram = !!loadBotYaml(botYamlPath(bot)).harness.modules.telegram; } catch {}
+  if (!telegram || telegramPluginInstalled(bot)) return 0;
+  if (dryRun) { out(`telegram plugin: missing from .claude-${bot}/plugins (sync without --dry-run installs it)`); return 0; }
+  return installTelegramPlugin(bot) ? 0 : 1;
 }
 
 // ---- secrets (daemon/secrets.ps1) ---------------------------------------------------
@@ -672,12 +686,21 @@ function botStatus(bot) {
   // Liveness is measured, never read back from the state file: a bg bot whose
   // claude worker died leaves `poller: OWNED` behind, so the poller is only
   // reported while a claude (or pty) process is actually alive; a live bun
-  // poller with no claude is an orphan.
+  // poller with no claude is an orphan. While alive, OWNED needs the plugin's
+  // bot.pid alive under this bot's claude (pollerVerdict); otherwise DEAD.
   const claudeAlive = !!(state && pidAlive(Number(state.claude_pid)));
   let botPid = 0;
   try { botPid = firstInt(fs.readFileSync(path.join(configDir(bot), 'channels', 'telegram', 'bot.pid'), 'utf-8')); } catch {}
   const alive = !!pty || claudeAlive;
-  const poller = alive ? (state && state.poller) ?? null : (pidAlive(botPid) ? 'ORPHAN' : 'none');
+  const botPidAlive = pidAlive(botPid);
+  const telegram = !!(cfg && cfg.harness.modules.telegram);
+  let underClaude = null;
+  if (alive && telegram && botPidAlive) {
+    const parents = processParents();
+    const root = claudeAlive ? Number(state.claude_pid) : Number(pty && pty.ptyPid);
+    if (parents) underClaude = isDescendant(parents, botPid, root);
+  }
+  const poller = pollerVerdict({ alive, telegram, recorded: (state && state.poller) ?? null, botPid, botPidAlive, underClaude });
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
   let statusAgeS = null, ctxUsedPct = null, rateLimits = null;
   if (status) {
@@ -695,7 +718,8 @@ function botStatus(bot) {
     running: alive,
     pty: ptyPublic(pty),
     state: state ? { status: alive ? state.status ?? null : 'stopped', started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
-    telegram: !!(cfg && cfg.harness.modules.telegram),
+    telegram,
+    poller_pid: botPidAlive ? botPid : null,
     model: cfg ? cfg.model : null,
     harness_version: harnessVersion(),
     yaml_error: yamlError,
@@ -710,7 +734,7 @@ function printStatus(s) {
   out(`bot: ${s.name}`);
   out(`  running: ${s.running ? 'yes' : 'no'}`);
   if (s.pty) out(`  pty: pid=${s.pty.ptyPid} host=${s.pty.pid} ws=127.0.0.1:${s.pty.port} mode=${s.pty.mode} since=${s.pty.startedAt}`);
-  if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller} claude_pid=${s.state.claude_pid ?? '-'}`);
+  if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
   out(`  telegram: ${s.telegram ? 'on' : 'off'}  model: ${s.model ?? '?'}  harness: ${s.harness_version ? 'v' + s.harness_version : '?'}`);
   if (s.yaml_error) out(`  bot.yaml: INVALID - ${s.yaml_error}`);
@@ -802,6 +826,41 @@ function installTelegramPlugin(bot) {
     if (r.code !== 0 && label !== 'disable') return false;
   }
   return true;
+}
+
+// `new` installs the plugin into the config home; `import` and `adopt` never
+// did, so such a bot's `--channels` named a plugin that was not there.
+function telegramPluginInstalled(bot) {
+  const j = readJson(path.join(configDir(bot), 'plugins', 'installed_plugins.json'));
+  const rows = j && j.plugins && j.plugins['telegram@claude-plugins-official'];
+  return Array.isArray(rows) && rows.some((r) => r && r.installPath && fs.existsSync(path.join(r.installPath, 'server.ts')));
+}
+
+// The plugin's own stderr lands in Claude Code's per-project MCP log, keyed by
+// the bot home slug; its last `error` line for THIS session says why the
+// poller never came up (`TELEGRAM_BOT_TOKEN required` = the session ran
+// without the token). null = no log line for the session at all.
+function telegramMcpLastError(bot, sessionId) {
+  try {
+    const dir = path.join(process.env.LOCALAPPDATA || '', 'claude-cli-nodejs', 'Cache', botHome(bot).replace(/[^A-Za-z0-9]/g, '-'), 'mcp-logs-plugin-telegram-telegram');
+    // one file per connection attempt, named by its start time: newest first
+    for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort().reverse()) {
+      // the plugin's own stderr beats the generic "Connection closed" that follows it
+      let last = null, stderr = null, seen = false;
+      for (const line of fs.readFileSync(path.join(dir, f), 'utf-8').split(/\r?\n/)) {
+        try {
+          const row = JSON.parse(line);
+          if (sessionId && row.sessionId !== sessionId) continue;
+          seen = true;
+          if (!row.error) continue;
+          const first = String(row.error).replace(/^Server stderr:\s*/, '').split(/\r?\n/)[0].trim();
+          if (/^Server stderr:/.test(String(row.error))) stderr = first; else last = first;
+        } catch {}
+      }
+      if (seen) return { file: path.join(dir, f), error: (stderr || last) ? scrub(stderr || last).slice(0, 160) : null };
+    }
+    return null;
+  } catch { return null; }
 }
 
 // Interactive CC runs first-run onboarding (theme + browser login) and the
@@ -1882,7 +1941,10 @@ async function cmdDoctor({ flags }) {
         const j = readJson(f);
         const rel = path.relative(ROOT, f).replace(/\\/g, '/');
         if (!j) { add(absentLevel, `${bot}: enabledPlugins`, `${rel} absent${absentLevel === 'WARN' ? ' (botcorp sync)' : ''}`, 'bots'); continue; }
-        add(j.enabledPlugins ? 'FAIL' : 'PASS', `${bot}: enabledPlugins`, j.enabledPlugins ? `${rel} has enabledPlugins (a plain \`claude\` there would steal the poller)` : `${rel} clean`, 'bots');
+        // `claude plugin disable` itself writes `"telegram@...": false` there: only a true entry enables
+        const ep = j.enabledPlugins;
+        const on = ep == null ? [] : isObj(ep) ? Object.entries(ep).filter(([, v]) => v !== false).map(([k]) => k) : [String(ep)];
+        add(on.length ? 'FAIL' : 'PASS', `${bot}: enabledPlugins`, on.length ? `${rel} enables ${on.join(', ')} (a plain \`claude\` there would steal the poller)` : `${rel} clean`, 'bots');
       }
       if (rootIsGit) {
         const r = run(gitExe(), ['-C', ROOT, 'check-ignore', '-q', `bots/${bot}/.vault`], { timeoutMs: 15_000 });
@@ -1895,6 +1957,21 @@ async function cmdDoctor({ flags }) {
         const st = pairingState(bot);
         const open = st.policy === 'pairing' && !st.allowFrom.length;
         add(open ? 'WARN' : 'PASS', `${bot}: pairing`, `policy=${st.policy} allowlisted=${st.allowFrom.length} pending=${st.pending.length}${open ? ` (nobody can talk to the bot without a pairing code: botcorp pair ${bot} <id>)` : ''}${st.present ? '' : ' (access.json absent until sync/start)'}`, 'bots');
+        const installed = telegramPluginInstalled(bot);
+        add(installed ? 'PASS' : 'FAIL', `${bot}: telegram plugin installed`, installed ? `telegram@claude-plugins-official in .claude-${bot}/plugins` : `not in .claude-${bot}/plugins, so --channels starts nothing: botcorp sync ${bot}`, 'bots');
+        // measured, like `status`: the plugin's bot.pid alive under this bot's claude
+        const s = botStatus(bot);
+        const poller = s.state && s.state.poller;
+        if (!s.running) add('INFO', `${bot}: telegram channel running`, 'bot not running', 'bots');
+        else if (poller === 'OWNED') add('PASS', `${bot}: telegram channel running`, `bot.pid ${s.poller_pid} under claude ${s.state.claude_pid ?? (s.pty && s.pty.ptyPid)}`, 'bots');
+        else if (poller === 'FOREIGN') add('WARN', `${bot}: telegram channel running`, 'launched WITHOUT --channels: another live process held the owner-lock (launches.log says which)', 'bots');
+        else if (poller === 'UNKNOWN') add('WARN', `${bot}: telegram channel running`, 'bot.pid is alive but the process tree could not be read', 'bots');
+        else {
+          const sid = botState(bot).session_id || null;
+          const why = telegramMcpLastError(bot, sid);
+          const said = !why ? ` - no plugin MCP log for session ${sid || '?'} (the plugin never started: /mcp in \`claude attach\` shows it)` : why.error ? ` - the plugin said: "${why.error}"` : '';
+          add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${said}. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log shows the daemon and poller lines)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
+        }
       }
       // the backup module makes the folder a repo; then the vault and the config home must be ignored THERE
       if (cfg.backup.git_remote && fs.existsSync(path.join(botHome(bot), '.git'))) {
@@ -1976,7 +2053,7 @@ env: BOTCORP_HOME (runtime root, default ~/.botcorp), COCKPIT_PORT (default 4477
 const COMMANDS = {
   new: cmdNew, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
-  sync: ({ pos, flags }) => { doSync(requireBot(pos[1]), !!flags['dry-run']); return 0; },
+  sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, automations: cmdAutomations,
   update: cmdUpdate, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,

@@ -3,6 +3,58 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.5
+
+Hotfix (branched from v0.1.4): on the reference host a `botcorp start` of a
+Telegram bot came up (`claude_pid` set, doctor clean) with no Telegram
+poller - no bun child under the bot's claude, no `bot.pid`, statusline TG
+red - while `botcorp status` said `poller=OWNED`.
+
+Root cause, reproduced on Claude Code 2.1.282 with a dummy token: a `claude
+--bg` session is spawned by the config home's Claude Code daemon (`claude
+daemon run`, `<config home>/daemon.lock`), and every session gets the
+environment of the client that STARTED that daemon. When one was already
+running, the launcher's `TELEGRAM_BOT_TOKEN` (and `CLAUDE_CODE_OAUTH_TOKEN`)
+never reached the session; the plugin logged `telegram channel:
+TELEGRAM_BOT_TOKEN required` to its MCP log and exited before writing
+`bot.pid`.
+
+- **`launch.ps1 -Bg` refreshes the daemon's env.** Before `claude --bg`: no
+  live daemon -> the launch starts one with its own env (tokens stay in
+  process memory, never on disk); a live daemon with no live session ->
+  `claude daemon stop --any` first; a live daemon that still runs sessions of
+  the bot -> left alone with a `WARN ... inherits the DAEMON's env` line in
+  `launches.log`. After the launch it waits up to 30 s for the poller and
+  records `poller: OWNED` or `DEAD` in the state file.
+- **`botcorp stop` stops every session of the bot**, not only the recorded
+  one (a copy a `--resume` started, an unrecorded earlier launch): each kept
+  the daemon, and its old env, alive for the next start.
+- **The roster parse was broken.** `claude agents --json` came back nested
+  as one element, so no row ever matched by id and `Test-BgAgentAlive` was
+  always false (duplicate guard, tick liveness, the launcher's pid lookup).
+  Flat now, on pwsh 7 and Windows PowerShell 5.1.
+- **`status` / `doctor` measure the poller.** `poller=OWNED` only when
+  `bot.pid` is alive and descends from the bot's claude (bg) or pty root,
+  otherwise `DEAD` (`FOREIGN` / `UNKNOWN` / `none` / `ORPHAN` as documented);
+  `--json` adds `poller_pid`. Doctor: `<bot>: telegram channel running`
+  (FAIL with the plugin's own last error for that session, e.g. `TELEGRAM_BOT_TOKEN
+  required`, and `botcorp stop <bot>; botcorp start <bot>` as the fix) and
+  `<bot>: telegram plugin installed`. The `enabledPlugins` check no longer
+  FAILs on the `false` entry `claude plugin disable` writes.
+- **`botcorp sync` installs the Telegram plugin** into the config home when
+  the module is on and it is missing (`new` always did; `import` and `adopt`
+  never did, so `--channels` started nothing).
+- **`harness.telegram_token_file` is transient.** The ACL'd `.env` is deleted
+  as soon as the plugin has read it (`bot.pid` under the session's claude),
+  when the 30 s wait runs out, on every failure path and at the latest at
+  session exit, with a `telegram: token file deleted ...` line in
+  `launches.log`. Its ACL grant is fixed: `"$env:USERNAME:F"` expanded to an
+  empty user name, so the grant never applied.
+
+Upgrade: check out `v0.1.5`, then per Telegram bot `botcorp sync <bot>`,
+`botcorp stop <bot>`, `botcorp start <bot>`; `botcorp status <bot>` should
+show `poller=OWNED bot.pid=<pid>`.
+
 ## v0.1.4
 
 Hotfix (branched from v0.1.3): the first `botcorp start` of a bot on the

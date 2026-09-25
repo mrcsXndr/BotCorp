@@ -157,7 +157,10 @@ Whatever Claude Code writes under the bot's own config home
 - `.credentials.json`, present only after an interactive `/login` in that
   config home (which Remote Control needs; a setup-token cannot do RC), and
 - `channels/telegram/.env`, only if the env-only token path is unavailable
-  on a box and `harness.telegram_token_file: true` is set.
+  on a box and `harness.telegram_token_file: true` is set - and then only for
+  the seconds between the launch and the plugin reading it: the launcher
+  deletes it right after (or when the wait runs out, or at session exit) and
+  logs the delete in `launches.log`.
 
 Both are ACL-restricted to the user and gitignored (`.claude-*/`); neither is
 encrypted by BotCorp. `botcorp doctor` checks the ignores and the vault's
