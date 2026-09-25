@@ -3,6 +3,14 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.16
+
+- **Fixed: cron automations broke every state update.**
+  - The cause: `Expand-CronField` returned its HashSet with a bare `return`, which PowerShell unrolls. Many values became a fixed-size `object[]`, so `$dow.Add(0)` for a `*` day-of-week threw "Collection was of a fixed size". A single value became a bare int with no `.Contains`.
+  - The effect: `Use-AutoState` failed open on every tick once any cron job was enabled. The run-now queue never drained, `next_due` was never written, and jobs that were due never got scheduled. The daemon log was the only sign.
+  - The fix: the set is now returned as one object. Test: `harness/tests/test_automation_cron.py`.
+  - Upgrading: check out `v0.1.16`. No sync or restart needed; the next tick picks it up.
+
 ## v0.1.15
 
 For moving a bot that is its own git repo, and was run outside BotCorp, onto

@@ -81,7 +81,10 @@ function Expand-CronField {
         if ($lo -lt $Min -or $hi -gt $Max -or $lo -gt $hi) { return $null }
         for ($v = $lo; $v -le $hi; $v += $step) { [void]$set.Add($v) }
     }
-    return $set
+    # The comma keeps the HashSet ONE object: a bare `return $set` unrolls it
+    # into a fixed-size object[] (or a bare int for one value), and the `.Add`
+    # / `.Contains` below then throw inside every state update.
+    return ,$set
 }
 
 function ConvertFrom-Cron {
