@@ -3,6 +3,12 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.14
+
+v0.2.13 plus the v0.1.16 release below: a cron-triggered automation no longer
+breaks every automation state update (run-now queue, `next_due`, scheduling).
+Upgrading: check out `v0.2.14`; the next daemon tick picks it up.
+
 ## v0.2.13
 
 v0.2.12 plus the v0.1.15 release below:
@@ -215,6 +221,14 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.16
+
+- **Fixed: cron automations broke every state update.**
+  - The cause: `Expand-CronField` returned its HashSet with a bare `return`, which PowerShell unrolls. Many values became a fixed-size `object[]`, so `$dow.Add(0)` for a `*` day-of-week threw "Collection was of a fixed size". A single value became a bare int with no `.Contains`.
+  - The effect: `Use-AutoState` failed open on every tick once any cron job was enabled. The run-now queue never drained, `next_due` was never written, and jobs that were due never got scheduled. The daemon log was the only sign.
+  - The fix: the set is now returned as one object. Test: `harness/tests/test_automation_cron.py`.
+  - Upgrading: check out `v0.1.16`. No sync or restart needed; the next tick picks it up.
 
 ## v0.1.15
 
