@@ -142,6 +142,32 @@ def test_token_file_deleted_when_bot_pid_is_not_below_claude(tmp_path):
     assert not tok.exists()
 
 
+@needs_pwsh
+def test_debug_log_path_only_when_enabled(tmp_path):
+    cfg = tmp_path / "cfg"
+    got = _ps(f"\"[$(Get-DebugLogPath -ConfigDir '{cfg}' -Enabled $false -Stamp 's1')]|$(Get-DebugLogPath -ConfigDir '{cfg}' -Enabled $true -Stamp '20260925-010203')\"")
+    off, on = got.split("|")
+    assert off == "[]"
+    assert Path(on) == cfg / "debug" / "20260925-010203.txt"
+
+
+@needs_node
+def test_harness_debug_defaults_off_and_must_be_boolean(tmp_path):
+    botyaml = ASSEMBLY / "daemon" / "botyaml.mjs"
+
+    def effective(text: str) -> dict:
+        f = tmp_path / "bot.yaml"
+        f.write_text(text, encoding="utf-8")
+        r = subprocess.run(["node", str(botyaml), str(f)], capture_output=True, text=True, timeout=60)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout)
+
+    cfg = effective("name: alpha\n")
+    assert cfg["harness"]["debug"] is False and cfg["_errors"] == []
+    assert effective("name: alpha\nharness:\n  debug: true\n")["_errors"] == []
+    assert any(e.startswith("harness.debug") for e in effective("name: alpha\nharness:\n  debug: yes-please\n")["_errors"])
+
+
 @needs_node
 def test_poller_verdict_truth_table():
     cases = [

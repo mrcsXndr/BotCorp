@@ -3,7 +3,8 @@
 # task, and the pty-host (which runs this script inside the ConPTY).
 #
 #   pwsh -NoProfile -File daemon/launch.ps1 -Bot <name> [-Continue|-Fresh] [-Bg] [-Force]
-#        [-StartedBy manual|daemon-cold|daemon-restart|pty|visible] [-InPty] [-DryRun] [-- <claude args>]
+#        [-StartedBy manual|daemon-cold|daemon-restart|pty|visible] [-InPty] [-DebugLog] [-DryRun] [-- <claude args>]
+#   -DebugLog  this launch writes a Claude Code debug log to <config>/debug/ (bot.yaml harness.debug: every launch)
 #
 # Two shapes, picked by -Bg (the daemon passes it for `harness.session: bg`,
 # the default; `session: pty` bots run inside daemon/pty-host.mjs without it):
@@ -49,6 +50,7 @@ param(
     [switch]$Force,
     [string]$StartedBy = 'manual',
     [switch]$InPty,
+    [switch]$DebugLog,
     [switch]$DryRun,
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Passthrough
 )
@@ -261,6 +263,22 @@ if (($modules -contains 'telemetry') -and (Test-Path $otelState)) {
             $childEnv['OTEL_RESOURCE_ATTRIBUTES'] = "bot.name=$Bot"
         }
     } catch {}
+}
+
+# Opt-in Claude Code debug log (bot.yaml harness.debug, or -DebugLog for one
+# launch): the session's own log, with the MCP servers' stderr, in the config
+# home (gitignored, user-only), so a poller that never came up says why. The
+# newest 10 are kept.
+$debugFile = Get-DebugLogPath -ConfigDir $ConfigDir -Enabled ([bool]$DebugLog -or $cfg.harness.debug -eq $true) -Stamp (Get-Date -Format 'yyyyMMdd-HHmmss')
+if ($debugFile) {
+    if (-not $DryRun) {
+        try {
+            New-Item -ItemType Directory -Force -Path (Split-Path $debugFile -Parent) | Out-Null
+            Get-ChildItem (Split-Path $debugFile -Parent) -Filter '*.txt' -File | Sort-Object LastWriteTime -Descending | Select-Object -Skip 9 | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch {}
+    }
+    $Passthrough = @('--debug-file', $debugFile) + @($Passthrough | Where-Object { $_ })
+    Write-LaunchLog "debug: --debug-file $debugFile ($(if ($DebugLog) { '-DebugLog' } else { 'harness.debug' }))"
 }
 
 $argv = Get-ClaudeArgv -Bg ([bool]$Bg) -ResumeId $resumeId -Continue $resume -Permissions $cfg.permissions -PluginDir $Harness -Channels $canOwn `

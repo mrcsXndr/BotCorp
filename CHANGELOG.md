@@ -3,6 +3,29 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.6
+
+- **Opt-in debug log for a launch.** `botcorp start <bot> --debug` /
+  `restart --debug` (bg bots), or `bot.yaml` `harness.debug: true` for every
+  launch (the daemon's and pty bots' included), runs the session with
+  `--debug-file <config home>/debug/<stamp>.txt`. Claude Code's debug log
+  carries every MCP server's stderr, so a Telegram poller that never came up
+  says why (`MCP server "plugin:telegram:telegram" Server stderr: telegram
+  channel: TELEGRAM_BOT_TOKEN required`). Off by default; the newest 10 are
+  kept; `launches.log` names the file. Doctor's `telegram channel running`
+  fix hint now says `botcorp start <bot> --debug`.
+- **docs/daemon.md: where the env goes.** The daemon's per-session dispatch
+  record (`daemon/roster.json`, `jobs/<id>/state.json` `providerEnv`) forwards
+  only an allowlist of provider / model routing variables from the client;
+  tokens and `BOT_*` are dropped, so it is not a hand-off path.
+  `session-env/<session id>/` is the SessionStart hooks' `CLAUDE_ENV_FILE`
+  directory for the Bash tool. The plugin's stderr is also kept outside the
+  config home, in `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
+  slug>\mcp-logs-plugin-telegram-telegram\`.
+
+Upgrade: check out `v0.1.6`; nothing to migrate (the v0.1.5 steps still
+apply if you skipped that release).
+
 ## v0.1.5
 
 Hotfix (branched from v0.1.4): on the reference host a `botcorp start` of a

@@ -344,6 +344,13 @@ function Get-ClaudeArgv {
     return $a
 }
 
+function Get-DebugLogPath {
+    # <config>/debug/<stamp>.txt when the debug log is on for this launch, else ''.
+    param([Parameter(Mandatory)][string]$ConfigDir, [bool]$Enabled, [Parameter(Mandatory)][string]$Stamp)
+    if (-not $Enabled) { return '' }
+    return (Join-Path (Join-Path $ConfigDir 'debug') "$Stamp.txt")
+}
+
 function Get-ClaudeHeadlessArgv {
     # Utility spawns (triage, debrief): prompt on STDIN (never argv), user
     # settings only (never the tg-enable file), no plugin dir unless asked.
