@@ -182,7 +182,8 @@ else {
 $resumeId = ''
 if ($Bg -and $resume) {
     try { $st0 = Read-State; if ($st0 -and ($st0.PSObject.Properties.Name -contains 'session_id') -and "$($st0.session_id)" -match '^[0-9a-f-]{16,}$') { $resumeId = "$($st0.session_id)" } } catch {}
-    if ($resumeId) { Write-LaunchLog "bg: --resume $resumeId (same conversation)" } else { Write-LaunchLog 'bg: no session id recorded -> fresh background session' }
+    # A resume keeps this id as the conversation of record (the worker's live id may differ; see the bg launch).
+    if ($resumeId) { Write-LaunchLog "bg: resume target $resumeId (the recorded conversation)" } else { Write-LaunchLog 'bg: no session id recorded -> fresh background session' }
 }
 
 # --- 5. usage-limit resume prompt -------------------------------------------------
@@ -197,6 +198,39 @@ try {
         else { Write-LaunchLog "auto-resume file stale ($([int]$ageMin)m) - ignored" }
     }
 } catch {}
+
+# --- 5b. boot kick-off ------------------------------------------------------------
+# After a host reboot the bot would sit idle until someone prompts it, and look
+# dead. The first DAEMON cold-start of a boot seeds bot.yaml harness.boot_prompt
+# (botyaml.mjs bootPrompt: a telegram bot's default is one "back online" line)
+# - once per boot per bot (Test-BootKickDue); never on a routine relaunch.
+$bootKey = ''
+if ($StartedBy -eq 'daemon-cold' -and "$($cfg._boot_prompt)") {
+    try {
+        $bootAt = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+        $bk = Get-BootKey $bootAt
+        $stb = Read-State
+        $prop = { param($n) if ($stb -and ($stb.PSObject.Properties.Name -contains $n)) { $stb.$n } else { $null } }
+        if (Test-BootKickDue -BootKey $bk -PrevStartedAt (& $prop 'started_at') -LastKickBoot "$(& $prop 'boot_kick_boot')" -PendingBoot "$(& $prop 'boot_kick_pending')") {
+            $bootKey = $bk
+            $text = "$($cfg._boot_prompt)".Replace('{boot}', ([datetime]$bootAt).ToString('yyyy-MM-dd HH:mm')).Replace('{now}', (Get-Date).ToString('yyyy-MM-dd HH:mm'))
+            $seedPrompt = $(if ($seedPrompt.Count) { @("$($seedPrompt[0])`n`n$text") } else { @($text) })
+            Write-LaunchLog "boot: host booted $bk, first daemon cold-start since -> seeding the boot prompt (harness.boot_prompt; once per boot)"
+            if (-not $DryRun) { Write-State @{ boot_kick_pending = $bk } }
+        }
+    } catch { Write-LaunchLog "boot: kick-off check failed (fail-open, no prompt): $($_.Exception.Message)" }
+}
+
+# --- 5c. resume seed --------------------------------------------------------------
+# An unattended bg launch with nothing else to say would come up "idle - send a
+# prompt to start" and do nothing until a message arrives. It gets one trivial
+# turn (bot.yaml harness.resume_prompt, botyaml.mjs RESUME_PROMPT_DEFAULT).
+# Only daemon cold-starts / restarts, which pinning keeps rare; never scheduled.
+if ($Bg -and -not $seedPrompt.Count -and $StartedBy -in @('daemon-cold', 'daemon-restart') -and "$($cfg._resume_prompt)") {
+    $why = $(if ($StartedBy -eq 'daemon-cold') { 'the daemon found it not running' } else { 'the daemon restarted it' })
+    $seedPrompt = @("$($cfg._resume_prompt)".Replace('{now}', (Get-Date).ToString('yyyy-MM-dd HH:mm')).Replace('{reason}', $why))
+    Write-LaunchLog "resume seed: an unattended launch ($StartedBy) -> seeding harness.resume_prompt (one trivial turn)"
+}
 
 # --- 6. Telegram owner-lock (per config home) -------------------------------------
 # The lock names the process that owns the poller: this launcher for a
@@ -282,7 +316,7 @@ foreach ($n in $vaultNote) { Write-LaunchLog $n }
 
 # --- 8. env + argv + state, then exec / background ---------------------------------
 $childEnv = Get-ClaudeEnv -ConfigDir $ConfigDir -Secrets $secrets
-$secretEnvNames = @($secrets.Keys | ForEach-Object { Get-SecretEnvName $_ })
+$secretEnvNames = @($secrets.Keys | ForEach-Object { Get-SecretEnvName $_ } | Sort-Object)
 $childEnv['BOT_HOME']            = $BotHome
 $childEnv['BOT_NAME']            = $Bot
 $childEnv['BOT_MODULES']         = ($modules -join ',')
@@ -379,7 +413,7 @@ Write-LaunchLog "launch shell_pid=$PID started_by=$StartedBy mode=$modeText chan
 $oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { 'vault' } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
 $oauthVal = $(if ($oauthSrc -eq 'vault') { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
 [void](Add-LaunchEnvRecord -ConfigDir $ConfigDir -LauncherPid $PID -OauthLast4 ((Mask $oauthVal) -replace '^\*+') -OauthSource $oauthSrc `
-                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')))
+                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames)
 $launchT0 = (Get-Date).AddSeconds(-2)
 
 # Inherited from a parent Claude Code session these make the child run with
@@ -473,12 +507,20 @@ if ($Bg) {
             if ($found -and (($found.PSObject.Properties.Name -contains 'pid') -and $found.pid)) { break }
             Start-Sleep -Milliseconds 1500
         }
-        $cpid = 0; $sid = $resumeId
+        # The conversation of record: a resume keeps the id it resumed. The live
+        # roster row's `sessionId` is the WORKER's, and after a wake of a `done`
+        # row the reference host saw it differ on every wake (d1329bd4,
+        # fe30a774, ...) while the transcript, the SessionStart hook and the
+        # roster row once settled all stayed on the resumed id: no fork. The
+        # next bare resume matches the roster row by that id, so recording the
+        # worker's would turn it into a flagged resume of an unknown id (a copy).
+        $cpid = 0; $sid = $resumeId; $workerSid = ''
         if ($found) {
             try { if ($found.PSObject.Properties.Name -contains 'id') { $bgId = "$($found.id)" } } catch {}
-            try { if (($found.PSObject.Properties.Name -contains 'sessionId') -and $found.sessionId) { $sid = "$($found.sessionId)" } } catch {}
+            try { if (($found.PSObject.Properties.Name -contains 'sessionId') -and $found.sessionId) { $workerSid = "$($found.sessionId)" } } catch {}
             try { if (($found.PSObject.Properties.Name -contains 'pid') -and $found.pid) { $cpid = [int]$found.pid } } catch {}
         }
+        $sid = Get-BgConversationId -ResumeId $resumeId -WorkerSid $workerSid
         $copy = @($outLines | Where-Object { $_ -match 'started a copy as ([0-9a-f]{6,12})' })
         if ($copy.Count) { Write-LaunchLog "bg: WARN claude --bg started a COPY instead of continuing $resumeId ($($copy[0]))" }
         # exit 0 is not success: only a live claude process running the session is (Get-BgLaunchResult)
@@ -488,10 +530,24 @@ if ($Bg) {
         if ($res.Ok -and $plan -ne 'bare') { $upd['bg_flags'] = $flagsKey }   # what this session saved as its options
         Write-State $upd
         if ($canOwn -and $cpid -gt 0) { try { [System.IO.File]::WriteAllText($lockFile, "$cpid`n$((Get-Date).ToString('o'))") } catch {} }
-        Write-LaunchLog "bg: id=$bgId session=$sid claude_pid=$cpid exit=$code"
+        Write-LaunchLog "bg: id=$bgId conversation=$sid$(if ($workerSid -and $workerSid -ne $sid) { " worker_session=$workerSid" }) claude_pid=$cpid exit=$code"
         if (-not $res.Ok) {
             $code = $res.Code
             Write-LaunchLog "bg: FAIL - $($res.Text). Fix: botcorp stop $Bot; botcorp start $Bot --fresh"
+        } elseif ($resumeId) {
+            if (-not $workerSid) { Write-LaunchLog "bg: resumed conversation $resumeId (the roster showed no worker session id)" }
+            elseif ($workerSid -ne $resumeId) { Write-LaunchLog "bg: resumed conversation $resumeId; the live roster row reports worker session $workerSid (the worker's id, not a new conversation: the transcript stays $resumeId)" }
+            else { Write-LaunchLog "bg: resumed conversation $resumeId (the worker runs under the same id)" }
+        }
+        if ($res.Ok) {
+            # Pinned, or Claude Code's supervisor retires the idle session after 60 min (Set-BgPin).
+            if ($bgId) {
+                $prevPin = ''; try { $stp = Read-State; if ($stp -and ($stp.PSObject.Properties.Name -contains 'pinned_bg_id')) { $prevPin = "$($stp.pinned_bg_id)" } } catch {}
+                $pin = Set-BgPin -ConfigDir $ConfigDir -BgId $bgId -Replace $prevPin
+                Write-LaunchLog "bg: pin $bgId -> $pin ($(Get-BgPinsPath -ConfigDir $ConfigDir); without a pin an idle background session is retired after 60 min)$(if ($prevPin -and $prevPin -ne $bgId -and $pin -eq 'pinned') { "; unpinned the previous $prevPin" })"
+                if ($pin -in @('pinned', 'already')) { $own = Get-BgPinOwner -Result $pin -BgId $bgId -Prev $prevPin; Write-State @{ pinned_bg_id = $(if ($own) { $own } else { $null }) } }
+            }
+            if ($bootKey) { Write-State @{ boot_kick_boot = $bootKey; boot_kick_at = (Get-Date).ToString('o'); boot_kick_pending = $null }; Write-LaunchLog "boot: boot prompt sent with this launch (boot $bootKey)" }
         }
         # The poller is up only when the plugin's bot.pid is alive UNDER this
         # claude (it is written after the token check); the state says so.
@@ -516,7 +572,9 @@ if ($Bg) {
                 Start-Sleep -Milliseconds 1000
             }
             $chk = Get-SessionEnvCheck -Record $se -LauncherPid $PID
-            Write-LaunchLog "env: $($chk.Verdict) - $($chk.Text)$(if ($chk.Verdict -eq 'OK') { " and oauth $(if ($oauthVal) { "$(Mask $oauthVal) ($oauthSrc)" } else { 'none (the config home''s own login)' })" } elseif ($chk.Verdict -ne 'UNKNOWN') { ". Fix: botcorp stop $Bot; botcorp start $Bot" })"
+            # names only: which vault keys this launch put in the session env (bot.yaml secrets:)
+            $injected = "$($secretEnvNames.Count) vault key(s) in the session env$(if ($secretEnvNames.Count) { ": $($secretEnvNames -join ', ')" })"
+            Write-LaunchLog "env: $($chk.Verdict) - $($chk.Text)$(if ($chk.Verdict -eq 'OK') { " and oauth $(if ($oauthVal) { "$(Mask $oauthVal) ($oauthSrc)" } else { 'none (the config home''s own login)' }); $injected" } elseif ($chk.Verdict -ne 'UNKNOWN') { ". Fix: botcorp stop $Bot; botcorp start $Bot" } else { "; this launch passed $injected" })"
             Write-State @{ session_env = $chk.Verdict; updated_at = (Get-Date).ToString('o') }
         }
     } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Write-State @{ status = 'exited'; exit_code = 1; updated_at = (Get-Date).ToString('o') } }
@@ -552,6 +610,7 @@ if ($tokenFile) {
         }
     } catch { Write-LaunchLog "telegram: token-file cleanup job did not start ($($_.Exception.Message)); it is removed when the session exits" }
 }
+if ($bootKey) { Write-State @{ boot_kick_boot = $bootKey; boot_kick_at = (Get-Date).ToString('o'); boot_kick_pending = $null }; Write-LaunchLog "boot: boot prompt passed to claude (boot $bootKey)" }
 try {
     & $exe @argv
     $code = $LASTEXITCODE

@@ -3,6 +3,20 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.11
+
+v0.2.10 plus the v0.1.13 release below: bg sessions are pinned in
+`<config home>/jobs/pins.json` so Claude Code's supervisor stops retiring
+them after 60 min idle; the tick's poller verdict is the one `status` uses;
+a daemon cold-start after a host reboot seeds `harness.boot_prompt` once per
+boot, and every other unattended bg launch seeds `harness.resume_prompt`;
+blocked sessions are logged and FAIL doctor; the launch line names the
+conversation and the worker's live id separately. `secrets:` scoping was
+already on this line (v0.2.0); v0.2.11 adds the names-only `status` `secrets
+env:` line, doctor `<bot>: session secrets env`, and the injected-key count
+on the bg `env: OK` line. Upgrading: check out `v0.2.11`, then `botcorp
+sync <bot>`. No restart for the pin or the poller verdict.
+
 ## v0.2.10
 
 v0.2.9 plus the v0.1.12 release below: doctor's `<bot>: bun resolvable for
@@ -176,6 +190,75 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.13
+
+Found in a reboot test on the reference host: the bot died every ~63 min
+and was cold-started again, the tick logged `poller=UNKNOWN` all night, and
+after the reboot nothing visible said the bot was back.
+
+- **Idle bg sessions are pinned.** Claude Code's bg supervisor retires a
+  settled (idle, or blocked on input) unpinned worker 60 min after its job
+  last changed; the roster row ends `done`/`failed` and the next tick
+  cold-starts it (60 + 3 = 63). Nothing in BotCorp had that period
+  (measured on the build box: the unpinned probe was retired "idle-prompt,
+  idle 61m", the pinned one ran on past two hours). The
+  launcher now adds the session to `<config home>/jobs/pins.json` (the file
+  the fleet view's ctrl+t writes, re-read by the supervisor every sweep) and
+  drops the id it replaced; every tick re-pins a live session that is
+  missing, which heals a running bot without a restart. Doctor: `<bot>: bg
+  session pinned`.
+- **No fork chain; the log says what the id is.** The per-wake `session=`
+  values (`d1329bd4`, `fe30a774`, ...) were the woken WORKER's live roster
+  id; the transcript, the SessionStart hook and the settled roster row stay
+  on the resumed conversation. The launch line is now `bg: id=<short>
+  conversation=<resumed id> worker_session=<live id> ...` and `session_id`
+  keeps the resumed id (recording the worker's would make the next resume
+  miss the roster row and start a copy).
+- **Tick poller = the status verdict.** The tick asked `tg_watchdog.py
+  --probe-only`, which needs the bot token that is deleted after launch and
+  absent from the tick's env, so it always said UNKNOWN. It now uses
+  `Get-PollerVerdict` (bot.pid alive under the recorded claude -> OWNED, the
+  same rule as `status`). A DEAD poller restarts the bot only once its launch
+  is older than `LauncherGraceMin`.
+- **Boot kick-off.** A daemon cold-start after a host reboot
+  (`LastBootUpTime` later than the bot's previous start) seeds the session
+  with `harness.boot_prompt`: by default a telegram bot sends ONE "back
+  online after reboot, <time>, all checks OK / <what failed>" line via
+  `tools/tg/tg_send.py` and carries on. `''` disables it. At most once per
+  boot per bot (`boot_kick_boot` / `boot_kick_at` in `state/<bot>.json`);
+  routine relaunches never kick.
+- **Resume seed.** Every other unattended bg launch (daemon cold-start /
+  restart) seeds `harness.resume_prompt`: one short turn that re-arms the
+  background watchers the bot's rules describe (they die with the old
+  session), picks up an interrupted task or replies "ok"; never a message,
+  never scheduled. `''` disables it. The boot prompt re-arms them too.
+- **Blocked sessions are reported.** A bg job blocked on a login /
+  permission / question logs `BLOCKED: session <id> waits on '<needs>'` in
+  `daemon.log` (once per change); doctor: `<bot>: session not blocked`.
+  "idle - send a prompt to start" is Claude Code's plain idle, not a block.
+- **The pin is BotCorp's own, and checked.** The write is atomic and read
+  back; BotCorp unpins only an id it pinned (`pinned_bg_id`), never the
+  operator's; a pins.json that is not a JSON array of short ids is left
+  alone and FAILs the launch line and doctor ("format may have changed").
+- **`secrets:` reaches the session env** (backport of v0.2.0's scoping,
+  without attestation or the lock mode). `bot.yaml` `secrets:` (default
+  `[oauth_token, telegram_token]`) lists the ONLY vault keys a launch
+  decrypts; each goes into the session env under its fixed name
+  (`CLAUDE_CODE_OAUTH_TOKEN`, `TELEGRAM_BOT_TOKEN`) or its UPPERCASE form.
+  Undeclared vault keys are named in `launches.log`, never valued; the bg
+  `env: OK` line counts and names the injected keys.
+  `automations[].secrets` must be a subset (validation). Doctor: `<bot>:
+  secrets scope`; names-only view of what the running session got: `botcorp
+  status` `secrets env:` and doctor `<bot>: session secrets env`.
+
+Upgrade: check out `v0.1.13`, run `botcorp doctor` (a bot whose automations
+name keys missing from its `secrets:` list is now an invalid bot.yaml, and
+the tick skips an invalid bot), then `botcorp sync <bot>`. The pin and the
+poller verdict need no restart (the next tick pins the running session); new
+`secrets:` keys reach the session only with `botcorp stop <bot>; botcorp
+start <bot>` (a fresh Claude Code daemon). The boot kick-off applies from the
+next reboot.
 
 ## v0.1.12
 

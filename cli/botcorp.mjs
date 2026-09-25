@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -866,6 +866,7 @@ function botStatus(bot) {
     telegram,
     poller_pid: botPidAlive ? botPid : null,
     session_env: alive ? { env: sessionEnv.env, oauth_last4: sessionEnv.oauth, detail: sessionEnv.detail } : null,
+    session_secret_env: alive ? sessionSecretEnvVerdict({ running: alive, launch: sessionLaunchOf(bot, state).launch, declaredEnv: declaredSecretEnv(cfg) }) : null,
     model: cfg ? cfg.model : null,
     vault: vaultLockState(bot),
     harness_version: harnessVersion(),
@@ -878,12 +879,24 @@ function botStatus(bot) {
 // sessionEnvVerdict over the config home's session-env.json / launch-env.json
 // (both last 4 only). `extra` = { vault, machineOauth } when doctor has read them.
 function sessionEnvOf(bot, state, running, telegram, extra = {}) {
+  const launch = sessionLaunchOf(bot, state);
+  const expectTg = telegram && !['FOREIGN', 'NONE'].includes(state && state.poller);
+  return sessionEnvVerdict({ running, rec: launch.rec, launch: launch.launch, lastLauncherPid: (state && state.env_launcher_pid) ?? null, expectTg, ...extra });
+}
+
+// The launch whose env the running session carries: its SessionStart record
+// names the launcher pid, launch-env.json holds what that launch injected.
+function sessionLaunchOf(bot, state) {
   const dir = path.join(configDir(bot), 'botcorp');
   const rec = pickSessionEnvRecord((readJson(path.join(dir, 'session-env.json')) || {}).sessions, state && state.session_id, state && state.started_at);
   const launches = (readJson(path.join(dir, 'launch-env.json')) || {}).launches || {};
-  const launch = rec && rec.launcher_pid ? launches[String(rec.launcher_pid)] || null : null;
-  const expectTg = telegram && !['FOREIGN', 'NONE'].includes(state && state.poller);
-  return sessionEnvVerdict({ running, rec, launch, lastLauncherPid: (state && state.env_launcher_pid) ?? null, expectTg, ...extra });
+  return { rec, launch: rec && rec.launcher_pid ? launches[String(rec.launcher_pid)] || null : null };
+}
+
+// The env names bot.yaml secrets: puts in the session (telegram_token only with the module).
+function declaredSecretEnv(cfg) {
+  if (!cfg || !Array.isArray(cfg.secrets)) return [];
+  return cfg.secrets.map(String).filter((k) => k !== 'telegram_token' || cfg.harness.modules.telegram).map(secretEnvName);
 }
 
 function pct(v) { return v === null || v === undefined ? '?' : `${Math.round(Number(v))}%`; }
@@ -895,6 +908,7 @@ function printStatus(s) {
   if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
   if (s.session_env) out(`  env: ${s.session_env.env}  ${s.session_env.detail}`);
+  if (s.session_secret_env) out(`  secrets env: ${s.session_secret_env.detail.replace(/<bot>/g, s.name)}`);
   out(`  telegram: ${s.telegram ? 'on' : 'off'}  model: ${s.model ?? '?'}  harness: ${s.harness_version ? 'v' + s.harness_version : '?'}`);
   out(`  vault: ${s.vault.mode} v${s.vault.version}${s.vault.locked ? ` LOCKED - botcorp secrets unlock ${s.name}` : ''}`);
   if (s.yaml_error) out(`  bot.yaml: INVALID - ${s.yaml_error}`);
@@ -2191,11 +2205,33 @@ async function cmdDoctor({ flags }) {
       const rawState = botState(bot);
       const alive = sessionAliveVerdict({ running: s.running, state: rawState, paused: fs.existsSync(pausedPath(bot)) });
       add(alive.level, `${bot}: session alive`, `${alive.detail}${alive.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh` : ''}`, 'bots');
+      if (cfg.harness.session !== 'pty') {
+        const bgId = String((rawState && rawState.bg_id) || '');
+        let pins = null; let pinsError = '';
+        const pinsFile = path.join(configDir(bot), 'jobs', 'pins.json');
+        if (fs.existsSync(pinsFile)) {
+          try {
+            const raw = fs.readFileSync(pinsFile, 'utf-8');
+            const j = raw.trim() ? JSON.parse(raw) : [];
+            if (!Array.isArray(j)) pinsError = 'is not a JSON array';
+            else if (!j.every((x) => typeof x === 'string')) pinsError = 'holds something other than short ids';
+            else pins = j;
+          } catch (e) { pinsError = `is not valid JSON (${e.message})`; }
+        }
+        const pv = bgPinVerdict({ running: s.running, bgId, pins, pinsError });
+        add(pv.level, `${bot}: bg session pinned`, pv.detail.replace(/<bot>/g, bot), 'bots');
+        const job = /^[0-9a-f]{6,12}$/.test(bgId) ? readJson(path.join(configDir(bot), 'jobs', bgId, 'state.json')) : null;
+        const bv = bgBlockVerdict({ running: s.running, bgId, job });
+        add(bv.level, `${bot}: session not blocked`, bv.detail, 'bots');
+      }
       // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
       {
         const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };
         const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4 });
         add(v.level, `${bot}: session env`, `${v.env ? `${v.env}: ` : ''}${v.detail}${v.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log: the "bg:" daemon line and the "env:" line)` : ''}`, 'bots');
+        // names only: which vault keys the running session's env holds
+        const se = sessionSecretEnvVerdict({ running: s.running, launch: sessionLaunchOf(bot, botState(bot)).launch, declaredEnv: declaredSecretEnv(cfg) });
+        add(se.level, `${bot}: session secrets env`, se.detail.replace(/<bot>/g, bot), 'bots');
       }
       {
         const v = harnessToolsVerdict(bot);

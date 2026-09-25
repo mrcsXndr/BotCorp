@@ -19,13 +19,18 @@
 #            claude pid is alive. `session: pty`: the launcher shell + its
 #            claude.exe child, or the claude pid, as before. (`harness.service:
 #            manual` = never cold-started by the daemon.) Then the Telegram
-#            poller probe (409 trick, only with the telegram module), decide:
+#            poller, measured like `status` (bot.pid alive under this bot's
+#            claude: Get-PollerVerdict, only with the telegram module); a bg
+#            session is kept pinned (Set-BgPin: Claude Code retires an unpinned
+#            idle one after 60 min) and a session waiting on a login / dialog is
+#            logged BLOCKED (Get-BgBlock). Decide:
 #              not alive                  -> COLD-START (bg: launch.ps1 -Bg with
 #                                             --resume <session id>; pty: pty-host
 #                                             or the visible task)
-#              alive + poller DEAD/STOLEN -> RESTART (idle-gated: breakpoint marker
-#                                             or transcript quiet), same conversation
-#              alive + ALIVE/UNKNOWN      -> nothing
+#              alive + poller DEAD        -> RESTART once the launch is older than
+#                                             LauncherGraceMin (idle-gated: breakpoint
+#                                             marker or transcript quiet)
+#              alive + OWNED/UNKNOWN      -> nothing
 #            then the isolated per-bot ticks (each in its own try/catch, module
 #            gated): usage-limit resume, alert triage, breakpoint roll, board
 #            poll, hub push, and the bot's automations (daemon/automations.ps1).
@@ -35,9 +40,8 @@
 #            (pty bots only; a bg bot always lives under the supervisor and is
 #            SEEN through `claude attach`, never moved).
 #
-# The process record is AUTHORITATIVE over the poller probe: a poller that
-# still answers 409 after the session died is an orphan and must never mask a
-# dead bot. The tick never kills a busy session: unsure => busy => defer.
+# The process record is AUTHORITATIVE over the poller: a poller still running
+# after the session died is an orphan and must never mask a dead bot. The tick never kills a busy session: unsure => busy => defer.
 # Every kill goes through Stop-BotProcessTree (_common.ps1): a pid that is not
 # recorded as ours, or is listed in <rt>/protect.json, is logged and skipped.
 #
@@ -447,6 +451,7 @@ function Invoke-BotTick {
             $row = Find-BgAgent -Agents $agents -BgId $bgId -SessionId $sessionId -BotHome $P.BotHome
             if ($row) {
                 $bgNote = "roster=$($row.id)/$($row.state)"
+                if ("$($row.state)" -in @('done', 'failed')) { $bgNote += $(if ((Get-BgPins -ConfigDir $P.ConfigDir) -contains "$($row.id)") { " (pinned, so not retired for idleness: claude logs $($row.id) says why)" } else { ' (not pinned: Claude Code retires an idle background session after 60 min)' }) }
                 if (Test-BgAgentAlive $row) {
                     $alive = $true
                     try { if (($row.PSObject.Properties.Name -contains 'pid') -and $row.pid) { $claudePid = [int]$row.pid } } catch {}
@@ -458,22 +463,33 @@ function Invoke-BotTick {
     } elseif ($service -eq 'bg') { $bgNote = 'pid alive' }
     if (-not $alive) { $claudePid = 0 }
 
-    # --- poller probe (telegram module only, only while alive) ---------------
+    # --- poller (telegram module only, only while alive) ---------------------
+    # Measured like `status`: bot.pid alive under this bot's claude (Get-PollerVerdict).
     $poller = 'n/a'
     if ($hasTg -and $alive) {
-        $poller = 'UNKNOWN'
-        try {
-            $wd = Join-Path $Harness 'tools\v2\tg_watchdog.py'
-            $a = @($wd, '--config-dir', $P.ConfigDir, '--probe-only')
-            if ($claudePid -gt 0) { $a += @('--claude-pid', "$claudePid") }
-            $r = Invoke-Bounded -Exe $pyExe -Arguments $a -TimeoutSec 90 -Label 'watchdog probe' -Capture -Env (Get-BotEnv -Bot $Bot -Cfg $cfg -Paths $P) -WorkingDirectory $P.BotHome -Bot $Bot
-            $first = (($r.Output -split "`n" | Where-Object { $_.Trim() }) | Select-Object -First 1)
-            if ($first) { $poller = "$first".Trim() }
-        } catch {}
-        if ($poller -notin @('ALIVE', 'DEAD', 'UNKNOWN', 'STOLEN')) { $poller = 'UNKNOWN' }
+        $rec = ''; try { if ($st -and ($st.PSObject.Properties.Name -contains 'poller')) { $rec = "$($st.poller)" } } catch {}
+        $poller = Get-PollerVerdict -BotPidFile (Join-Path $P.ConfigDir 'channels\telegram\bot.pid') -ClaudePid $claudePid -Recorded $rec
     }
 
-    Write-DaemonLog "state: alive=$alive service=$service shellPid=$shellPid claudePid=$claudePid$(if ($service -eq 'bg') { " bg=$bgId $bgNote" }) poller=$poller modules=$(@($cfg._modules) -join ',')" -Bot $Bot
+    # --- bg: pinned (Claude Code retires an unpinned idle session after 60 min) and not blocked ---
+    $blocked = ''
+    if ($service -eq 'bg' -and $alive -and $bgId) {
+        if (-not $ProbeOnly -and -not $DryRun -and ((Get-BgPins -ConfigDir $P.ConfigDir) -notcontains $bgId)) {
+            $prevPin = ''; try { if ($st -and ($st.PSObject.Properties.Name -contains 'pinned_bg_id')) { $prevPin = "$($st.pinned_bg_id)" } } catch {}
+            $pin = Set-BgPin -ConfigDir $P.ConfigDir -BgId $bgId -Replace $prevPin
+            Write-DaemonLog "bg session $bgId was not pinned -> $pin (Claude Code's supervisor retires an unpinned idle background session after 60 min)" -Bot $Bot
+            if ($pin -in @('pinned', 'already')) { $own = Get-BgPinOwner -Result $pin -BgId $bgId -Prev $prevPin; Write-BotState -Bot $Bot -Updates @{ pinned_bg_id = $(if ($own) { $own } else { $null }) } }
+        }
+        $blocked = Get-BgBlock -ConfigDir $P.ConfigDir -BgId $bgId
+        $wasBlocked = ''; try { if ($st -and ($st.PSObject.Properties.Name -contains 'session_blocked') -and $st.session_blocked) { $wasBlocked = "$($st.session_blocked)" } } catch {}
+        if ($blocked -ne $wasBlocked) {
+            if ($blocked) { Write-DaemonLog "BLOCKED: session $bgId waits on '$blocked' - nothing unattended can answer that (claude attach $bgId, or the cockpit)" -Bot $Bot }
+            elseif ($wasBlocked) { Write-DaemonLog "session $bgId no longer blocked (was: '$wasBlocked')" -Bot $Bot }
+            if (-not $ProbeOnly -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ session_blocked = $(if ($blocked) { $blocked } else { $null }) } }
+        }
+    }
+
+    Write-DaemonLog "state: alive=$alive service=$service shellPid=$shellPid claudePid=$claudePid$(if ($service -eq 'bg') { " bg=$bgId $bgNote" }) poller=$poller$(if ($blocked) { " blocked='$blocked'" }) modules=$(@($cfg._modules) -join ',')" -Bot $Bot
 
     if ($alive -and -not $ProbeOnly) {
         $upd = @{ claude_pid = $claudePid; shell_pid = $(if ($shellAlive) { $shellPid } else { $null }); updated_at = (Get-Date).ToString('o'); poller = $poller; status = 'running' }
@@ -483,9 +499,12 @@ function Invoke-BotTick {
     if ($ProbeOnly) { return }
 
     # --- decide -----------------------------------------------------------------
+    # A poller DEAD within the launcher grace may still be connecting: not yet.
+    $startedMin = 1e9
+    try { if ($st -and $st.started_at) { $sa = ConvertTo-UtcTime $st.started_at; if ($sa -ne [datetime]::MinValue) { $startedMin = ((Get-Date).ToUniversalTime() - $sa).TotalMinutes } } } catch {}
     $action = 'none'; $why = ''
     if (-not $alive) { $action = 'cold-start' }
-    elseif ($poller -in @('DEAD', 'STOLEN')) { $action = 'restart' }
+    elseif ($poller -eq 'DEAD' -and $startedMin -ge $LauncherGraceMin) { $action = 'restart' }
 
     if (($action -eq 'cold-start') -and (Test-Path $P.PausedFile)) {
         Write-DaemonLog 'paused (state/<bot>.paused present) - not cold-starting' -Bot $Bot -Quiet

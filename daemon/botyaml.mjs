@@ -38,6 +38,8 @@ export const DEFAULTS = {
     telegram_token_file: false,     // write <config>/channels/telegram/.env (fallback if env inheritance fails)
     debug: false,                   // every launch gets --debug-file <config>/debug/<stamp>.txt (the plugin's stderr included); `botcorp start --debug` for one launch
     bun_path: '',                   // bun.exe for the Telegram plugin when it is neither on PATH nor in %USERPROFILE%\.bun\bin ('' = look there)
+    boot_prompt: null,              // the ONE prompt a daemon cold-start after a host reboot seeds (once per boot): null = BOOT_PROMPT_DEFAULT for a telegram bot, nothing otherwise; '' = off; {boot} / {now} are filled in
+    resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     modules: {
@@ -112,6 +114,8 @@ export function validate(cfg) {
   if (!['bg', 'pty'].includes(cfg.harness.session)) errs.push(`harness.session: bg | pty (got ${cfg.harness.session})`);
   if (typeof cfg.harness.debug !== 'boolean') errs.push(`harness.debug: true | false (got ${JSON.stringify(cfg.harness.debug)})`);
   if (typeof cfg.harness.bun_path !== 'string') errs.push(`harness.bun_path: a path to bun.exe, or '' (got ${JSON.stringify(cfg.harness.bun_path)})`);
+  if (cfg.harness.boot_prompt !== null && typeof cfg.harness.boot_prompt !== 'string') errs.push(`harness.boot_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.boot_prompt)})`);
+  if (cfg.harness.resume_prompt !== null && typeof cfg.harness.resume_prompt !== 'string') errs.push(`harness.resume_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.resume_prompt)})`);
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
     const known = hookNames();
@@ -155,6 +159,39 @@ export function enabledModules(cfg) {
   return mods;
 }
 
+// After a host reboot nothing visible happens until someone prompts the bot, so
+// the first daemon cold-start of a boot seeds ONE prompt (launch.ps1, once per
+// boot per bot). The default asks a Telegram bot for one line to its operator.
+export const BOOT_PROMPT_DEFAULT = 'The host rebooted (at {boot}) and BotCorp restarted this session at {now}. '
+  + 'Send your operator ONE short Telegram line with python tools/tg/tg_send.py: "back online after reboot, {now}", '
+  + 'then "all checks OK" or what failed (python tools/tg/tg_send.py --check, and whatever memory/TDL.md says was in flight). '
+  + 'Re-read your rules and re-arm any background watchers they describe (a background task does not survive a restart). '
+  + 'Then carry on with your normal duties; send nothing else about the reboot.';
+
+// The effective boot prompt: '' = none.
+export function bootPrompt(cfg) {
+  const p = cfg.harness.boot_prompt;
+  if (typeof p === 'string') return p.trim();
+  return cfg.harness.modules.telegram ? BOOT_PROMPT_DEFAULT : '';
+}
+
+// An unattended bg launch with no other seed would come up waiting for "a
+// prompt to start" and do nothing until one arrives, and any background
+// watcher the bot had armed died with the old session (it would stay deaf).
+// It gets this instead: one short turn, never a message. Pinning keeps these
+// launches rare (a restart after a crash or a dead poller), and nothing sends
+// it on a schedule.
+export const RESUME_PROMPT_DEFAULT = 'BotCorp restarted this background session at {now} ({reason}). '
+  + 'Re-read your rules and re-arm any background watchers they describe (a background task does not survive a restart). '
+  + 'If you were in the middle of a task, pick it back up. Otherwise reply with just "ok" and wait for the next message. '
+  + 'Do not message anyone about this restart.';
+
+// The effective resume prompt: '' = none.
+export function resumePrompt(cfg) {
+  const p = cfg.harness.resume_prompt;
+  return typeof p === 'string' ? p.trim() : RESUME_PROMPT_DEFAULT;
+}
+
 function getPath(obj, dotted) {
   return dotted.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
 }
@@ -177,6 +214,8 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || proce
     process.exit(0);
   }
   cfg._modules = enabledModules(cfg);
+  cfg._boot_prompt = bootPrompt(cfg);
+  cfg._resume_prompt = resumePrompt(cfg);
   cfg._errors = errs;
   console.log(JSON.stringify(cfg));
 }
