@@ -3,6 +3,12 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.9
+
+v0.1.8 with its CI green: one v0.1.8 test forced Windows path handling and
+failed on the Linux runner; it now runs on the host's platform. No code
+change. Upgrade: as for v0.1.8, from `v0.1.9`.
+
 ## v0.1.8
 
 Two field failures on the reference host, where a Telegram bot came up with

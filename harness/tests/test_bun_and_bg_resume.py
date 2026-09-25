@@ -22,6 +22,7 @@ Locked behaviour (daemon/_common.ps1 under pwsh, cli/_lib.mjs under node):
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -59,7 +60,8 @@ def fake_home(tmp_path):
     """A profile with bun where its installer puts it, and a PATH without it."""
     home = tmp_path / "home"
     (home / ".bun" / "bin").mkdir(parents=True)
-    (home / ".bun" / "bin" / "bun.exe").write_bytes(b"")
+    for name in ("bun.exe", "bun"):   # the Windows and the POSIX (CI) name
+        (home / ".bun" / "bin" / name).write_bytes(b"")
     nobun = tmp_path / "nobun"
     nobun.mkdir()
     return home, nobun
@@ -91,12 +93,13 @@ def test_doctor_fails_when_the_plugin_command_resolves_nowhere(tmp_path, fake_ho
     home, nobun = fake_home
     other = tmp_path / "other"
     other.mkdir()
-    (other / "bun.exe").write_bytes(b"")
-    base = {"command": "bun", "platform": "win32"}
+    for name in ("bun.exe", "bun"):
+        (other / name).write_bytes(b"")
+    base = {"command": "bun"}   # the host's platform: CI runs this on Linux
     cases = [
         dict(base, pathEnv=str(nobun), userProfile=str(nobun)),                      # nowhere -> FAIL
         dict(base, pathEnv=str(nobun), userProfile=str(home)),                       # install folder -> PASS
-        dict(base, pathEnv=f"{nobun};{other}", userProfile=str(nobun)),              # this shell's PATH only -> WARN
+        dict(base, pathEnv=f"{nobun}{os.pathsep}{other}", userProfile=str(nobun)),   # this shell's PATH only -> WARN
         dict(base, pathEnv=str(nobun), userProfile=str(nobun), override=str(other / "bun.exe")),   # pinned -> PASS
     ]
     got = _node(f"{json.dumps(cases)}.map((c) => {{ const r = m.resolvePluginCommand(c); const v = m.pluginCommandVerdict(c.command, r); return [r.source, v.level, v.detail]; }})")
