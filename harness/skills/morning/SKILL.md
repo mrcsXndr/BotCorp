@@ -8,6 +8,8 @@ allowed-tools: Bash, Read, Glob, Grep, Write
 
 Run before your first meeting of the day.
 
+The Google steps use the bot's own `tools/google/*.sh`: the harness ships no `tools/google/`. If the bot folder has none, skip those steps and say so.
+
 ## Steps
 
 1. **Calendar** — `bash tools/google/calendar.sh today` to list today's events. Highlight recurring meetings the operator has flagged as important (configure in `context/me.md`).

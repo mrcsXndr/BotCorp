@@ -6,6 +6,8 @@ allowed-tools: Bash, Read
 
 # /tasks — Google Tasks Manager
 
+Uses the bot's own `tools/google/gtasks.sh`: the harness ships no `tools/google/`. If the bot folder has none, say so instead of running it.
+
 Usage:
 - `/tasks` — show all open tasks
 - `/tasks add <title>` — add a new task

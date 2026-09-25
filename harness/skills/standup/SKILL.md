@@ -8,6 +8,8 @@ allowed-tools: Bash, Read, Glob, Grep, Write
 
 Run before a recurring standup (daily, three-weekly, whatever cadence applies). Pulls together everything you'd otherwise scramble for in the first five minutes.
 
+The Google sources use the bot's own `tools/google/*.sh`: the harness ships no `tools/google/`. If the bot folder has none, skip them and say so.
+
 ## Steps
 
 1. **Previous meeting notes** — Look for the most recent meeting recap, in whichever store you keep them:
