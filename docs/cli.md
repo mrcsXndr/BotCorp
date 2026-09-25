@@ -372,7 +372,14 @@ when the telegram module is on; when it is off the ids sit in `bot.yaml` and
 `sync` writes them into `access.json` once the module is enabled (the command
 says so). `reject` drops the entry.
 
-### `start <bot> [--fresh]` / `stop <bot>` / `restart <bot> [--fresh]`
+### `start <bot> [--fresh] [--debug]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
+
+`--debug` (bg bots) passes `launch.ps1 -DebugLog`: this one launch runs with
+`--debug-file <config home>/debug/<yyyyMMdd-HHmmss>.txt`, Claude Code's own
+debug log, which carries every MCP server's stderr (`MCP server
+"plugin:telegram:telegram" Server stderr: ...`). `bot.yaml`
+`harness.debug: true` does the same for every launch, the daemon's included
+(the only way for a pty bot). Off by default; the newest 10 logs are kept.
 
 - `start` is a trusted launch path: it mints the launch nonce (attestation,
   `docs/secrets.md`) before spawning, so its launch gets the bot's declared

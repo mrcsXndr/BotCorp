@@ -3,6 +3,14 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.4
+
+v0.2.3 plus the v0.1.6 release below: `botcorp start|restart <bot> --debug`
+or `bot.yaml` `harness.debug: true` writes a Claude Code debug log (the
+plugin's stderr included) to `<config home>/debug/`, and `docs/daemon.md`
+records where a `--bg` session's env and the plugin's stderr go. Upgrading:
+check out `v0.2.4`; nothing to migrate.
+
 ## v0.2.3
 
 v0.2.2 plus the v0.1.5 hotfix below: a `claude --bg` session now gets the
@@ -117,6 +125,29 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.6
+
+- **Opt-in debug log for a launch.** `botcorp start <bot> --debug` /
+  `restart --debug` (bg bots), or `bot.yaml` `harness.debug: true` for every
+  launch (the daemon's and pty bots' included), runs the session with
+  `--debug-file <config home>/debug/<stamp>.txt`. Claude Code's debug log
+  carries every MCP server's stderr, so a Telegram poller that never came up
+  says why (`MCP server "plugin:telegram:telegram" Server stderr: telegram
+  channel: TELEGRAM_BOT_TOKEN required`). Off by default; the newest 10 are
+  kept; `launches.log` names the file. Doctor's `telegram channel running`
+  fix hint now says `botcorp start <bot> --debug`.
+- **docs/daemon.md: where the env goes.** The daemon's per-session dispatch
+  record (`daemon/roster.json`, `jobs/<id>/state.json` `providerEnv`) forwards
+  only an allowlist of provider / model routing variables from the client;
+  tokens and `BOT_*` are dropped, so it is not a hand-off path.
+  `session-env/<session id>/` is the SessionStart hooks' `CLAUDE_ENV_FILE`
+  directory for the Bash tool. The plugin's stderr is also kept outside the
+  config home, in `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
+  slug>\mcp-logs-plugin-telegram-telegram\`.
+
+Upgrade: check out `v0.1.6`; nothing to migrate (the v0.1.5 steps still
+apply if you skipped that release).
 
 ## v0.1.5
 

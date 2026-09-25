@@ -36,6 +36,7 @@ export const DEFAULTS = {
     session: 'bg',                  // bg (claude --bg background session, attach to view; docs/host-service.md) | pty (inside daemon/pty-host.mjs)
     git_pull: false,                // bounded `git pull` of the BOT repo at launch
     telegram_token_file: false,     // write <config>/channels/telegram/.env (fallback if env inheritance fails)
+    debug: false,                   // every launch gets --debug-file <config>/debug/<stamp>.txt (the plugin's stderr included); `botcorp start --debug` for one launch
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     modules: {
@@ -108,6 +109,7 @@ export function validate(cfg) {
   if (!['stable', 'pinned'].includes(cfg.harness.channel)) errs.push(`harness.channel: stable | pinned`);
   if (!['daemon', 'manual'].includes(cfg.harness.service)) errs.push(`harness.service: daemon | manual (got ${cfg.harness.service})`);
   if (!['bg', 'pty'].includes(cfg.harness.session)) errs.push(`harness.session: bg | pty (got ${cfg.harness.session})`);
+  if (typeof cfg.harness.debug !== 'boolean') errs.push(`harness.debug: true | false (got ${JSON.stringify(cfg.harness.debug)})`);
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
     const known = hookNames();

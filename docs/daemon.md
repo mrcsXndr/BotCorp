@@ -132,6 +132,23 @@ client holds it. Hence, before `claude --bg`, `launch.ps1 -Bg`:
   and a `WARN ... inherits the DAEMON's env` line; `botcorp stop <bot>` stops
   every session of the bot, after which the next start is clean.
 
+Not a way round it: the per-session dispatch record the daemon keeps
+(`<config home>/daemon/roster.json` `workers.<id>.dispatch.env`, mirrored in
+`jobs/<id>/state.json` `providerEnv`) forwards only a fixed allowlist of
+provider / model routing variables from the client (`CLAUDE_CONFIG_DIR`,
+`ANTHROPIC_MODEL`, `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`,
+`CLAUDE_CODE_SUBAGENT_MODEL`, `CLAUDE_CODE_USE_BEDROCK` / `_VERTEX`,
+`AWS_REGION`, `CLOUD_ML_REGION` were seen); `TELEGRAM_BOT_TOKEN`,
+`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_BASE_URL`, `HTTPS_PROXY` and any
+`BOT_*` are dropped. `session-env/<session id>/` is the `CLAUDE_ENV_FILE`
+directory SessionStart hooks may write `VAR=value` lines into for the Bash
+tool; it is empty for our sessions and never reaches an MCP server.
+
+The plugin's stderr lands in `%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
+slug>\mcp-logs-plugin-telegram-telegram\<start time>.jsonl` (outside the config
+home), and in the session's debug log when `harness.debug` / `botcorp start
+--debug` is on (`<config home>/debug/`).
+
 After the launch it waits up to 30 s for the poller (`bot.pid` alive under
 the new claude) and records `poller: OWNED` or `DEAD` in `state/<bot>.json`.
 With `harness.telegram_token_file: true` the ACL'd `channels/telegram/.env` is

@@ -730,7 +730,7 @@ function mintLaunchNonce(bot) {
   return nonce;
 }
 
-async function startBot(bot, fresh) {
+async function startBot(bot, fresh, debug = false) {
   // The daemon skips cold-starting a paused bot; an explicit start un-pauses it.
   try { fs.unlinkSync(pausedPath(bot)); } catch {}
   const lock = vaultLockState(bot);
@@ -738,7 +738,7 @@ async function startBot(bot, fresh) {
   if (sessionKind(bot) === 'bg') {
     const st = botState(bot);
     if (st.bg_id && pidAlive(Number(st.claude_pid))) fail(`${bot} is already running (background session ${st.bg_id}, pid ${st.claude_pid}); use restart`);
-    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : [])];
+    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : []), ...(debug ? ['-DebugLog'] : [])];
     const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000, env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
     for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
     if (r.code !== 0) fail(`start: launch.ps1 -Bg exited ${r.code}`);
@@ -748,6 +748,7 @@ async function startBot(bot, fresh) {
   }
   const live = ptyLive(bot);
   if (live) fail(`${bot} is already running (pty host pid ${live.pid}, pty pid ${live.ptyPid}); use restart`);
+  if (debug) out('start: --debug applies to bg bots; a pty bot takes bot.yaml harness.debug: true (botcorp config set <bot> harness.debug true)');
   // pty-host passes its environment to the pwsh running launch.ps1 inside the pty.
   const pid = spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, fresh ? '--fresh' : '--continue'], { env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
   const deadline = Date.now() + 10_000;
@@ -798,7 +799,7 @@ function stopBot(bot) {
   return before;
 }
 
-async function cmdStart({ pos, flags }) { return startBot(requireBot(pos[1]), !!flags.fresh); }
+async function cmdStart({ pos, flags }) { return startBot(requireBot(pos[1]), !!flags.fresh, !!flags.debug); }
 async function cmdStop({ pos }) { stopBot(requireBot(pos[1])); return 0; }
 
 async function cmdRestart({ pos, flags }) {
@@ -816,7 +817,7 @@ async function cmdRestart({ pos, flags }) {
     fs.writeFileSync(marker, new Date().toISOString() + '\n');
     out(`restart: fresh marker ${marker}`);
   }
-  return startBot(bot, !!flags.fresh);
+  return startBot(bot, !!flags.fresh, !!flags.debug);
 }
 
 // ---- status -----------------------------------------------------------------------------
@@ -2135,7 +2136,7 @@ async function cmdDoctor({ flags }) {
           const sid = botState(bot).session_id || null;
           const why = telegramMcpLastError(bot, sid);
           const said = !why ? ` - no plugin MCP log for session ${sid || '?'} (the plugin never started: /mcp in \`claude attach\` shows it)` : why.error ? ` - the plugin said: "${why.error}"` : '';
-          add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${said}. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log shows the daemon and poller lines)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
+          add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${said}. Fix: botcorp stop ${bot}; botcorp start ${bot} --debug (launches.log shows the daemon and poller lines, .claude-${bot}/debug/ the session's own log)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
         }
       }
       // the backup module makes the folder a repo; then the vault and the config home must be ignored THERE
@@ -2208,7 +2209,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   pair <bot> <senderId> | pair <bot> --list [--json] | pair <bot> --deny <senderId>
   config get <bot> [<dotted.path>] [--json] | config set <bot> <dotted.path> <value>
   approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>
-  start <bot> [--fresh] | stop <bot> | restart <bot> [--fresh]
+  start <bot> [--fresh] [--debug] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check

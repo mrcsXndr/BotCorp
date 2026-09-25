@@ -21,6 +21,7 @@ harness:
   service: daemon                 # daemon = the BotCorp daemon supervises this bot (cold-start, liveness, heal) | manual = only the cockpit/CLI starts it
   git_pull: false                 # bounded `git pull` of THIS bot's repo at launch (memory sync across machines)
   telegram_token_file: false      # fallback: also write <config>/channels/telegram/.env (ACL'd), deleted once the plugin read it
+  debug: false                    # every launch writes a Claude Code debug log to <config>/debug/ (plugin stderr included); one launch: botcorp start --debug
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
   hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
