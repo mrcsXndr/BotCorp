@@ -141,7 +141,16 @@ export function validate(cfg) {
   for (const [i, a] of (Array.isArray(cfg.automations) ? cfg.automations : []).entries()) {
     if (!a || typeof a !== 'object') { errs.push(`automations[${i}]: must be a mapping`); continue; }
     if (!a.name || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(a.name)) errs.push(`automations[${i}].name: slug required`);
-    if (!a.command) errs.push(`automations[${i}].command: required`);
+    // kind: command (the default: a shell command) | prompt (typed into the bot's live session; docs/automations.md)
+    const kind = a.kind === undefined ? 'command' : a.kind;
+    if (!['command', 'prompt'].includes(kind)) errs.push(`automations[${i}].kind: command | prompt (got ${JSON.stringify(a.kind)})`);
+    else if (kind === 'prompt') {
+      if (typeof a.prompt !== 'string' || !a.prompt.trim()) errs.push(`automations[${i}].prompt: required for kind: prompt (the text typed into the session)`);
+      if (a.command !== undefined) errs.push(`automations[${i}].command: not allowed with kind: prompt (a prompt automation runs no command)`);
+    } else {
+      if (!a.command) errs.push(`automations[${i}].command: required`);
+      if (a.prompt !== undefined) errs.push(`automations[${i}].prompt: only with kind: prompt`);
+    }
     const t = a.trigger || {};
     if (!t.cron && !t.interval_min && !t.event) errs.push(`automations[${i}].trigger: cron | interval_min | event required`);
     if (a.secrets !== undefined) {
