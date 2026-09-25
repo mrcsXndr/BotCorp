@@ -443,7 +443,7 @@ context window` (the value, where it comes from, the machine-wide value it
 overrides; WARN on a stale settings.json or a running session started with
 another value).
 `harness.resume_prompt` is the short turn every other unattended bg launch
-(daemon cold-start / restart) seeds instead: `null` = re-arm the watchers the
+(daemon cold-start / restart, `botcorp start|restart`) seeds instead: `null` = re-arm the watchers the
 rules describe, pick up an interrupted task, else reply "ok"; `''` = off
 (docs/daemon.md, "Resume seed").
 

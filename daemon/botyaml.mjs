@@ -40,7 +40,7 @@ export const DEFAULTS = {
     bun_path: '',                   // bun.exe for the Telegram plugin when it is neither on PATH nor in %USERPROFILE%\.bun\bin ('' = look there)
     boot_prompt: null,              // the ONE prompt a daemon cold-start after a host reboot seeds (once per boot): null = BOOT_PROMPT_DEFAULT for a telegram bot, nothing otherwise; '' = off; {boot} / {now} are filled in
     context_window: '70%',          // auto-compact window: 'N%' of the model's context window, an integer token count (100000-1000000), or 'auto' (Claude Code's own); resolveContextWindow
-    resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
+    resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart, botcorp start|restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     modules: {
