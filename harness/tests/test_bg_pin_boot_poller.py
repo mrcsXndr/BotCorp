@@ -274,7 +274,8 @@ def test_the_tick_logs_the_measured_poller(repo_bot, fake_claude):
 def test_a_real_tick_pins_a_live_unpinned_session_and_logs_blocked(repo_bot, fake_claude, tmp_path):
     name, home, rt, env = repo_bot
     claude_pid, _ = fake_claude
-    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n", encoding="utf-8")
+    # janitor off: a real tick would otherwise run resource_monitor.ps1 -Clean on this box
+    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n    janitor: false\n", encoding="utf-8")
     jobs = home / f".claude-{name}" / "jobs"
     (jobs / "abc123").mkdir(parents=True)
     (jobs / "pins.json").write_text('["0ther1"]', encoding="utf-8")

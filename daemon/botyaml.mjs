@@ -45,7 +45,7 @@ export const DEFAULTS = {
     hooks_disable: [],
     modules: {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
-      alert_triage: false, hub: false, janitor: true, remote_control: false,
+      alert_triage: false, hub: false, janitor: true /* | 'report' */, remote_control: false,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true,
     },
@@ -130,6 +130,7 @@ export function validate(cfg) {
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
   if (!isObj(cfg.vault) || !(cfg.vault.lock === null || ['none', 'operator'].includes(cfg.vault.lock))) errs.push(`vault.lock: none | operator (null = the host default; got ${JSON.stringify(cfg.vault && cfg.vault.lock)})`);
   if (!isObj(cfg.harness.modules)) errs.push('harness.modules: must be a mapping');
+  else if (![true, false, 'report'].includes(cfg.harness.modules.janitor)) errs.push(`harness.modules.janitor: true | false | report (got ${JSON.stringify(cfg.harness.modules.janitor)})`);
   if (!['pairing', 'allowlist', 'disabled'].includes(cfg.integrations.telegram.dm_policy)) errs.push('integrations.telegram.dm_policy: pairing | allowlist | disabled');
   if (!Array.isArray(cfg.integrations.telegram.allow_from)) errs.push('integrations.telegram.allow_from: must be a list of ids');
   if (!Array.isArray(cfg.integrations.cloudflare.workers)) errs.push('integrations.cloudflare.workers: must be a list of Worker names');
@@ -154,9 +155,10 @@ export function validate(cfg) {
 
 // Comma list of enabled module names -> BOT_MODULES for the launcher. `backup`
 // is a module too, switched by backup.git_remote rather than a boolean, so an
-// automation gated `module: backup` sees it here.
+// automation gated `module: backup` sees it here. `janitor: report` is on too
+// (the tick runs it without -Clean).
 export function enabledModules(cfg) {
-  const mods = Object.entries(cfg.harness.modules).filter(([, v]) => v === true).map(([k]) => k);
+  const mods = Object.entries(cfg.harness.modules).filter(([k, v]) => v === true || (k === 'janitor' && v === 'report')).map(([k]) => k);
   if (cfg.backup && cfg.backup.git_remote) mods.push('backup');
   return mods;
 }

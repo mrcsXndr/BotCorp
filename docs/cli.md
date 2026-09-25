@@ -116,6 +116,19 @@ automation gated by `module: backup` (the module counts as enabled exactly
 when `git_remote` is set; `daemon/botyaml.mjs enabledModules` adds `backup`
 to `BOT_MODULES` then).
 
+Between backups, the `auto_commit` Stop hook pushes too, once `backup` is in
+the session's `BOT_MODULES` (a launch after `git_remote` was set): it commits
+anything uncommitted, then, if the bot folder's OWN repo (a `.git` in
+`bots/<bot>/`) has commits on no `origin` ref, runs `git push origin
+HEAD:<branch>` in the background with `GIT_TERMINAL_PROMPT=0`,
+`GCM_INTERACTIVE=never`, `credential.interactive=never` and a 60 s bound, so
+the hook returns at once. It also runs on a clean tree, so a failed push is
+retried on the next Stop. No origin = no push (`botcorp backup <bot>` adds
+it). Each attempt appends `<ts> push <branch> ahead=<n> rc=<exit>` to
+`<BOTCORP_HOME>/state/<bot>/push.log`; doctor's `<bot>: unpushed commits`
+reads it. A bot without `backup.git_remote` is untouched: commits stay
+local, as before.
+
 ### `adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]`
 
 Copies a hand-grown bot folder into `bots/<name>/` and syncs it. Refuses if
@@ -568,11 +581,12 @@ the `git push` and `gh pr create --label suggest --label bot:<bot>` commands
 it would run next and runs neither. `--dry-run` prints everything and creates
 nothing.
 
-### `doctor [--json] [--host]`
+### `doctor [--json] [--host] [--no-accounts] [--no-tg-probe]`
 
 One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
 `[core]`, `[bots]`, `[cockpit]`, `[host]` headings; exit 1 on any `FAIL`.
-`--host` runs only the host group.
+`--host` runs only the host group. `--no-accounts` skips the live account
+logins, `--no-tg-probe` the Telegram slot probe.
 
 - `claude --version` >= `botcorp.json.minClaudeCode`, node >= 20, python
   >= 3.11, pwsh >= 7, git present;
@@ -647,7 +661,27 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   from its MCP log (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
   slug>\mcp-logs-plugin-telegram-telegram`, e.g. `TELEGRAM_BOT_TOKEN
   required`) and `botcorp stop <bot>; botcorp start <bot>` as the fix, INFO
-  when the bot is not running; bg bots: `<bot>: bg session pinned` - the
+  when the bot is not running; `<bot>: foreign telegram owner-lock` - an
+  owner-lock a launcher OUTSIDE BotCorp keeps in the bot folder
+  (`host/.run/tg_owner.lock`, `.claude/.tg_owner.lock`; BotCorp's own lock is
+  in the config home and cannot see these): FAIL when it names a live pid (a
+  second launcher can start a second poller for the token), WARN when stale,
+  PASS when absent; `<bot>: telegram slot` - when this bot's own poller is
+  NOT the holder (not running, or `DEAD` / `FOREIGN` / `UNKNOWN`), up to 4
+  `getUpdates?timeout=0&limit=1` probes 2 s apart, run inside the vault by
+  `secrets.ps1 -Action tg-probe` (one audited decrypt, reason `doctor`; it
+  prints only the HTTP codes) with the vault token (no
+  offset: nothing queued is confirmed or dropped; the token never leaves the
+  request URL): FAIL on any 409 (another process polls the token) or a
+  rejected token, PASS when every probe answers 200, WARN when it could not
+  tell, INFO `not probed` while the bot's own poller is `OWNED` (a 409 would
+  say nothing there) or with `--no-tg-probe`; with `backup.git_remote` set:
+  `<bot>: unpushed commits` - commits in the bot folder's repo that are on no
+  `origin` ref (local remote-tracking refs, no fetch) with the newest
+  `<BOTCORP_HOME>/state/<bot>/push.log` line: PASS at 0, WARN when some are
+  younger than 24 h (the auto-commit hook pushes on the next Stop), FAIL when
+  the oldest is 24 h or more; WARN for no repo / no origin (`botcorp backup
+  <bot>`), a detached HEAD, or an origin other than `backup.git_remote`; bg bots: `<bot>: bg session pinned` - the
   recorded `bg_id` is in `<config home>/jobs/pins.json` (FAIL: unpinned, Claude
   Code retires an idle bg session after 60 min; the next daemon tick pins it)
   and `<bot>: session not blocked` - its `jobs/<bg_id>/state.json` is not

@@ -6,6 +6,7 @@
 #   secrets.ps1 -Bot <name> -Action delete -Key <key>
 #   secrets.ps1 -Bot <name> -Action get    -Key <key> -Nonce <launch nonce> # plaintext to stdout: an ATTESTED launcher only
 #   secrets.ps1 -Bot <name> -Action doctor [-Json]                          # acl + one audited decrypt probe + lock state
+#   secrets.ps1 -Bot <name> -Action tg-probe                                # getUpdates 409 probe with telegram_token; prints codes only
 #   secrets.ps1 -Bot <name> -Action acl                                     # re-apply the vault ACL
 #   secrets.ps1 -Bot <name> -Action migrate                                 # v1 (bot-name entropy) -> v2 (per-bot key)
 #   secrets.ps1 -Bot <name> -Action lock                                    # passphrase on stdin -> operator lock; already locked: re-lock now
@@ -24,7 +25,7 @@
 
 param(
     [Parameter(Mandatory)][string]$Bot,
-    [Parameter(Mandatory)][ValidateSet('set','get','list','delete','doctor','acl','lock-state','migrate','lock','unlock','export-bundle','import-bundle')][string]$Action,
+    [Parameter(Mandatory)][ValidateSet('set','get','list','delete','doctor','tg-probe','acl','lock-state','migrate','lock','unlock','export-bundle','import-bundle')][string]$Action,
     [string]$Key,
     [switch]$FromStdin,
     [switch]$Json,
@@ -37,7 +38,8 @@ param(
     [switch]$DryRun,
     [switch]$AllowHome,
     [switch]$Force,
-    [switch]$Permanent
+    [switch]$Permanent,
+    [string]$TgApiBase
 )
 
 $ErrorActionPreference = 'Stop'
@@ -136,6 +138,42 @@ try {
             $r = [ordered]@{ acl = $acl; probe = $probe; lock = $lock; keys = $keys }
             if ($Json) { Write-Output (ConvertTo-Json -InputObject $r -Depth 4 -Compress) }
             else { Write-Output "acl: $($acl.detail)"; Write-Output "probe: $($probe.detail)"; Write-Output "lock: $($lock.mode) v$($lock.version) $(if ($lock.locked) { 'LOCKED' } else { 'unlocked' }) - $($lock.detail)" }
+        }
+        'tg-probe' {
+            # doctor `<bot>: telegram slot`: the getUpdates-409 probe runs HERE,
+            # so the token never leaves this process (one audited decrypt, reason
+            # doctor; no launch nonce is minted). Up to 4 calls 2 s apart,
+            # timeout=0&limit=1 and NO offset (nothing queued is confirmed or
+            # dropped), stopping at the first 409. Prints {"codes":[...]} or
+            # {"skipped":"..."}; never the token. -TgApiBase is for tests and
+            # takes only a loopback http URL.
+            $base = 'https://api.telegram.org'
+            if ($TgApiBase) {
+                if ($TgApiBase -notmatch '^http://127\.0\.0\.1:[0-9]{1,5}$') { Write-Error 'secrets tg-probe: -TgApiBase must be http://127.0.0.1:<port>'; exit 1 }
+                $base = $TgApiBase
+            }
+            $out = [ordered]@{}
+            if ((Get-VaultLockState -BotHome $botHome -Bot $Bot).locked) { $out.skipped = 'vault locked' }
+            else {
+                $tok = Get-VaultSecret -BotHome $botHome -Bot $Bot -Key 'telegram_token' -Reason 'doctor'
+                if ($null -eq $tok) { $out.skipped = 'no telegram_token in the vault' }
+                else {
+                    $codes = @()
+                    $http = [System.Net.Http.HttpClient]::new()
+                    $http.Timeout = [TimeSpan]::FromSeconds(10)
+                    try {
+                        for ($i = 0; $i -lt 4; $i++) {
+                            $c = 0
+                            try { $resp = $http.GetAsync("$base/bot$tok/getUpdates?timeout=0&limit=1").GetAwaiter().GetResult(); $c = [int]$resp.StatusCode; $resp.Dispose() } catch { $c = 0 }
+                            $codes += $c
+                            if ($c -eq 409) { break }
+                            if ($i -lt 3) { Start-Sleep -Seconds 2 }
+                        }
+                    } finally { $http.Dispose(); $tok = $null }
+                    $out.codes = @($codes)
+                }
+            }
+            Write-Output (ConvertTo-Json -InputObject $out -Compress)
         }
         'lock-state' {
             # Lock state only (`botcorp status`): unwraps the key at most, never

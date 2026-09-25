@@ -236,17 +236,28 @@ function Invoke-Janitor {
     # harness/tools/infra/resource_monitor.ps1 -Clean, once a day per bot with
     # the janitor module (it is BOT_HOME/CLAUDE_CONFIG_DIR-parametrised, so it
     # prunes each bot's own transcripts and reaps only bot-spawned strays).
+    # `janitor: report` runs the same scan WITHOUT -Clean and logs what it found.
     param([string]$Bot, $Cfg, [hashtable]$Paths, [switch]$AsDryRun)
     try {
         $jan = Join-Path $Harness 'tools\infra\resource_monitor.ps1'
         if (-not (Test-Path $jan)) { return }
+        $mode = 'clean'; try { $mode = Get-JanitorMode $Cfg.harness.modules.janitor } catch {}
+        if ($mode -eq 'off') { return }
         $st = Read-BotState -Bot $Bot
         $last = $null; try { if ($st -and ($st.PSObject.Properties.Name -contains 'janitor_at')) { $last = $st.janitor_at } } catch {}
         if ($last) { $t = [datetime]::MinValue; if ([datetime]::TryParse("$last", [ref]$t) -and (((Get-Date) - $t).TotalHours -lt 23)) { return } }
-        if ($AsDryRun) { Write-DaemonLog 'DRYRUN would run janitor' -Bot $Bot; return }
+        if ($AsDryRun) { Write-DaemonLog "DRYRUN would run janitor ($mode)" -Bot $Bot; return }
         Write-BotState -Bot $Bot -Updates @{ janitor_at = (Get-Date).ToString('o') }
-        $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $jan, '-Clean') -TimeoutSec 300 -Label 'janitor' -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
-        Write-DaemonLog "janitor: exit=$($r.ExitCode)" -Bot $Bot
+        $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments (Get-JanitorArgs -Script $jan -Mode $mode) -TimeoutSec 300 -Label 'janitor' -Capture:($mode -eq 'report') -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
+        if ($mode -eq 'report') {
+            $found = ''
+            try {
+                $j = ("$($r.Output)" -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1) | ConvertFrom-Json
+                $cats = @($j.issues | ForEach-Object { "$($_.cat)" } | Where-Object { $_ } | Select-Object -Unique)
+                $found = " worst=$($j.worst_severity) issues=$($j.issue_count)$(if ($cats.Count) { ': ' + ($cats -join ', ') })"
+            } catch { $found = ' (no summary)' }
+            Write-DaemonLog "janitor: report-only, nothing touched, exit=$($r.ExitCode)$found" -Bot $Bot
+        } else { Write-DaemonLog "janitor: exit=$($r.ExitCode)" -Bot $Bot }
     } catch { Write-DaemonLog "janitor: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 

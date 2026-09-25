@@ -386,6 +386,7 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                         board: gh_projects.py poll -> tg_send.py per queued card
                         hub:   tools/infra/hub_push.py when present
                         janitor: tools/infra/resource_monitor.ps1 -Clean once a day per bot
+                                 (janitor: report -> the same scan WITHOUT -Clean; the log line names what it found)
                         automations: daemon/automations.ps1 -Bot <name> (always)
   act                   start cap: MaxStartsPerWindow (3) ACTION=START lines per WindowMin (30) in logs/<bot>/daemon.log
                         restart:    busy -> deferred; else spawn restart.ps1 -Bot -OldPid -OldShellPid, then

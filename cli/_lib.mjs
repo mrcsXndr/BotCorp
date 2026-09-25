@@ -225,6 +225,60 @@ export function contextWindowVerdict({ resolved, settingsValue, machineEnv = '',
   return { level: 'PASS', detail: shape };
 }
 
+// doctor `<bot>: unpushed commits`: with backup.git_remote set, the auto-commit
+// hook pushes the bot folder's own repo to origin on every Stop (a failed push is
+// retried on the next one), so commits that are not on any origin ref are work
+// that lives on this machine only. `ahead` / `oldest` come from the local
+// remote-tracking refs (no fetch), `lastPush` is the newest push.log line.
+export function unpushedVerdict({ remote, hasGit, origin = '', branch = '', ahead = null, oldest = '', lastPush = '', autoCommit = true, now = Date.now() }) {
+  if (!remote) return null;
+  const norm = (u) => String(u || '').trim().replace(/\/+$/, '').replace(/\.git$/i, '').toLowerCase();
+  if (!hasGit) return { level: 'WARN', detail: `backup.git_remote is set but bots/<bot> is not a git repo yet, so nothing is pushed: botcorp backup <bot>` };
+  if (!origin) return { level: 'WARN', detail: `no origin remote, so the auto-commit hook has nowhere to push: botcorp backup <bot> adds ${remote}` };
+  const mismatch = norm(origin) !== norm(remote) ? `; origin is ${origin}, not backup.git_remote ${remote} (the hook pushes to origin)` : '';
+  if (!branch) return { level: 'WARN', detail: `HEAD is detached, so the hook does not push${mismatch}` };
+  if (ahead === null) return { level: 'WARN', detail: `could not count unpushed commits on ${branch}${mismatch}` };
+  const last = lastPush ? `; last push: ${lastPush}` : '; no push recorded yet';
+  const how = autoCommit ? 'the auto-commit hook pushes on the next Stop' : 'auto_commit is off, so only botcorp backup <bot> pushes';
+  if (ahead === 0) return { level: mismatch ? 'WARN' : 'PASS', detail: `0 on ${branch} (origin has everything)${mismatch}${last}` };
+  const t = Date.parse(oldest);
+  const ageMs = Number.isFinite(t) ? now - t : NaN;
+  const age = Number.isFinite(ageMs) ? `, oldest ${humanAge(ageMs)} old` : '';
+  const level = Number.isFinite(ageMs) && ageMs >= 24 * 3600_000 ? 'FAIL' : 'WARN';
+  return { level, detail: `${ahead} commit(s) on ${branch} exist only on this machine${age} (${how})${mismatch}${last}` };
+}
+
+// doctor `<bot>: foreign telegram owner-lock`: owner-locks a launcher OUTSIDE
+// BotCorp keeps in the bot folder (a standalone host mode's host/.run/, a
+// pre-BotCorp bot's .claude/). BotCorp's own lock lives in the config home and
+// never sees these, so a live one means a second launcher can start a second
+// poller for the same token.
+export const FOREIGN_TG_LOCKS = ['host/.run/tg_owner.lock', '.claude/.tg_owner.lock'];
+export function foreignTgLockVerdict(locks = []) {
+  const live = locks.filter((l) => l.alive);
+  if (live.length) return { level: 'FAIL', detail: `${live.map((l) => `${l.rel} names live pid ${l.pid}`).join('; ')}: a launcher outside BotCorp owns this bot's poller. Stop it and its scheduled task before botcorp start <bot>, or two pollers fight over one getUpdates slot` };
+  if (locks.length) return { level: 'WARN', detail: `${locks.map((l) => `${l.rel} (pid ${l.pid || '?'} dead)`).join('; ')}: stale; delete it once that launcher is retired, or it may come back` };
+  return { level: 'PASS', detail: `none (${FOREIGN_TG_LOCKS.join(', ')})` };
+}
+
+// doctor `<bot>: telegram slot`: Telegram answers getUpdates with 409 while
+// another getUpdates holds the bot's slot. Probed only when this bot's own
+// poller is NOT the holder (a 409 then says nothing, and the probe would
+// interrupt a long-poll the plugin would have to retry): not running, or
+// running with a DEAD / FOREIGN / UNKNOWN poller.
+export function tgSlotVerdict({ ownPoller = null, codes = null, skipped = '' }) {
+  if (ownPoller === 'OWNED') return { level: 'INFO', detail: 'not probed: this bot\'s own poller holds the slot' };
+  if (skipped) return { level: 'INFO', detail: `not probed: ${skipped}` };
+  const c = Array.isArray(codes) ? codes : [];
+  const state = ownPoller ? `this bot's poller is ${ownPoller}` : 'this bot is not running';
+  const n409 = c.filter((x) => x === 409).length;
+  if (n409) return { level: 'FAIL', detail: `getUpdates answered 409 on ${n409} of ${c.length} probe(s) while ${state}: another process polls this token (a standalone launcher, another host, a stray claude --channels). Stop it before botcorp start <bot>` };
+  if (c.includes(401) || c.includes(404)) return { level: 'FAIL', detail: `Telegram rejected the token (${c.find((x) => x === 401 || x === 404)}): botcorp secrets set <bot> telegram` };
+  if (c.length && c.every((x) => x === 200)) return { level: 'PASS', detail: `free: ${c.length} probe(s), no 409 (${state})` };
+  return { level: 'WARN', detail: `could not tell (${c.length ? `answers ${c.map((x) => x || 'network error').join(', ')}` : 'no probe ran'})` };
+}
+// (the probe itself is `secrets.ps1 -Action tg-probe`: the token never leaves the vault)
+
 // daemon/_common.ps1 Get-SecretEnvName, the same rule.
 export function secretEnvName(key) {
   return key === 'oauth_token' ? 'CLAUDE_CODE_OAUTH_TOKEN' : key === 'telegram_token' ? 'TELEGRAM_BOT_TOKEN' : String(key).toUpperCase();
