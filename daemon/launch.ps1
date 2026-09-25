@@ -3,7 +3,7 @@
 # task, and the pty-host (which runs this script inside the ConPTY).
 #
 #   pwsh -NoProfile -File daemon/launch.ps1 -Bot <name> [-Continue|-Fresh] [-Bg] [-Force]
-#        [-StartedBy manual|daemon-cold|daemon-restart|pty|visible] [-InPty] [-DebugLog] [-DryRun] [-- <claude args>]
+#        [-StartedBy manual|cli|daemon-cold|daemon-restart|pty|visible] [-InPty] [-DebugLog] [-DryRun] [-- <claude args>]
 #   -DebugLog  this launch writes a Claude Code debug log to <config>/debug/ (bot.yaml harness.debug: every launch)
 #
 # Two shapes, picked by -Bg (the daemon passes it for `harness.session: bg`,
