@@ -39,6 +39,7 @@ export const DEFAULTS = {
     debug: false,                   // every launch gets --debug-file <config>/debug/<stamp>.txt (the plugin's stderr included); `botcorp start --debug` for one launch
     bun_path: '',                   // bun.exe for the Telegram plugin when it is neither on PATH nor in %USERPROFILE%\.bun\bin ('' = look there)
     boot_prompt: null,              // the ONE prompt a daemon cold-start after a host reboot seeds (once per boot): null = BOOT_PROMPT_DEFAULT for a telegram bot, nothing otherwise; '' = off; {boot} / {now} are filled in
+    context_window: '70%',          // auto-compact window: 'N%' of the model's context window, an integer token count (100000-1000000), or 'auto' (Claude Code's own); resolveContextWindow
     resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
@@ -111,6 +112,7 @@ export function validate(cfg) {
   if (typeof cfg.harness.debug !== 'boolean') errs.push(`harness.debug: true | false (got ${JSON.stringify(cfg.harness.debug)})`);
   if (typeof cfg.harness.bun_path !== 'string') errs.push(`harness.bun_path: a path to bun.exe, or '' (got ${JSON.stringify(cfg.harness.bun_path)})`);
   if (cfg.harness.boot_prompt !== null && typeof cfg.harness.boot_prompt !== 'string') errs.push(`harness.boot_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.boot_prompt)})`);
+  { const cw = resolveContextWindow(cfg); if (cw.error) errs.push(`harness.context_window: ${cw.error}`); }
   if (cfg.harness.resume_prompt !== null && typeof cfg.harness.resume_prompt !== 'string') errs.push(`harness.resume_prompt: a prompt, '' (off) or null (the default) (got ${JSON.stringify(cfg.harness.resume_prompt)})`);
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
@@ -179,6 +181,40 @@ export const RESUME_PROMPT_DEFAULT = 'BotCorp restarted this background session 
   + 'If you were in the middle of a task, pick it back up. Otherwise reply with just "ok" and wait for the next message. '
   + 'Do not message anyone about this restart.';
 
+// The model's context window for a percent context_window. 1M for the Opus 5 /
+// Fable 5 family (and a `[1m]` id), 200k for Haiku; anything else is assumed 1M
+// (known: false says so). Claude Code caps the setting to the model's window.
+export function modelContextWindow(model) {
+  const m = String(model || '').toLowerCase();
+  if (/haiku/.test(m)) return { tokens: 200000, known: true };
+  if (/^(claude-)?(opus|fable)(-5|$)/.test(m) || /\[1m\]$/.test(m)) return { tokens: 1000000, known: true };
+  return { tokens: 1000000, known: false };
+}
+
+// harness.context_window -> the auto-compact window Claude Code gets
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW, which it ranks above the autoCompactWindow
+// setting; both accept 100000..1000000 tokens). { tokens: null } = 'auto'.
+export const CONTEXT_WINDOW_MIN = 100000;
+export const CONTEXT_WINDOW_MAX = 1000000;
+export function resolveContextWindow(cfg) {
+  const v = cfg.harness.context_window;
+  const win = modelContextWindow(cfg.model);
+  const range = (n, how) => (n < CONTEXT_WINDOW_MIN || n > CONTEXT_WINDOW_MAX
+    ? { tokens: null, error: `${how} = ${n} tokens, outside ${CONTEXT_WINDOW_MIN}-${CONTEXT_WINDOW_MAX}` }
+    : { tokens: n, error: '' });
+  if (v === 'auto' || v === null) return { tokens: null, source: 'auto (Claude Code picks the window)', error: '' };
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) return { tokens: null, error: `an integer token count, 'N%' or 'auto' (got ${v})` };
+    return { ...range(v, `${v}`), source: `${v} tokens` };
+  }
+  const m = typeof v === 'string' ? /^\s*(\d{1,3})\s*%\s*$/.exec(v) : null;
+  if (!m) return { tokens: null, error: `'N%', an integer token count or 'auto' (got ${JSON.stringify(v)})` };
+  const pct = Number(m[1]);
+  if (pct < 1 || pct > 100) return { tokens: null, error: `a percent 1-100 (got ${pct}%)` };
+  const n = Math.round(win.tokens * pct / 100);
+  return { ...range(n, `${pct}% of ${win.tokens}`), source: `${pct}% of ${win.tokens} for ${cfg.model || 'no model'}${win.known ? '' : ', window unknown so 1M assumed'}` };
+}
+
 // The effective resume prompt: '' = none.
 export function resumePrompt(cfg) {
   const p = cfg.harness.resume_prompt;
@@ -209,6 +245,7 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || proce
   cfg._modules = enabledModules(cfg);
   cfg._boot_prompt = bootPrompt(cfg);
   cfg._resume_prompt = resumePrompt(cfg);
+  { const cw = resolveContextWindow(cfg); cfg._context_window = cw.tokens; cfg._context_window_source = cw.source || ''; }
   cfg._errors = errs;
   console.log(JSON.stringify(cfg));
 }

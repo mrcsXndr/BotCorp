@@ -3,6 +3,31 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.14
+
+- **Per-bot context window.** `bot.yaml` `harness.context_window`: `70%`
+  (default) of the model's context window (1M for the Opus 5 / Fable 5
+  family, 200k for Haiku, unknown = 1M), an integer 100000-1000000, or
+  `auto`. Every launch sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session
+  env, which Claude Code ranks above any `autoCompactWindow` setting, so the
+  bot's value also beats a machine-wide one (logged: `overrides the
+  inherited <n>`); `auto` removes an inherited one. Sync merges the same
+  number into the config home's settings.json as `autoCompactWindow`.
+  `botcorp config set <bot> harness.context_window 50%` works as typed from
+  pwsh and bash. Doctor: `<bot>: context window` shows the effective value
+  and source, the machine-wide value it overrides, and WARNs on a stale
+  settings.json or a running session started with another value. Applies at
+  the next session start.
+- **Automation logs carry a chained command's whole output.** A run was
+  `cmd /c "<command> > log"`, so `a & b` logged only b. The command is now
+  grouped: `cmd /c "(<command>) > log 2>&1"`; the exit code is still the
+  last command's.
+
+Upgrade: check out `v0.1.14`, then `botcorp sync <bot>` (writes
+`autoCompactWindow`); to change a bot's window, `botcorp config set <bot>
+harness.context_window <value>`. The new window reaches a running bg session
+only through a fresh launch: `botcorp stop <bot>; botcorp start <bot>`.
+
 ## v0.1.13
 
 Found in a reboot test on the reference host: the bot died every ~63 min

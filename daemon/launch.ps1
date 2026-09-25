@@ -305,6 +305,18 @@ $childEnv['BOTCORP_HOME']        = $RtHome
 $childEnv['CLAUDE_CODE_ARTIFACT_AUTO_OPEN'] = '0'
 $childEnv['PYTHONIOENCODING']    = 'utf-8'
 $childEnv['GIT_TERMINAL_PROMPT'] = '0'
+# Auto-compact window (bot.yaml harness.context_window, resolved by botyaml.mjs).
+# Claude Code ranks the env var above every autoCompactWindow setting, so a
+# machine-wide one would win over the bot's own; the launch env overrides it,
+# and 'auto' removes it so Claude Code really picks its own.
+$machineCw = "$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+if ($cfg._context_window) {
+    $childEnv['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = "$($cfg._context_window)"
+    Write-LaunchLog "context window: $($cfg._context_window) tokens ($($cfg._context_window_source)) -> CLAUDE_CODE_AUTO_COMPACT_WINDOW$(if ($machineCw -and $machineCw -ne "$($cfg._context_window)") { "; overrides the inherited $machineCw" })"
+} else {
+    Remove-Item -Path 'env:CLAUDE_CODE_AUTO_COMPACT_WINDOW' -ErrorAction SilentlyContinue
+    Write-LaunchLog "context window: auto (harness.context_window)$(if ($machineCw) { "; the inherited CLAUDE_CODE_AUTO_COMPACT_WINDOW=$machineCw is removed for this session" })"
+}
 $py = Resolve-Python
 if (Test-Path $py) { $childEnv['BOT_PYTHON'] = $py }
 # OpenTelemetry to the local sink (prompts/tool details stay redacted: no OTEL_LOG_* gates).
@@ -391,7 +403,7 @@ Write-LaunchLog "launch shell_pid=$PID started_by=$StartedBy mode=$modeText chan
 $oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { 'vault' } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
 $oauthVal = $(if ($oauthSrc -eq 'vault') { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
 [void](Add-LaunchEnvRecord -ConfigDir $ConfigDir -LauncherPid $PID -OauthLast4 ((Mask $oauthVal) -replace '^\*+') -OauthSource $oauthSrc `
-                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames)
+                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames -AutoCompactWindow "$($cfg._context_window)")
 $launchT0 = (Get-Date).AddSeconds(-2)
 
 # Inherited from a parent Claude Code session these make the child run with

@@ -348,6 +348,19 @@ HOST rebooted (never on a routine relaunch or a `start`): `null` (default) =
 a telegram bot sends one "back online after reboot" line via
 `tools/tg/tg_send.py`, `''` = off, a string = that prompt (`{boot}` / `{now}`
 substituted). Once per boot per bot (docs/daemon.md, "Boot kick-off").
+`harness.context_window` is the bot's auto-compact window: `70%` (default)
+of the model's context window (1M for the Opus 5 / Fable 5 family, 200k for
+Haiku, an unknown model counts as 1M), an integer token count
+(100000-1000000), or `auto` (Claude Code's own). `botcorp config set <bot>
+harness.context_window 50%` works as typed in pwsh and bash. The launch sets
+`CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session env, which Claude Code ranks
+above every `autoCompactWindow` setting, so it also beats a machine-wide value
+(`auto` drops that one for the bot); sync writes the same number as
+`autoCompactWindow` into the config home's settings.json for a session
+BotCorp did not start. Applies at the next session start. Doctor: `<bot>:
+context window` (the value, where it comes from, the machine-wide value it
+overrides; WARN on a stale settings.json or a running session started with
+another value).
 `harness.resume_prompt` is the short turn every other unattended bg launch
 (daemon cold-start / restart) seeds instead: `null` = re-arm the watchers the
 rules describe, pick up an interrupted task, else reply "ok"; `''` = off

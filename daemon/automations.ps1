@@ -189,8 +189,10 @@ function Invoke-AutomationJob {
         $psi = [System.Diagnostics.ProcessStartInfo]::new()
         $psi.FileName = $(if ($env:ComSpec) { $env:ComSpec } else { 'cmd.exe' })
         # cmd.exe does the redirect itself: no pipe to drain, no deadlock on a
-        # chatty job. /s strips the outer quotes; the command runs verbatim.
-        $psi.Arguments = "/d /s /c `"$($a.command) > `"$logPath`" 2>&1`""
+        # chatty job. /s strips the outer quotes; the command runs verbatim,
+        # grouped: without the parentheses a chained `a & b` / `a && b` sent
+        # only b's output to the log. The exit code is the group's (its last command).
+        $psi.Arguments = "/d /s /c `"($($a.command)) > `"$logPath`" 2>&1`""
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $P.BotHome
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
