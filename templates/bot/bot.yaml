@@ -36,11 +36,11 @@ harness:
     usage_resume: true            # relaunch after a usage-limit window if the process died
     alert_triage: false           # headless fix-or-card pass over memory/metrics/alerts.log
     hub: false                    # status push to any hub (integrations.hub)
-    janitor: true                 # disk/transcript/orphan hygiene on the daemon tick
+    janitor: true                 # disk/transcript/orphan hygiene on the daemon tick; `report` = scan + log, touch nothing (shared host)
     remote_control: false         # OFF by default; needs an interactive /login in this bot's config home
     lessons: true                 # inject harness/lessons/INDEX.md at session start
     debrief: false                # headless session debrief on Stop (real spend)
-    auto_commit: true             # commit the bot repo on Stop (runs its pre-commit secret scan)
+    auto_commit: true             # commit the bot repo on Stop (runs its pre-commit secret scan); with backup.git_remote also pushes
     memory_sync: false            # push memory/ to the bot's OWN remote on Stop
     sound: false                  # play hooks/sounds/done.* on Stop
     telemetry: true               # OpenTelemetry export to the local sink (subagent/usage observability)
@@ -71,7 +71,8 @@ integrations:
 
 backup:                           # OPTIONAL module, off while git_remote is null. A bot folder is NOT a git repo;
   git_remote: null                # `botcorp backup <bot>` inits one inside it (.gitignore = the template's), commits
-  paths: [memory]                 # `paths` and pushes them here, bounded, no credential prompt (GIT_TERMINAL_PROMPT=0)
+  paths: [memory]                 # `paths` and pushes them here, bounded, no credential prompt (GIT_TERMINAL_PROMPT=0).
+                                  # With auto_commit on, every Stop also pushes the repo to origin (background, 60 s).
 
 automations: []                   # per-bot jobs run by the ONE daemon (docs/automations.md)
 #  - name: nightly-report

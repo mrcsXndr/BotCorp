@@ -3,6 +3,47 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.15
+
+For moving a bot that is its own git repo, and was run outside BotCorp, onto
+a shared host.
+
+- **Auto-commit pushes when the bot has a backup remote.** With
+  `backup.git_remote` set (the `backup` module in the session's
+  `BOT_MODULES`), the `auto_commit` Stop hook also pushes the bot folder's
+  own repo to `origin`: in the background, so the hook returns at once;
+  non-interactive (`GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`,
+  `credential.interactive=never`); bounded to 60 s; and on a clean tree
+  too, so a failed push is retried on the next Stop. Never from a repo above
+  the bot folder, never without an existing origin (`botcorp backup <bot>`
+  adds it). One line per attempt in `<BOTCORP_HOME>/state/<bot>/push.log`.
+  A bot without `backup.git_remote` is unchanged: commits stay local.
+  Doctor: `<bot>: unpushed commits` (PASS at 0, WARN under 24 h, FAIL when
+  the oldest unpushed commit is 24 h old; WARN for no repo, no origin, a
+  detached HEAD, or an origin other than `backup.git_remote`).
+- **Report-only janitor.** `harness.modules.janitor: report` runs the daily
+  `resource_monitor.ps1` scan WITHOUT `-Clean`: nothing is killed or pruned,
+  and the daemon log names what it found (`janitor: report-only, nothing
+  touched, exit=0 worst=<sev> issues=<n>: <categories>`). For a host shared
+  with other bots. `true` / `false` are unchanged; anything else is a
+  validation error.
+- **Doctor sees a second poller for a bot's token.** `<bot>: foreign
+  telegram owner-lock` FAILs when a launcher outside BotCorp holds an
+  owner-lock in the bot folder (`host/.run/tg_owner.lock`,
+  `.claude/.tg_owner.lock`) with a live pid (WARN when stale); BotCorp's
+  own lock is in the config home and never saw these. `<bot>: telegram
+  slot`: while the bot's own poller is not the holder, up to 4
+  `getUpdates?timeout=0&limit=1` probes (no offset, so nothing queued is
+  confirmed) FAIL on a 409 (someone else polls the token) or a rejected
+  token. `--no-tg-probe` skips the probe.
+- Test hygiene: the v0.1.13 real-tick test ran the janitor with `-Clean`
+  on the test machine; it now runs with the janitor off.
+
+Upgrade: check out `v0.1.15`, `botcorp sync <bot>`. Nothing changes for a
+bot that does not opt in: no `backup.git_remote` = no push; `janitor: true`
+still cleans. The push reaches a running session at its next launch
+(`BOT_MODULES` is launch env).
+
 ## v0.1.14
 
 - **Per-bot context window.** `bot.yaml` `harness.context_window`: `70%`

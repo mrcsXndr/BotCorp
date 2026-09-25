@@ -1119,6 +1119,25 @@ function Test-BotModule {
     try { return (@($Cfg._modules) -contains $Module) } catch { return $false }
 }
 
+function Get-JanitorMode {
+    # bot.yaml harness.modules.janitor -> 'clean' (true: resource_monitor.ps1
+    # -Clean, which reaps the bot's own strays and prunes its transcripts),
+    # 'report' (the same scan, nothing touched: a shared host) or 'off'.
+    # Type first: PowerShell's `$true -eq 'report'` is True.
+    param($Value)
+    if ($Value -is [string]) { if ($Value -ceq 'report') { return 'report' }; return 'off' }
+    if ($Value -is [bool] -and $Value) { return 'clean' }
+    return 'off'
+}
+
+function Get-JanitorArgs {
+    # pwsh arguments for resource_monitor.ps1 in a Get-JanitorMode mode: only 'clean' passes -Clean.
+    param([Parameter(Mandatory)][string]$Script, [Parameter(Mandatory)][string]$Mode)
+    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script)
+    if ($Mode -eq 'clean') { $a += '-Clean' }
+    return , $a
+}
+
 function Read-BotState {
     param([Parameter(Mandatory)][string]$Bot)
     return Read-JsonFile -Path (Join-Path $script:StateDir "$Bot.json")

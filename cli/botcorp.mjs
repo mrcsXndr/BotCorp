@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgSlotProbe, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -973,11 +973,11 @@ const MODULE_DESC = {
   usage_resume: 'relaunch after a usage-limit window if the process died',
   alert_triage: 'headless fix-or-card pass over memory/metrics/alerts.log',
   hub: 'status push to a hub URL (integrations.hub, vault key hub_token)',
-  janitor: 'disk/transcript/orphan hygiene on the daemon tick',
+  janitor: 'disk/transcript/orphan hygiene on the daemon tick (report = scan and log only, touch nothing)',
   remote_control: 'Claude Remote Control (needs an interactive /login in this bot\'s config home)',
   lessons: 'inject harness/lessons/INDEX.md at session start',
   debrief: 'headless session debrief on Stop (real spend)',
-  auto_commit: 'commit on Stop; a no-op unless the backup module made the folder a repo',
+  auto_commit: 'commit on Stop (and push, with backup.git_remote); a no-op unless the folder is a repo',
   memory_sync: 'push memory/ to the bot\'s own remote on Stop',
   sound: 'play a sound on Stop',
   telemetry: 'OpenTelemetry export to the local sink (subagent/usage observability)',
@@ -2127,6 +2127,30 @@ async function cmdDoctor({ flags }) {
         else {
           add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${quote()}. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh --debug (launches.log shows the daemon and poller lines, .claude-${bot}/debug/ the session's own log)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
         }
+        // one poller per token: a launcher outside BotCorp (its own owner-lock in
+        // the bot folder), and the live slot itself (the getUpdates 409 probe)
+        const locks = [];
+        for (const rel of FOREIGN_TG_LOCKS) {
+          const f = path.join(botHome(bot), ...rel.split('/'));
+          if (!fs.existsSync(f)) continue;
+          let pid = 0; try { pid = firstInt(fs.readFileSync(f, 'utf-8').split(/\r?\n/)[0]); } catch {}
+          locks.push({ rel, pid, alive: pidAlive(pid) });
+        }
+        const fl = foreignTgLockVerdict(locks);
+        add(fl.level, `${bot}: foreign telegram owner-lock`, fl.detail.replace(/<bot>/g, bot), 'bots');
+        const ownPoller = s.running ? (poller || 'UNKNOWN') : null;
+        let codes = null, skipped = '';
+        if (ownPoller !== 'OWNED') {
+          if (flags['no-tg-probe']) skipped = '--no-tg-probe';
+          else if (!vault.ok || !vault.rows.some((r) => r.key === 'telegram_token')) skipped = 'no telegram_token in the vault';
+          else {
+            const tok = runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'get', '-Key', 'telegram_token', '-IAmTheLauncher', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 });
+            if (tok.code !== 0 || !tok.out.trim()) skipped = 'the vault did not return telegram_token';
+            else codes = await tgSlotProbe(tok.out.trim());
+          }
+        }
+        const sv = tgSlotVerdict({ ownPoller, codes, skipped });
+        add(sv.level, `${bot}: telegram slot`, sv.detail.replace(/<bot>/g, bot), 'bots');
       }
       // the backup module makes the folder a repo; then the vault and the config home must be ignored THERE
       if (cfg.backup.git_remote && fs.existsSync(path.join(botHome(bot), '.git'))) {
@@ -2134,6 +2158,20 @@ async function cmdDoctor({ flags }) {
           const r = run(gitExe(), ['-C', botHome(bot), 'check-ignore', '-q', p], { timeoutMs: 15_000 });
           add(r.code === 0 ? 'PASS' : 'FAIL', `${bot}: backup repo ignores ${p}`, r.code === 0 ? 'yes' : `NO - a push would send it to ${cfg.backup.git_remote}`, 'bots');
         }
+      }
+      if (cfg.backup.git_remote) {
+        const home = botHome(bot);
+        const hasGit = fs.existsSync(path.join(home, '.git'));
+        const g = (args) => { const r = run(gitExe(), ['-C', home, ...args], { timeoutMs: 30_000 }); return r.code === 0 ? r.out.trim() : null; };
+        const origin = hasGit ? g(['remote', 'get-url', 'origin']) || '' : '';
+        const branch = hasGit ? g(['symbolic-ref', '-q', '--short', 'HEAD']) || '' : '';
+        const n = hasGit && origin && branch ? g(['rev-list', '--count', 'HEAD', '--not', '--remotes=origin']) : null;
+        const ahead = n !== null && /^\d+$/.test(n) ? Number(n) : null;
+        const oldest = ahead ? (g(['log', '--format=%cI', 'HEAD', '--not', '--remotes=origin']) || '').split(/\r?\n/).filter(Boolean).pop() || '' : '';
+        let lastPush = '';
+        try { lastPush = fs.readFileSync(path.join(STATE_DIR, bot, 'push.log'), 'utf-8').split(/\r?\n/).filter(Boolean).pop() || ''; } catch {}
+        const uv = unpushedVerdict({ remote: cfg.backup.git_remote, hasGit, origin, branch, ahead, oldest, lastPush, autoCommit: !!cfg.harness.modules.auto_commit });
+        if (uv) add(uv.level, `${bot}: unpushed commits`, uv.detail.replace(/<bot>/g, bot), 'bots');
       }
       if (cfg.integrations.access.team) {
         if (!machineAccess) add('WARN', `${bot}: integrations.access`, `team=${cfg.integrations.access.team} in bot.yaml but the cockpit is not exposed (machine-wide: botcorp cockpit expose)`, 'bots');
@@ -2199,7 +2237,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)
   suggest <bot> --topic <t> [--lesson <file>] [--dry-run]
-  doctor [--json] [--host]
+  doctor [--json] [--host] [--no-accounts] [--no-tg-probe]
   help
 
 exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token
