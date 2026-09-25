@@ -151,6 +151,38 @@ or `UNKNOWN`; `botcorp status` prints an `env:` line and `botcorp doctor` a
 environment or differs from the vault, when the Telegram token is missing or
 differs although the launch passed `--channels`, or when the env is FOREIGN.
 
+**Resuming a bg session.** The roster (`claude agents --json --all`) keeps a
+session's row, and the options it was started with, after it stops and
+across daemon restarts. `claude --bg --resume <id>` of such a row with ANY
+other flag "keeps its own saved options, so the flags you passed started a
+copy"; on the reference host that copy never came up (`claude_pid=0`, no
+process) while `claude --bg` exited 0. Bare, it "woke session <id> with its
+saved options" under the same id, also for a session that was never
+prompted (probe, CC 2.1.282). So `launch.ps1 -Bg` (`Get-BgResumePlan`):
+first `claude rm`s every roster row that is neither the session to resume
+nor alive (`rm` keeps the conversation on disk), then resumes a roster
+session WITHOUT flags when its saved flags (`state/<bot>.json` `bg_flags`)
+match this launch's (`--debug-file` is not compared: a session started with
+`--debug` keeps logging when resumed); a session the roster does not hold
+resumes from its transcript WITH flags; changed flags or an explicit
+`--debug` refuse a CLI start (exit 4, "botcorp start <bot> --fresh") and turn
+an unattended start fresh. Afterwards a launch
+with no live claude process running the session is `bg: FAIL` and exit 3
+(`Get-BgLaunchResult`); doctor's `<bot>: session alive` FAILs a bot whose
+state says running, or whose last launch failed, with no claude process.
+
+**bun.** The Telegram plugin's `.mcp.json` starts its server with a bare
+`bun`. bun's installer puts it in `%USERPROFILE%\.bun\bin`, which a daemon /
+session-0 / bg launch's PATH may lack (the plugin's MCP log then says `Server
+stderr: 'bun' is not recognized as an internal or external command`). The
+launcher resolves bun (`harness.bun_path` when it names a file, else PATH,
+else `%USERPROFILE%\.bun\bin`), puts its folder FIRST on the session's PATH
+before `claude --bg` (so the daemon that keeps that env has it) and logs
+`bun: <path> (<source>)`; the plugin's own files are never patched (an update
+would reset them). Doctor's `<bot>: bun resolvable for telegram plugin` reads
+the installed plugin's `.mcp.json` command and resolves it the same way:
+FAIL when nothing resolves, WARN when only this shell's PATH has it.
+
 Not a way round it: the per-session dispatch record the daemon keeps
 (`<config home>/daemon/roster.json` `workers.<id>.dispatch.env`, mirrored in
 `jobs/<id>/state.json` `providerEnv`) forwards only a fixed allowlist of

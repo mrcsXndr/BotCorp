@@ -381,6 +381,17 @@ debug log, which carries every MCP server's stderr (`MCP server
 `harness.debug: true` does the same for every launch, the daemon's included
 (the only way for a pty bot). Off by default; the newest 10 logs are kept.
 
+A bg bot's session resumes WITHOUT flags while the config home's roster holds
+it (running or stopped): its saved options apply, and any flag would make
+Claude Code start a copy (docs/daemon.md, "Resuming a bg session"). So a
+`start` / `restart` with `--debug`, or whose flags differ from what the
+session saved (channels / settings changed), refuses (exit 4) and says
+`start <bot> --fresh`; `--fresh` starts a new session with the new flags (the
+old conversation stays on disk). A session started with `--debug` keeps its
+debug log on every resume until the next `--fresh`. An unattended start (the daemon, `restart.ps1`)
+with changed flags starts fresh instead of refusing. A bg launch after which
+no live claude process runs the session exits 3, never 0.
+
 - `start` is a trusted launch path: it mints the launch nonce (attestation,
   `docs/secrets.md`) before spawning, so its launch gets the bot's declared
   vault secrets. It refuses outright when the vault is operator-locked
@@ -393,10 +404,12 @@ debug log, which carries every MCP server's stderr (`MCP server
 - `stop`: `pty-host --stop <bot>` (tree-kill of the shell: claude and the
   Telegram poller included); a bg bot goes through `daemon/stop.ps1`:
   `claude stop <bg id>`, the guarded tree-kill on the recorded claude pid,
-  and `claude stop` on every OTHER live session of the bot (cwd = bot home,
-  e.g. a copy a `--resume` started) - each one would keep the config home's
-  Claude Code daemon, and the env it started with, alive for the next start
-  (docs/daemon.md, "bg sessions and the daemon's env"). Then removes `<config home>/channels/telegram/bot.pid`
+  `claude stop` on every OTHER live session in the bot's config home (e.g. a
+  copy a `--resume` started) - each one would keep the config home's Claude
+  Code daemon, and the env it started with, alive for the next start
+  (docs/daemon.md, "bg sessions and the daemon's env") - and `claude rm` of
+  every roster row that is neither the recorded session nor alive (a copy
+  that never came up; `rm` keeps the conversation on disk). Then removes `<config home>/channels/telegram/bot.pid`
   if ITS pid is dead and `<config home>/botcorp/tg_owner.lock` if ITS pid is
   dead (the plugin's own stale-pid cleanup is a no-op on Windows; a stale lock
   would make the next launch think the poller is foreign).

@@ -15,9 +15,13 @@
 #               claude_pid in <rt>/state/<bot>.json and EXITS. The session runs
 #               under the supervisor (session 0), one conversation across
 #               restarts: every relaunch passes --resume <session_id> from the
-#               state file (`--bg --continue` would start a COPY). No session
-#               id yet (first launch, or -Fresh) = a fresh session; its id is
-#               taken from what `claude --bg` prints / `claude agents --json`.
+#               state file (`--bg --continue` would start a COPY), and NO other
+#               flag while the roster holds that session (its saved options
+#               apply; flags would start a copy - Get-BgResumePlan). Changed
+#               flags (-DebugLog, channels) need -Fresh. No session id yet
+#               (first launch, or -Fresh) = a fresh session; its id is taken
+#               from what `claude --bg` prints / `claude agents --json`. No live
+#               claude process after the launch = exit 3 (Get-BgLaunchResult).
 #
 # What it does, in order (every pre-step bounded, launch always proceeds):
 #   1. reads bots/<name>/bot.yaml (via daemon/botyaml.mjs)
@@ -124,7 +128,8 @@ if (-not $Force) {
         $bgLive = $false
         if ($bgId -and -not $cliLive) {
             $agents = Get-BgAgents -Bot $Bot -TimeoutSec 20
-            $bgLive = Test-BgAgentAlive (Find-BgAgent -Agents $agents -BgId $bgId -SessionId "$($st.session_id)" -BotHome $BotHome)
+            # a live process only: a copy that never came up reads `blocked` with no pid
+            $bgLive = Test-BgAgentPidAlive (Find-BgAgent -Agents $agents -BgId $bgId -SessionId "$($st.session_id)" -BotHome $BotHome)
         }
         if ($shellLive -or $cliLive -or $bgLive) {
             Write-Host "  $Bot already running (shell_pid=$shellPid claude_pid=$cliPid bg_id=$bgId) - refusing a duplicate. Use -Force." -ForegroundColor Yellow
@@ -182,12 +187,13 @@ if ($Bg -and $resume) {
 
 # --- 5. usage-limit resume prompt -------------------------------------------------
 $resumeFile = Join-Path $BotHome '.claude\.botcorp_resume_prompt'
+$seedPrompt = @()   # a prompt, not a flag: a bare bg resume takes it too
 try {
     if (Test-Path $resumeFile) {
         $ageMin = ((Get-Date) - (Get-Item $resumeFile).LastWriteTime).TotalMinutes
         $seed = (Get-Content $resumeFile -Raw -ErrorAction Stop).Trim()
         if (-not $DryRun) { Remove-Item $resumeFile -Force -ErrorAction SilentlyContinue }
-        if ($ageMin -le 60 -and $seed) { Write-LaunchLog 'auto-resume: seeding the first prompt from usage-limit recovery'; $Passthrough = @($Passthrough | Where-Object { $_ }) + @($seed) }
+        if ($ageMin -le 60 -and $seed) { Write-LaunchLog 'auto-resume: seeding the first prompt from usage-limit recovery'; $seedPrompt = @($seed) }
         else { Write-LaunchLog "auto-resume file stale ($([int]$ageMin)m) - ignored" }
     }
 } catch {}
@@ -303,6 +309,15 @@ if (($modules -contains 'telemetry') -and (Test-Path $otelState)) {
         }
     } catch {}
 }
+# The Telegram plugin runs a bare `bun` (Resolve-BunExe): bun's folder goes
+# first on the PATH the session gets, and with it the daemon that keeps that env.
+$bun = Resolve-BunExe -Override "$($cfg.harness.bun_path)" -PathEnv $env:PATH -UserProfile $env:USERPROFILE
+if ($bun.Path) {
+    $childEnv['PATH'] = Add-PathDir -PathEnv $env:PATH -Dir (Split-Path $bun.Path -Parent)
+    if ($hasTgMod) { Write-LaunchLog "bun: $($bun.Path) ($($bun.Source); its folder is first on the session's PATH)" }
+} elseif ($hasTgMod) {
+    Write-LaunchLog "bun: NOT FOUND (harness.bun_path$(if ($cfg.harness.bun_path) { " '$($cfg.harness.bun_path)' is not a file" } else { ' unset' }), PATH, %USERPROFILE%\.bun\bin) -> the Telegram plugin cannot start ('bun' is not recognized): install bun or set harness.bun_path"
+}
 
 # Opt-in Claude Code debug log (bot.yaml harness.debug, or -DebugLog for one
 # launch): the session's own log, with the MCP servers' stderr, in the config
@@ -320,8 +335,11 @@ if ($debugFile) {
     Write-LaunchLog "debug: --debug-file $debugFile ($(if ($DebugLog) { '-DebugLog' } else { 'harness.debug' }))"
 }
 
-$argv = Get-ClaudeArgv -Bg ([bool]$Bg) -ResumeId $resumeId -Continue $resume -Permissions $cfg.permissions -PluginDir $Harness -Channels $canOwn `
-                       -TgSettings (Join-Path $BotHome '.claude\tg-enable.settings.json') -Passthrough $Passthrough
+$argvOf = { param([string]$Rid) Get-ClaudeArgv -Bg ([bool]$Bg) -ResumeId $Rid -Continue $resume -Permissions $cfg.permissions -PluginDir $Harness -Channels $canOwn `
+                       -TgSettings (Join-Path $BotHome '.claude\tg-enable.settings.json') -Passthrough (@($Passthrough | Where-Object { $_ }) + $seedPrompt) }
+$argv = & $argvOf $resumeId
+# what a bg session saves as its options (Get-BgResumePlan): the flags, without the seed prompt
+$flagsKey = Get-BgFlagsKey -Argv @($argv | Where-Object { $seedPrompt -notcontains $_ })
 $modeText = if ($Bg) { $(if ($resumeId) { "--bg --resume $resumeId" } else { '--bg FRESH' }) } elseif ($resume) { '--continue' } else { 'FRESH' }
 
 if ($DryRun) {
@@ -340,6 +358,9 @@ if ($DryRun) {
         $live = 0
         if ($dmn.Alive) { $agents = Get-BgAgents -Bot $Bot -TimeoutSec 20; $live = $(if ($null -eq $agents) { -1 } else { @(@($agents) | Where-Object { Test-BgAgentAlive $_ }).Count }) }
         Write-Host "  daemon: $(Get-BgDaemonAction -DaemonAlive $dmn.Alive -LiveWorkers $live) (pid $($dmn.Pid) alive=$($dmn.Alive) live sessions=$live)"
+        $row0 = $(if ($resumeId) { Find-BgAgent -Agents (Get-BgAgents -Bot $Bot -All -TimeoutSec 20) -SessionId $resumeId } else { $null })
+        $st0 = Read-State; $saved0 = $(if ($st0 -and ($st0.PSObject.Properties.Name -contains 'bg_flags')) { "$($st0.bg_flags)" } else { '' })
+        Write-Host "  resume: $(Get-BgResumePlan -ResumeId $resumeId -InRoster ([bool]$row0) -SavedFlags $saved0 -Flags $flagsKey -Interactive ($StartedBy -in @('cli', 'manual')) -DebugRequested ([bool]$DebugLog))$(if ($row0) { " (roster row $($row0.id) $($row0.state))" })"
     }
     exit 0
 }
@@ -378,6 +399,40 @@ if ($Bg) {
         # the one `claude --bg` starts now carries this launch's env; a worker
         # `claude stop` just ended is given a few seconds to settle first.
         $paths = Get-BotPaths -Bot $Bot
+        # Roster first: dead rows that are not the session to resume go (a copy
+        # that never came up would count as a live worker and pin the old
+        # daemon), then the resume plan (Get-BgResumePlan).
+        # The session to resume: its row by the recorded session id (the
+        # SessionStart hook follows a /clear), else by the recorded bg_id (the
+        # row's stable id); its CURRENT session id is the resume handle.
+        $row = $null
+        if ($resumeId) {
+            $rosterAll = Get-BgAgents -Bot $Bot -Paths $paths -All -TimeoutSec 20
+            $row = Find-BgAgent -Agents $rosterAll -SessionId $resumeId
+            if (-not $row) { try { $st1 = Read-State; if ($st1 -and $st1.bg_id) { $row = Find-BgAgent -Agents $rosterAll -BgId "$($st1.bg_id)" } } catch {} }
+            if ($row -and $row.sessionId -and "$($row.sessionId)" -ne $resumeId) { Write-LaunchLog "bg: roster row $($row.id) now holds session $($row.sessionId) (recorded: $resumeId) -> resuming that"; $resumeId = "$($row.sessionId)"; $argv = & $argvOf $resumeId }
+        }
+        $removed = Remove-BgStrays -Bot $Bot -Paths $paths -KeepSessionId $(if ($row) { "$($row.sessionId)" } else { '' }) -KeepBgId $(if ($row) { "$($row.id)" } else { '' }) -TimeoutSec 20
+        if ($removed -gt 0) { Write-LaunchLog "bg: removed $removed stray roster row(s) with no live process (copies, old sessions)" }
+        $savedFlags = ''; try { $st1 = Read-State; if ($st1 -and ($st1.PSObject.Properties.Name -contains 'bg_flags') -and $st1.bg_flags) { $savedFlags = "$($st1.bg_flags)" } } catch {}
+        $plan = Get-BgResumePlan -ResumeId $resumeId -InRoster ([bool]$row) -SavedFlags $savedFlags -Flags $flagsKey -Interactive ($StartedBy -in @('cli', 'manual')) -DebugRequested ([bool]$DebugLog)
+        $why = $(if ($DebugLog) { 'this start asks for -DebugLog (--debug)' } else { "it saved other flags than this launch's (saved: $savedFlags | now: $flagsKey)" })
+        if ($plan -eq 'refuse') {
+            Write-LaunchLog "bg: FAIL - session $resumeId is in the roster and $why; resuming it with flags would start a copy. New session with the new flags: botcorp start $Bot --fresh$(if ($DebugLog) { ' --debug' })"
+            Write-State @{ status = 'exited'; exit_code = 4; updated_at = (Get-Date).ToString('o') }
+            $code = 4
+            exit 4
+        } elseif ($plan -eq 'fresh' -and $resumeId) {
+            Write-LaunchLog "bg: session $resumeId is in the roster and $why -> FRESH session for this unattended start (the old conversation stays on disk)"
+            $resumeId = ''; $argv = & $argvOf ''
+            Write-State @{ session_id = $null; bg_id = $null }
+        } elseif ($plan -eq 'bare') {
+            if ("$($row.state)" -ne 'stopped' -and -not (Test-BgAgentPidAlive $row)) {
+                [void](Invoke-Bounded -Exe $exe -Arguments @('stop', "$($row.id)") -TimeoutSec 30 -Label 'claude stop' -Capture -Env @{ CLAUDE_CONFIG_DIR = $ConfigDir } -WorkingDirectory $BotHome -Bot $Bot)
+            }
+            $argv = Get-BgBareResumeArgv -ResumeId $resumeId -Seed $seedPrompt
+            Write-LaunchLog "bg: session $resumeId is in the roster ($($row.state)) -> resumed WITHOUT flags; its saved options apply$(if ($debugFile) { ' (a debug log only if the session was started with one: harness.debug takes effect with --fresh)' })"
+        } elseif ($plan -eq 'flags') { Write-LaunchLog "bg: session $resumeId is not in the roster -> resumed from its transcript with this launch's flags" }
         $until = (Get-Date).AddSeconds(10)
         while ($true) {
             $dmn = Get-BgDaemon -ConfigDir $ConfigDir
@@ -424,12 +479,20 @@ if ($Bg) {
             try { if (($found.PSObject.Properties.Name -contains 'sessionId') -and $found.sessionId) { $sid = "$($found.sessionId)" } } catch {}
             try { if (($found.PSObject.Properties.Name -contains 'pid') -and $found.pid) { $cpid = [int]$found.pid } } catch {}
         }
-        if ($code -eq 0 -and -not $bgId -and -not $found) { Write-LaunchLog 'bg: claude --bg returned 0 but no id could be read (state left as starting; the tick re-checks the roster)' }
-        $upd = @{ claude_pid = $(if ($cpid -gt 0) { $cpid } else { $null }); bg_id = $(if ($bgId) { $bgId } else { $null }); status = $(if ($code -eq 0) { 'running' } else { 'exited' }); exit_code = $code; updated_at = (Get-Date).ToString('o') }
+        $copy = @($outLines | Where-Object { $_ -match 'started a copy as ([0-9a-f]{6,12})' })
+        if ($copy.Count) { Write-LaunchLog "bg: WARN claude --bg started a COPY instead of continuing $resumeId ($($copy[0]))" }
+        # exit 0 is not success: only a live claude process running the session is (Get-BgLaunchResult)
+        $res = Get-BgLaunchResult -ExitCode $code -ClaudePid $cpid -Alive (Test-ProcAlive $cpid @('claude'))
+        $upd = @{ claude_pid = $(if ($cpid -gt 0) { $cpid } else { $null }); bg_id = $(if ($bgId) { $bgId } else { $null }); status = $(if ($res.Ok) { 'running' } else { 'exited' }); exit_code = $res.Code; updated_at = (Get-Date).ToString('o') }
         if ($sid) { $upd['session_id'] = $sid }
+        if ($res.Ok -and $plan -ne 'bare') { $upd['bg_flags'] = $flagsKey }   # what this session saved as its options
         Write-State $upd
         if ($canOwn -and $cpid -gt 0) { try { [System.IO.File]::WriteAllText($lockFile, "$cpid`n$((Get-Date).ToString('o'))") } catch {} }
         Write-LaunchLog "bg: id=$bgId session=$sid claude_pid=$cpid exit=$code"
+        if (-not $res.Ok) {
+            $code = $res.Code
+            Write-LaunchLog "bg: FAIL - $($res.Text). Fix: botcorp stop $Bot; botcorp start $Bot --fresh"
+        }
         # The poller is up only when the plugin's bot.pid is alive UNDER this
         # claude (it is written after the token check); the state says so.
         if ($canOwn -and $code -eq 0) {

@@ -3,6 +3,16 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.6
+
+v0.2.5 plus the v0.1.8 release below: the launcher puts bun's folder first on
+the session's PATH (the Telegram plugin runs a bare `bun`), a bg session the
+roster holds resumes with no flags (flags started a copy that never came up),
+a launch with no live claude process exits 3 instead of 0, stray roster rows
+are removed, and doctor adds `session alive` and `bun resolvable for telegram
+plugin`. Upgrading: check out `v0.2.6`, `botcorp sync <bot>`, `botcorp stop
+<bot>`, `botcorp start <bot> --fresh`, `botcorp doctor`.
+
 ## v0.2.5
 
 v0.2.4 plus the v0.1.7 release below: `botcorp status` / `doctor` show which
@@ -135,6 +145,49 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.8
+
+Two field failures on the reference host, where a Telegram bot came up with
+no poller and a `start` reported success with no claude process at all.
+
+- **bun is on the session's PATH.** The Telegram plugin's `.mcp.json` runs a
+  bare `bun`; a bg / session-0 launch's PATH lacked `%USERPROFILE%\.bun\bin`,
+  so the plugin's MCP log said `Server stderr: 'bun' is not recognized as an
+  internal or external command`. `launch.ps1` now resolves bun (`bot.yaml`
+  `harness.bun_path` when it names a file, else PATH, else
+  `%USERPROFILE%\.bun\bin`), puts its folder first on the PATH the session
+  and the daemon get, and logs `bun: <path> (<source>)`; the plugin's files
+  are never patched. Doctor's new `<bot>: bun resolvable for telegram plugin`
+  resolves the installed plugin's `.mcp.json` command the same way (FAIL:
+  nothing resolves; WARN: only this shell's PATH has it).
+- **A bg resume never starts a copy.** `claude --bg --resume <id>` of a
+  session the roster holds, WITH flags, "started a copy" that never came up.
+  A roster session now resumes with no flag at all (its saved options apply);
+  a session the roster does not hold resumes from its transcript with flags.
+  Changed flags (channels, settings: `state/<bot>.json` `bg_flags`) or an
+  explicit `--debug` refuse a CLI start with exit 4 and "botcorp start <bot>
+  --fresh"; an unattended start goes fresh instead. `botcorp start --fresh` =
+  a new session with the new flags; the old conversation stays on disk. A
+  session started with `--debug` keeps its debug log when it is resumed
+  (until the next `--fresh`); a `harness.debug` change takes effect with
+  `--fresh`.
+- **No silent success.** A bg launch after which no live claude process runs
+  the session logs `bg: FAIL` and exits 3 (it exited 0 with `claude_pid=0`).
+  The launch guard no longer reads a `blocked` roster row with no process as
+  a running bot.
+- **Stray roster rows go.** `stop` and every bg start `claude rm` the rows
+  that are neither the recorded session nor alive (a copy that never came up,
+  old sessions; `rm` keeps the conversation on disk).
+- **Doctor sees a dead bot.** New `<bot>: session alive` FAILs a bot whose
+  state says running, or whose last launch failed, with no claude process;
+  `telegram channel running` then FAILs too instead of "bot not running", and
+  quotes the plugin's newest MCP-log line (falling back to the newest log of
+  any session when the recorded one has none).
+
+Upgrade: check out `v0.1.8`, `botcorp sync <bot>`, `botcorp stop <bot>`,
+`botcorp start <bot> --fresh` (a session saved by an older launcher may carry
+options from a bad launch), then `botcorp doctor`.
 
 ## v0.1.7
 

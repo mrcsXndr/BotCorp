@@ -396,21 +396,23 @@ function Test-ClaudeVersion {
 # --- background sessions (harness.session: bg) -----------------------------------------
 function Get-BgAgents {
     # `claude agents --json` (run under the bot's CLAUDE_CONFIG_DIR) -> array of
-    # {id, kind, sessionId, pid, state, status, cwd, startedAt}. The roster is
-    # PER USER (a probe under a throwaway config dir still listed the user's
-    # other sessions), so callers match by id / session id / cwd (Find-BgAgent),
-    # never by position. $null = the query itself failed (unknown, NOT "none").
-    # The supervisor pipe is scoped to the token that started it: a supervisor
-    # started by an elevated task answers only elevated callers (a non-elevated
-    # call sees []), so this must run in the same context as the launch (the
-    # daemon task).
-    param([Parameter(Mandatory)][string]$Bot, [hashtable]$Paths, [int]$TimeoutSec = 30)
+    # {id, kind, sessionId, pid, state, status, cwd, startedAt}. -All adds the
+    # stopped rows (`--all`); without it a stopped session is not listed. The
+    # roster is PER CONFIG HOME on CC 2.1.282 (probe 2026-09-25: a live bg
+    # session of one bot's config home was absent from an empty config home's
+    # and from ~/.claude's listing; an older CC listed per user), yet callers
+    # still match by id / session id / cwd (Find-BgAgent), never by position.
+    # $null = the query itself failed (unknown, NOT "none"). The supervisor
+    # pipe is scoped to the token that started it: a supervisor started by an
+    # elevated task answers only elevated callers (a non-elevated call sees
+    # []), so this must run in the same context as the launch (the daemon task).
+    param([Parameter(Mandatory)][string]$Bot, [hashtable]$Paths, [int]$TimeoutSec = 30, [switch]$All)
     if (-not $Paths) { $Paths = Get-BotPaths -Bot $Bot }
     try {
         $exe = Resolve-ClaudeExe
         if (-not (Test-Path $exe)) { return $null }
         $env = @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir }
-        $r = Invoke-Bounded -Exe $exe -Arguments @('agents', '--json') -TimeoutSec $TimeoutSec -Label 'claude agents' -Capture -Env $env -WorkingDirectory $Paths.BotHome -Bot $Bot
+        $r = Invoke-Bounded -Exe $exe -Arguments @(@('agents', '--json') + $(if ($All) { @('--all') } else { @() })) -TimeoutSec $TimeoutSec -Label 'claude agents' -Capture -Env $env -WorkingDirectory $Paths.BotHome -Bot $Bot
         if ($r.Killed -or $null -eq $r.ExitCode) { return $null }
         return (ConvertFrom-BgRoster -Text "$($r.Output)")
     } catch { return $null }
@@ -461,6 +463,136 @@ function Test-BgAgentAlive {
     try { if (($Agent.PSObject.Properties.Name -contains 'pid') -and $Agent.pid -and (Test-ProcAlive ([int]$Agent.pid) @('claude'))) { return $true } } catch {}
     try { if (($Agent.PSObject.Properties.Name -contains 'state') -and ("$($Agent.state)" -in @('working', 'blocked'))) { return $true } } catch {}
     return $false
+}
+
+function Test-BgAgentPidAlive {
+    # Stricter than Test-BgAgentAlive: a live claude process, nothing else. A
+    # copy that never came up sits in the roster as `blocked` with no pid
+    # (reference host 2026-09-25) and must not read as a running bot.
+    param($Agent)
+    try { return [bool]($Agent -and ($Agent.PSObject.Properties.Name -contains 'pid') -and $Agent.pid -and (Test-ProcAlive ([int]$Agent.pid) @('claude'))) } catch { return $false }
+}
+
+# --- resuming a bg session ---------------------------------------------------------
+# `claude --bg --resume <id>` of a session that is in the config home's roster
+# (running or stopped) with ANY other flag "keeps its own saved options, so the
+# flags you passed started a copy": on the reference host that copy never came
+# up (claude_pid=0, no process, launch exit 0). Bare, it "woke session <id>
+# with its saved options (--dangerously-skip-permissions, --plugin-dir,
+# --channels, --settings, --model)" under the same id (probe, CC 2.1.282), also
+# for a session that was never prompted. Flags only apply to a session the
+# roster does not hold (resumed from its transcript) or a fresh one.
+function Get-BgFlagsKey {
+    # The flags of a bg argv that decide how the session runs, as it saves
+    # them: without --bg, --resume <id>, --continue and --debug-file <path>.
+    # The debug log is left out on purpose: a session started with `--debug`
+    # keeps logging when it is resumed, and must not turn the next unattended
+    # restart fresh (an explicit -DebugLog is Get-BgResumePlan's own input).
+    param([string[]]$Argv)
+    $out = @(); $skip = $false
+    foreach ($a in @($Argv)) {
+        if ($skip) { $skip = $false; continue }
+        if ($a -in @('--bg', '--continue')) { continue }
+        if ($a -in @('--resume', '--debug-file')) { $skip = $true; continue }
+        $out += $a
+    }
+    return ($out -join ' ')
+}
+
+function Get-BgResumePlan {
+    # fresh   no session id (first launch, -Fresh): a new session, flags applied
+    # flags   the roster does not hold the session: --resume <id> with flags
+    # bare    the roster holds it and the flags match what it saved: --resume <id> alone
+    # refuse  the roster holds it but the flags changed (channels, settings) or
+    #         this start asked for -DebugLog, and a person asked for this
+    #         start: `botcorp start --fresh`
+    # An unattended start (daemon, restart) with changed flags goes fresh
+    # instead of refusing: the bot must come up. Unknown saved flags (a launcher
+    # older than v0.1.8) count as unchanged.
+    param([string]$ResumeId, [bool]$InRoster, [string]$SavedFlags, [string]$Flags, [bool]$Interactive, [bool]$DebugRequested)
+    if (-not $ResumeId) { return 'fresh' }
+    if (-not $InRoster) { return 'flags' }
+    if (-not $DebugRequested -and (-not $SavedFlags -or $SavedFlags -eq $Flags)) { return 'bare' }
+    if ($Interactive) { return 'refuse' }
+    return 'fresh'
+}
+
+function Get-BgBareResumeArgv {
+    # plan 'bare': --bg --resume <id> and nothing else but a seed prompt (a
+    # prompt is not an option; a bare resume takes it without starting a copy).
+    param([Parameter(Mandatory)][string]$ResumeId, [string[]]$Seed = @())
+    return @(@('--bg', '--resume', $ResumeId) + @($Seed | Where-Object { $_ }))
+}
+
+function Get-BgLaunchResult {
+    # A bg launch succeeded only when a live claude process runs the session.
+    # `claude --bg` exits 0 for a copy that never comes up, so exit 0 alone
+    # proves nothing: no pid, or a dead one, is exit 3.
+    param([int]$ExitCode, [int]$ClaudePid, [bool]$Alive)
+    if ($ExitCode -ne 0) { return @{ Code = $ExitCode; Ok = $false; Text = "claude --bg exited $ExitCode" } }
+    if ($ClaudePid -le 0) { return @{ Code = 3; Ok = $false; Text = 'no claude process runs the session (claude_pid=0): `claude --bg` returned 0 but its session never came up' } }
+    if (-not $Alive) { return @{ Code = 3; Ok = $false; Text = "claude pid $ClaudePid is not alive" } }
+    return @{ Code = 0; Ok = $true; Text = "claude pid $ClaudePid alive" }
+}
+
+function Remove-BgStrays {
+    # Every roster row of the config home (stopped ones included) that is not
+    # the recorded session and has no live claude process: `claude stop` (a
+    # row can still read `blocked`) then `claude rm`. The roster is per config
+    # home (Get-BgAgents), so all of it is this bot's. Returns the count, -1 if
+    # the roster could not be read.
+    param([Parameter(Mandatory)][string]$Bot, [hashtable]$Paths, [string]$KeepSessionId, [string]$KeepBgId, [int]$TimeoutSec = 30)
+    if (-not $Paths) { $Paths = Get-BotPaths -Bot $Bot }
+    $rows = Get-BgAgents -Bot $Bot -Paths $Paths -All -TimeoutSec $TimeoutSec
+    if ($null -eq $rows) { return -1 }
+    $n = 0
+    foreach ($a in @($rows)) {
+        try {
+            if (-not $a -or -not $a.id) { continue }
+            if (($KeepBgId -and "$($a.id)" -eq $KeepBgId) -or ($KeepSessionId -and "$($a.sessionId)" -eq $KeepSessionId)) { continue }
+            if (Test-BgAgentPidAlive $a) { continue }
+            $envCd = @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir }
+            if ("$($a.state)" -ne 'stopped') { [void](Invoke-Bounded -Exe (Resolve-ClaudeExe) -Arguments @('stop', "$($a.id)") -TimeoutSec $TimeoutSec -Label 'claude stop' -Capture -Env $envCd -WorkingDirectory $Paths.BotHome -Bot $Bot) }
+            $r = Invoke-Bounded -Exe (Resolve-ClaudeExe) -Arguments @('rm', "$($a.id)") -TimeoutSec $TimeoutSec -Label 'claude rm' -Capture -Env $envCd -WorkingDirectory $Paths.BotHome -Bot $Bot
+            Write-DaemonLog "claude rm $($a.id) (stray $($a.state) row of this bot, no live process): exit=$($r.ExitCode)" -Bot $Bot
+            if ($r.ExitCode -eq 0) { $n++ }
+        } catch {}
+    }
+    return $n
+}
+
+# --- bun, for the Telegram plugin ---------------------------------------------------
+# The plugin's .mcp.json runs a bare `bun`. bun's installer puts it in
+# %USERPROFILE%\.bun\bin, which a daemon / session-0 / bg launch's PATH lacks
+# (reference host 2026-09-25: MCP log "Server stderr: 'bun' is not recognized
+# as an internal or external command" -> CONNECTION_CLOSED, no poller). The
+# launcher prepends bun's folder to PATH before `claude --bg`, i.e. before the
+# daemon that keeps that env starts; the plugin's own files are never patched
+# (a plugin update would reset them).
+function Resolve-BunExe {
+    # harness.bun_path (when it names a file) > PATH > <UserProfile>\.bun\bin.
+    # @{ Path; Source } with Path '' when none resolves.
+    param([string]$Override, [string]$PathEnv, [string]$UserProfile)
+    $win = ($env:OS -eq 'Windows_NT')
+    if ($Override -and (Test-Path -LiteralPath $Override -PathType Leaf)) { return @{ Path = (Resolve-Path -LiteralPath $Override).Path; Source = 'harness.bun_path' } }
+    $names = $(if ($win) { @('bun.exe', 'bun.cmd') } else { @('bun') })
+    foreach ($d in @("$PathEnv" -split [IO.Path]::PathSeparator)) {
+        if (-not $d) { continue }
+        foreach ($n in $names) { $p = Join-Path $d.Trim('"') $n; if (Test-Path -LiteralPath $p -PathType Leaf) { return @{ Path = $p; Source = 'PATH' } } }
+    }
+    if ($UserProfile) {
+        $p = Join-Path $UserProfile $(if ($win) { '.bun\bin\bun.exe' } else { '.bun/bin/bun' })
+        if (Test-Path -LiteralPath $p -PathType Leaf) { return @{ Path = $p; Source = '~/.bun/bin' } }
+    }
+    return @{ Path = ''; Source = '' }
+}
+
+function Add-PathDir {
+    # $Dir first on $PathEnv, any other copy of it dropped.
+    param([string]$PathEnv, [Parameter(Mandatory)][string]$Dir)
+    $sep = [IO.Path]::PathSeparator
+    $rest = @("$PathEnv" -split $sep | Where-Object { $_ -and ($_.Trim('"').TrimEnd('\', '/') -ine $Dir.TrimEnd('\', '/')) })
+    return ((@($Dir) + $rest) -join $sep)
 }
 
 # --- the config home's Claude Code daemon ----------------------------------------------
@@ -700,6 +832,14 @@ function Stop-BgSession {
             } catch {}
         }
     }
+    # ... and every dead row that is not the recorded session leaves the roster
+    # (a copy that never came up, an old session): the recorded one stays, so
+    # the next start resumes it bare. Both handles are kept: bg_id is the
+    # row's stable id (a /clear gives the row a new session id, which the
+    # SessionStart hook records), but a launcher older than v0.1.8 could
+    # record a copy's id there.
+    $sid = ''; try { if ($st -and $st.session_id) { $sid = "$($st.session_id)" } } catch {}
+    [void](Remove-BgStrays -Bot $Bot -Paths $Paths -KeepSessionId $sid -KeepBgId $bgId -TimeoutSec $TimeoutSec)
     return (-not ($cpid -gt 0 -and (Test-ProcAlive $cpid @('claude'))))
 }
 
