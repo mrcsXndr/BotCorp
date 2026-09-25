@@ -158,6 +158,22 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
   return { level: 'INFO', detail: `not running (${state.status || 'stopped'})` };
 }
 
+// The file half of both tools checks: every harness tool has a shim or the
+// bot's own copy in the bot folder, and no shim is left for a removed tool.
+// `<bot>: harness tools reachable` is this alone; `shape` is the summary.
+export function toolShimsVerdictOf({ rows, outdated = [] }) {
+  const fix = 'botcorp sync <bot>';
+  const bad = rows.filter((r) => r.kind === 'missing' || r.kind === 'stale');
+  const own = rows.filter((r) => r.kind === 'own').length;
+  const shape = `${rows.length} tools (${rows.length - own} shims${own ? `, ${own} bot-owned` : ''})`;
+  if (bad.length) {
+    const list = bad.slice(0, 6).map((r) => `${r.rel} ${r.kind === 'stale' ? 'is a shim for a tool the harness no longer has' : 'missing'}`).join(', ');
+    return { level: 'FAIL', shape, detail: `${list}${bad.length > 6 ? ` (+${bad.length - 6} more)` : ''}: a relative \`tools/...\` call from the bot folder fails. Fix: ${fix}` };
+  }
+  if (outdated.length) return { level: 'WARN', shape, detail: `${shape}; ${outdated.length} shim(s) from another checkout (${fix} rewrites them)` };
+  return { level: 'PASS', shape, detail: `${shape}, all resolve from the bot folder` };
+}
+
 // `<bot>: tg tools reachable` from what doctor measured:
 //   rows      toolShimState(): { rel, kind: own|shim|missing|stale }
 //   outdated  rels of shims whose text is not what sync writes for this checkout
@@ -166,10 +182,9 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
 export function tgToolsVerdictOf({ rows, outdated = [], probe }) {
   const fix = 'botcorp sync <bot>';
   if (!rows.length) return { level: 'FAIL', detail: 'the harness ships no tools/tg/*.py (a broken checkout?)' };
-  const bad = rows.filter((r) => r.kind === 'missing' || r.kind === 'stale');
-  if (bad.length) return { level: 'FAIL', detail: `${bad.map((r) => `${r.rel} ${r.kind === 'stale' ? 'is a shim for a tool the harness no longer has' : 'missing'}`).join(', ')}: a relative \`python tools/tg/...\` call from the bot folder fails. Fix: ${fix}` };
-  const own = rows.filter((r) => r.kind === 'own').length;
-  const shape = `${rows.length} tools (${rows.length - own} shims${own ? `, ${own} bot-owned` : ''})`;
+  const files = toolShimsVerdictOf({ rows });
+  if (files.level === 'FAIL') return files;
+  const shape = files.shape;
   if (!probe) return { level: 'WARN', detail: `${shape}; python not found, so tg_send.py --check was not run` };
   const line = (k) => { const m = (probe.out || '').match(new RegExp(`^${k}: (.*)$`, 'm')); return m ? m[1].trim() : null; };
   const ran = line('harness');

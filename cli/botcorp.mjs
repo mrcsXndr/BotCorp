@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, tgToolsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -868,16 +868,32 @@ function telegramPluginCommand(bot) {
 // folder (a shim or the bot's own copy), and a relative `python
 // tools/tg/tg_send.py --check` there really runs (no network), with the env a
 // session has minus the token (the vault holds that, not the doctor's shell).
-function tgToolsVerdict(bot) {
+function toolShimRows(bot) {
   const home = botHome(bot);
   const rows = toolShimState(home, ROOT);
   const outdated = rows.filter((r) => r.kind === 'shim' && fs.readFileSync(path.join(home, ...r.rel.split('/')), 'utf-8') !== toolShimText(r.rel, ROOT)).map((r) => r.rel);
+  return { rows, outdated };
+}
+
+function tgToolsVerdict(bot) {
+  const home = botHome(bot);
+  const tg = (rel) => rel.startsWith('tools/tg/');
+  const { rows, outdated } = toolShimRows(bot);
   const py = resolvePython();
   const probe = py ? run(py.file, [path.join('tools', 'tg', 'tg_send.py'), '--check'], {
     cwd: home, timeoutMs: 30_000,
     env: { BOT_HOME: home, BOT_NAME: bot, CLAUDE_CONFIG_DIR: configDir(bot), BOTCORP_HOME, PYTHONIOENCODING: 'utf-8', TELEGRAM_BOT_TOKEN: '', TELEGRAM_CHAT_ID: '' },
   }) : null;
-  const v = tgToolsVerdictOf({ rows, outdated, probe });
+  const v = tgToolsVerdictOf({ rows: rows.filter((r) => tg(r.rel)), outdated: outdated.filter(tg), probe });
+  return { level: v.level, detail: v.detail.replace(/<bot>/g, bot) };
+}
+
+// `<bot>: harness tools reachable`: the other tools/<dir>/ shims (every bot,
+// telegram or not: the rules and skills run them relative to the bot folder).
+function harnessToolsVerdict(bot) {
+  const tg = (rel) => rel.startsWith('tools/tg/');
+  const { rows, outdated } = toolShimRows(bot);
+  const v = toolShimsVerdictOf({ rows: rows.filter((r) => !tg(r.rel)), outdated: outdated.filter((r) => !tg(r)) });
   return { level: v.level, detail: v.detail.replace(/<bot>/g, bot) };
 }
 
@@ -2015,6 +2031,10 @@ async function cmdDoctor({ flags }) {
         const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };
         const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4 });
         add(v.level, `${bot}: session env`, `${v.env ? `${v.env}: ` : ''}${v.detail}${v.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log: the "bg:" daemon line and the "env:" line)` : ''}`, 'bots');
+      }
+      {
+        const v = harnessToolsVerdict(bot);
+        add(v.level, `${bot}: harness tools reachable`, v.detail, 'bots');
       }
       if (cfg.harness.tray) add(trayEntries.has(`BotCorp-Tray-${bot}`) ? 'PASS' : 'WARN', `${bot}: tray`, trayEntries.has(`BotCorp-Tray-${bot}`) ? 'HKCU Run entry registered' : `harness.tray is on but no HKCU Run entry (botcorp tray ${bot} on)`, 'bots');
       else add('INFO', `${bot}: tray`, 'off (harness.tray: false)', 'bots');

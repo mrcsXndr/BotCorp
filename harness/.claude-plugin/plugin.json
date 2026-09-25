@@ -2,7 +2,7 @@
   "name": "botcorp",
   "displayName": "BotCorp harness",
   "description": "Hooks, agents, skills and tools for a long-running Claude Code bot: journal/timeline/recall memory, Telegram intake guards, cost meter, session lifecycle. Loaded in place with --plugin-dir <BotCorp>/harness by the BotCorp daemon.",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "author": { "name": "BotCorp" },
   "keywords": ["bot", "harness", "telegram", "memory", "daemon"],
   "license": "MIT"

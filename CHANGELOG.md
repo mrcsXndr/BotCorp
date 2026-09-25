@@ -3,6 +3,29 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.11
+
+v0.1.10 shimmed `tools/tg` only; the rules, skills, agents and hook nudges
+also run `tools/v2/recall.py`, `journal.py`, `gh_projects.py`,
+`tools/infra/sanitize.py`, `tools/browser/ab.sh`, ... relative to the bot
+folder.
+
+- **Every harness tool folder is shimmed**: each `.py`, `.sh` and `.ps1` of
+  every `harness/tools/<dir>/` (not `_`-prefixed private modules), so a new
+  tool or folder needs no code change. `.sh` shims `exec bash <harness copy>
+  "$@"`; `.ps1` shims run `& <harness copy> @args` and exit with its code. A
+  `.py` shim imported by a bot's own script is the harness module (its CLI
+  does not run). A shim in a folder the harness dropped is removed.
+- **Regression test**: every relative `tools/<dir>/<file>` reference in the
+  harness and the bot template must resolve to a shim of a real harness file
+  in a synced bot folder. The Google tools (`tools/google/*.sh`, used by the
+  morning / standup / tasks skills) are not in the harness; those skills now
+  say they are the bot's own and to skip the step without them.
+- Doctor: `<bot>: harness tools reachable`. `sync` reports unchanged shims
+  as one `tools/ shims (<n>)` line.
+
+Upgrade: check out `v0.1.11`, then `botcorp sync <bot>`. No restart.
+
 ## v0.1.10
 
 A field failure on the reference host: the bot's `CLAUDE.md` and rules run
