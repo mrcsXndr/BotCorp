@@ -65,7 +65,7 @@ export async function getBot(name) {
     remoteControl: !!modules.remote_control,
     modules,
     capabilities: cfg.capabilities || null,
-    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, trigger: a?.trigger, enabled: a?.enabled !== false })) : [],
+    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false })) : [],
     home,
     configDir: configDir(name),
     yamlError,
