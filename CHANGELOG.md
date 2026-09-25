@@ -3,6 +3,18 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.12
+
+Doctor-only. On the reference host `<bot>: bun resolvable for telegram
+plugin` WARNed "found only on this shell's PATH" for a bun that lives in
+`%USERPROFILE%\.bun\bin`: that folder was also on the shell's PATH, PATH
+wins the lookup, and the verdict judged the source of the SHELL's hit. A
+daemon launch finds it through the `~/.bun/bin` fallback. The check now
+runs the launcher's own `Resolve-BunExe` (daemon/_common.ps1) with an empty
+PATH: PASS naming its source (`harness.bun_path` / `~/.bun/bin`), WARN only
+when nothing but this shell's PATH has bun, FAIL when nothing does. No
+change to what a launch does. Upgrade: check out `v0.1.12`; nothing else.
+
 ## v0.1.11
 
 v0.1.10 shimmed `tools/tg` only; the rules, skills, agents and hook nudges

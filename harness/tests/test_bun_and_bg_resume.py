@@ -107,6 +107,51 @@ def test_doctor_fails_when_the_plugin_command_resolves_nowhere(tmp_path, fake_ho
     assert "is not recognized" in got[0][2] and "harness.bun_path" in got[0][2]
 
 
+@needs_node
+def test_doctor_bun_verdict_follows_the_launch_resolution_not_this_shells_path():
+    # v0.1.12, the reference host: bun on this shell's PATH AND in ~/.bun/bin.
+    # PATH wins the shell lookup, but a daemon launch finds ~/.bun/bin: PASS.
+    shell = {"path": "C:/tools/bun.exe", "source": "PATH"}
+    cases = [
+        [shell, {"path": "C:/u/.bun/bin/bun.exe", "source": "~/.bun/bin"}],
+        [shell, {"path": "D:/pinned/bun.exe", "source": "harness.bun_path"}],
+        [shell, {"path": "", "source": ""}],
+        [{"path": "", "source": ""}, {"path": "", "source": ""}],
+        [shell, {"path": "", "source": "", "error": "pwsh not found"}],
+    ]
+    got = _node(f"{json.dumps(cases)}.map(([r, l]) => m.pluginCommandVerdict('bun', r, l))")
+    assert [g["level"] for g in got] == ["PASS", "PASS", "WARN", "FAIL", "WARN"]
+    assert "(~/.bun/bin)" in got[0]["detail"] and "C:/u/.bun/bin/bun.exe" in got[0]["detail"]
+    assert "(harness.bun_path)" in got[1]["detail"]
+    assert "found only on this shell's PATH" in got[2]["detail"]
+    assert "is not recognized" in got[3]["detail"]
+
+
+@needs_pwsh
+@needs_node
+def test_doctor_runs_the_launchers_resolver_without_this_shells_path(tmp_path, fake_home):
+    home, nobun = fake_home
+    onpath = tmp_path / "onpath"
+    onpath.mkdir()
+    (onpath / "bun.exe").write_bytes(b"")
+    ov = tmp_path / "pinned" / "bun.exe"
+    ov.parent.mkdir()
+    ov.write_bytes(b"")
+
+    def resolve(**arg):
+        script = f"const m = await import({json.dumps(LIB)}); console.log(JSON.stringify(m.launcherBunResolve({json.dumps(arg)})));"
+        env = dict(os.environ, PATH=f"{onpath}{os.pathsep}{os.environ['PATH']}")   # this shell HAS bun on PATH
+        r = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env)
+        assert r.returncode == 0, r.stderr
+        return json.loads(r.stdout.strip().splitlines()[-1])
+
+    got = resolve(userProfile=str(home))
+    assert got["source"] == "~/.bun/bin" and Path(got["path"]) == home / ".bun" / "bin" / "bun.exe"
+    assert resolve(userProfile=str(nobun), override=str(ov))["source"] == "harness.bun_path"
+    # only this shell's PATH has it: the launcher's order without it finds nothing
+    assert resolve(userProfile=str(nobun)) == {"path": "", "source": ""}
+
+
 @needs_pwsh
 def test_resume_plan_and_the_bare_argv_has_no_flags():
     got = _ps("@((Get-BgResumePlan -ResumeId '' -InRoster $true -SavedFlags 'a' -Flags 'b' -Interactive $true),"

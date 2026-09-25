@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -2046,7 +2046,11 @@ async function cmdDoctor({ flags }) {
         add(installed ? 'PASS' : 'FAIL', `${bot}: telegram plugin installed`, installed ? `telegram@claude-plugins-official in .claude-${bot}/plugins` : `not in .claude-${bot}/plugins, so --channels starts nothing: botcorp sync ${bot}`, 'bots');
         if (installed) {
           const command = telegramPluginCommand(bot);
-          const bv = pluginCommandVerdict(command, resolvePluginCommand({ command, override: cfg.harness.bun_path || '', pathEnv: process.env.PATH || '', userProfile: process.env.USERPROFILE || os.homedir() }));
+          const userProfile = process.env.USERPROFILE || os.homedir();
+          const override = cfg.harness.bun_path || '';
+          // bun: what the launcher resolves (Resolve-BunExe itself), minus this shell's PATH
+          const launch = /^bun(\.exe|\.cmd)?$/i.test(command) ? launcherBunResolve({ override, userProfile }) : null;
+          const bv = pluginCommandVerdict(command, resolvePluginCommand({ command, override, pathEnv: process.env.PATH || '', userProfile }), launch);
           add(bv.level, `${bot}: bun resolvable for telegram plugin`, bv.detail.replace('<bot>', bot), 'bots');
         }
         {
