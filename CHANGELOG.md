@@ -3,6 +3,15 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.8
+
+v0.2.7 plus the v0.1.10 release below: `sync` writes `tools/tg` forwarding
+shims so a bot's relative `python tools/tg/tg_send.py` runs the harness copy,
+`bot.yaml` `integrations.telegram.chat_id` (else the one allowlisted id) is
+the tools' default chat, the media senders take the session's token, and
+doctor adds `<bot>: tg tools reachable`. Upgrading: check out `v0.2.8`, then
+`botcorp sync <bot>`. No restart.
+
 ## v0.2.7
 
 v0.2.6 plus v0.1.9 below: the same code, with the v0.1.8 test that failed
@@ -151,6 +160,33 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.10
+
+A field failure on the reference host: the bot's `CLAUDE.md` and rules run
+`python tools/tg/tg_send.py`, relative to the bot folder, but the tool ships
+at `harness/tools/tg/`, so the call failed and the bot fell back to a
+plaintext plugin reply. The same held for the media senders.
+
+- **`sync` writes `tools/tg` shims.** One forwarding shim per
+  `harness/tools/tg/*.py` in `bots/<bot>/tools/tg/`, marked by its first line;
+  it runs the harness copy (argv, stdin, exit code pass through), found
+  relative to the shim or at the checkout sync ran from, never a plugin-cache
+  version path. A bot's own file is never touched; an orphan shim is removed.
+- **The default chat is wired.** `bot.yaml` `integrations.telegram.chat_id`
+  (documented as the `tg_send.py` default, read by nothing) now reaches the
+  tools through `<config home>/botcorp/telegram.json`; without it, the one
+  allowlisted id is the default; several ids and no `chat_id` = no default,
+  with an error that says so. Resolved at send time: no restart.
+- **The media senders** (`tg_send_photo/document/video.py`) resolve the token
+  and chat like `tg_send.py` (they read only `<bot>/.env` before, so the
+  session's `TELEGRAM_BOT_TOKEN` was ignored) and honour `BOT_TG_MUTE=1`.
+- `tg_send.py --check`: the file that ran, token last 4, the chat and where
+  each came from; no network.
+- Doctor: `<bot>: tg tools reachable` (the shims are there and a relative
+  `tg_send.py --check` in the bot folder runs).
+
+Upgrade: check out `v0.1.10`, then `botcorp sync <bot>`. No restart.
 
 ## v0.1.9
 

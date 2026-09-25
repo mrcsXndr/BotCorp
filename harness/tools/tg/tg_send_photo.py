@@ -2,7 +2,9 @@
 """
 tg_send_photo.py — send a photo to Telegram via the Bot API.
 
-Stdlib only. Reads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID from the bot's .env.
+Stdlib only. Token and default chat resolve as in tg_send.py (the session env
+first, then the bot's .env, bot.yaml chat_id, the only allowlisted id).
+BOT_TG_MUTE=1 sends nothing.
 
 Usage:
     python tools/tg/tg_send_photo.py <photo_path> [caption]
@@ -10,36 +12,22 @@ Usage:
 """
 
 import json
+import os
 import sys
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _paths import instance_root  # noqa: E402
-
-ENV_FILE = instance_root() / ".env"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tg_send import NO_CHAT_HINT, resolve_chat_id, resolve_token  # noqa: E402
 
 # Reuse tg_send.py's CommonMark->HTML converter so photo captions render the same
 # as text messages (bold/italic/links/code), instead of showing literal **markdown**.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 try:
     from tg_send import to_html as _to_html
 except Exception:  # pragma: no cover - fail open to plain text
     _to_html = None
-
-
-def load_env() -> dict:
-    env = {}
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if not s or s.startswith("#") or "=" not in s:
-                continue
-            k, v = s.split("=", 1)
-            env[k.strip()] = v.strip()
-    return env
 
 
 CAPTION_LIMIT = 1000  # Telegram's hard limit is 1024; leave headroom for the truncation marker.
@@ -63,11 +51,15 @@ def main():
             cut = CAPTION_LIMIT - 12
         caption = caption[:cut].rstrip() + " [truncated]"
 
-    env = load_env()
-    token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = env.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        sys.exit("error: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID required in .env")
+    if os.environ.get("BOT_TG_MUTE", "0") == "1":
+        print(f"[BOT_TG_MUTE] suppressed TG photo: {photo_path.name}", file=sys.stderr)
+        return
+    token = resolve_token()
+    chat_id = resolve_chat_id()
+    if not token:
+        sys.exit("error: no TELEGRAM_BOT_TOKEN (env, <config home>/channels/telegram/.env, <bot>/.env)")
+    if not chat_id:
+        sys.exit(f"error: {NO_CHAT_HINT}")
 
     photo_bytes = photo_path.read_bytes()
     # HTML-render the caption (truncation above ran on the raw text so we never

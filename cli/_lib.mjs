@@ -158,6 +158,31 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
   return { level: 'INFO', detail: `not running (${state.status || 'stopped'})` };
 }
 
+// `<bot>: tg tools reachable` from what doctor measured:
+//   rows      toolShimState(): { rel, kind: own|shim|missing|stale }
+//   outdated  rels of shims whose text is not what sync writes for this checkout
+//   probe     run() of `python tools/tg/tg_send.py --check` in the bot folder, null: no python
+// '<bot>' in the detail is the caller's to fill in.
+export function tgToolsVerdictOf({ rows, outdated = [], probe }) {
+  const fix = 'botcorp sync <bot>';
+  if (!rows.length) return { level: 'FAIL', detail: 'the harness ships no tools/tg/*.py (a broken checkout?)' };
+  const bad = rows.filter((r) => r.kind === 'missing' || r.kind === 'stale');
+  if (bad.length) return { level: 'FAIL', detail: `${bad.map((r) => `${r.rel} ${r.kind === 'stale' ? 'is a shim for a tool the harness no longer has' : 'missing'}`).join(', ')}: a relative \`python tools/tg/...\` call from the bot folder fails. Fix: ${fix}` };
+  const own = rows.filter((r) => r.kind === 'own').length;
+  const shape = `${rows.length} tools (${rows.length - own} shims${own ? `, ${own} bot-owned` : ''})`;
+  if (!probe) return { level: 'WARN', detail: `${shape}; python not found, so tg_send.py --check was not run` };
+  const line = (k) => { const m = (probe.out || '').match(new RegExp(`^${k}: (.*)$`, 'm')); return m ? m[1].trim() : null; };
+  const ran = line('harness');
+  if (probe.code !== 0 || !ran) {
+    const why = ((probe.err || '') + (probe.out || '')).trim().split(/\r?\n/).filter(Boolean).slice(-1)[0] || `exit ${probe.code}`;
+    return { level: 'FAIL', detail: `${shape}, but \`python tools/tg/tg_send.py --check\` in the bot folder failed: ${why.slice(0, 200)}. Fix: ${fix}` };
+  }
+  const chat = line('chat') || 'none';
+  const stale = outdated.length ? `; ${outdated.length} shim(s) from another checkout (${fix} rewrites them)` : '';
+  const noChat = chat.startsWith('none');
+  return { level: noChat || outdated.length ? 'WARN' : 'PASS', detail: `${shape}; tools/tg/tg_send.py runs ${ran}; default chat ${chat}${stale}` };
+}
+
 // The session-env row (<config>/botcorp/session-env.json `sessions`) of the
 // bot's current session: of the rows written since the launch, the one of
 // sessionId, else the newest (a `--resume` that started a copy has an id the
