@@ -62,12 +62,42 @@ const META_USER_PREFIXES = [
 // Inbound channel messages (Telegram and any other `source=`) arrive as
 //   <channel source="plugin:telegram:telegram" chat_id=".." user=".." ts="..">body</channel>
 // possibly several per entry, with surrounding text. Returned as body text plus
-// a small meta line; media attributes become a marker, never a filesystem path.
+// a small meta line; each attachment becomes a labelled item
+// ({kind, label, detail}), never a filesystem path or a file id.
 const CHANNEL_RE = /<channel\b([^>]*)>([\s\S]*?)<\/channel>/g;
 const ATTR_RE = /([a-zA-Z_][\w-]*)\s*=\s*"([^"]*)"/g;
 function sourceLabel(src) {
   const last = String(src || '').split(':').filter(Boolean).pop() || '';
   return last ? last.charAt(0).toUpperCase() + last.slice(1) : 'Channel';
+}
+const MEDIA_LABELS = { voice: 'Voice note', audio: 'Audio', video: 'Video', video_note: 'Video note', document: 'File', sticker: 'Sticker', photo: 'Photo' };
+// The body the Telegram plugin sends when an attachment has no caption: it
+// only repeats what the label already says.
+const PLACEHOLDER_RE = /^\((?:voice message|photo|video|video note|sticker[^)]*|document: [^)]*|audio: [^)]*)\)$/;
+function fmtSize(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  return n < 1024 ? `${n} B` : n < 1048576 ? `${Math.round(n / 1024)} KB` : `${(n / 1048576).toFixed(1)} MB`;
+}
+function fmtClock(v) {
+  const s = Math.round(Number(v));
+  if (!Number.isFinite(s) || s < 0) return '';
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+function mediaItems(attrs) {
+  const items = [];
+  if (attrs.image_path) items.push({ kind: 'photo', label: 'Photo', detail: '' });
+  if (attrs.attachment_file_id || attrs.attachment_name || attrs.attachment_kind) {
+    const kind = Object.hasOwn(MEDIA_LABELS, attrs.attachment_kind || '') ? attrs.attachment_kind : 'document';
+    const name = attrs.attachment_name ? String(attrs.attachment_name).replace(/^.*[\\/]/, '').slice(0, 80) : '';
+    const dur = fmtClock(attrs.attachment_duration ?? attrs.duration);
+    const parts = kind === 'voice' || kind === 'video_note' ? [dur]
+      : kind === 'audio' || kind === 'video' ? [name, dur]
+      : kind === 'sticker' ? []
+      : [name, fmtSize(attrs.attachment_size)];
+    items.push({ kind, label: MEDIA_LABELS[kind], detail: parts.filter(Boolean).join(' · ') });
+  }
+  return items;
 }
 export function parseChannelText(text) {
   const blocks = [];
@@ -78,10 +108,10 @@ export function parseChannelText(text) {
     at = m.index + m[0].length;
     const attrs = {};
     for (const a of m[1].matchAll(ATTR_RE)) attrs[a[1]] = a[2];
-    const media = [];
-    if (attrs.image_path) media.push('image');
-    if (attrs.attachment_file_id || attrs.attachment_name) media.push(attrs.attachment_name ? String(attrs.attachment_name).replace(/^.*[\\/]/, '').slice(0, 80) : (attrs.attachment_kind || 'file'));
-    blocks.push({ body: m[2].trim(), source: sourceLabel(attrs.source), user: attrs.user || null, ts: attrs.ts || null, media });
+    const media = mediaItems(attrs);
+    let body = m[2].trim();
+    if (media.length && PLACEHOLDER_RE.test(body)) body = '';
+    blocks.push({ body, source: sourceLabel(attrs.source), user: attrs.user || null, ts: attrs.ts || null, media });
   }
   if (!blocks.length) return null;
   rest = (rest + text.slice(at)).trim();
@@ -142,6 +172,34 @@ function isRealUserMessage(content) {
   return false;
 }
 
+// Voice notes: the bot transcribes one by running the harness transcriber
+// (tools/tg/transcribe.py) through Bash, and that tool result IS the
+// transcript. The call's id is remembered so its result, in a later entry, can
+// be passed on as a `transcript` turn; nothing is transcribed here.
+const TRANSCRIBE_RE = /\btranscribe\.py\b/;
+const TRANSCRIPT_MAX = 4000;
+const transcribeIds = new Set();
+function noteTranscribeCalls(content) {
+  if (!Array.isArray(content)) return;
+  for (const p of content) {
+    if (p?.type !== 'tool_use' || p.name !== 'Bash' || !p.id || !TRANSCRIBE_RE.test(String(p.input?.command || ''))) continue;
+    transcribeIds.add(p.id);
+    if (transcribeIds.size > 200) transcribeIds.delete(transcribeIds.values().next().value);
+  }
+}
+function transcriptFrom(content) {
+  if (!Array.isArray(content)) return null;
+  for (const p of content) {
+    if (p?.type !== 'tool_result' || !transcribeIds.has(p.tool_use_id)) continue;
+    transcribeIds.delete(p.tool_use_id);
+    if (p.is_error) return null;
+    // the transcriber's one stderr line ("[transcribe] groq ...") is not speech
+    const text = textFromContent(p.content).split('\n').filter((l) => !l.startsWith('[transcribe]')).join('\n').trim();
+    return text ? text.slice(0, TRANSCRIPT_MAX) : null;
+  }
+  return null;
+}
+
 function parseLine(line) {
   if (!line || !line.trim()) return null;
   let obj;
@@ -150,10 +208,12 @@ function parseLine(line) {
   const content = obj?.message?.content;
   const ts = obj?.timestamp || obj?.ts || null;
   if (type === 'user') {
+    const transcript = transcriptFrom(content);
+    if (transcript) return { role: 'transcript', text: transcript, ts };
     if (!isRealUserMessage(content)) return null;
     const text = textFromContent(content).trim();
     const channel = parseChannelText(text);
-    if (channel) return { role: 'user', text: channel.text, ts: channel.meta.ts || ts, meta: channel.meta };
+    if (channel) return channel.text || channel.meta.media.length ? { role: 'user', text: channel.text, ts: channel.meta.ts || ts, meta: channel.meta } : null;
     const tasks = text.startsWith('<task-notification>') ? parseTaskNotifications(text) : null;
     if (tasks) return tasks.map((task) => ({ role: 'task', ts, task }));
     // isMeta = injected, not typed (skill bodies, image companions); channel
@@ -162,6 +222,7 @@ function parseLine(line) {
     return { role: 'user', text, ts };
   }
   if (type === 'assistant') {
+    noteTranscribeCalls(content);
     const text = textFromContent(content).trim();
     if (text) return { role: 'assistant', text, tools: toolsFromContent(content), ts };
   }

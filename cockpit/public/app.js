@@ -57,7 +57,11 @@ function toast(msg, isErr) {
 /* ---- bot list (single 5 s poll; everything per-bot arrives over the socket) ---- */
 let lastSnapshot = '';
 async function refresh() {
-  try { state.bots = await api('GET', '/api/bots'); } catch (e) { return; }
+  try { state.bots = await api('GET', '/api/bots'); } catch (e) {
+    // keep a list that already rendered; only the first load shows the failure
+    if (!lastSnapshot) el('list').innerHTML = `<p class="errbox">Could not load the bots: ${esc(e.message)}. Retrying.</p>`;
+    return;
+  }
   const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
@@ -71,7 +75,7 @@ function renderList() {
   const list = el('list');
   list.innerHTML = '';
   if (!state.bots.length) {
-    list.innerHTML = '<div class="none">No bots yet. Create one: <code>botcorp new</code></div>';
+    list.innerHTML = '<div class="none">No bots yet. Create one with <code>botcorp new</code>.</div>';
     return;
   }
   for (const b of state.bots) {
@@ -185,9 +189,10 @@ async function renderDrawer(which) {
       if (b.running && b.kind === 'pty') rows.push(['pty host', `pid ${b.hostPid}`]);
       if (b.poller) rows.push(['telegram poller', `${b.poller.state}: ${POLLER_WHY[b.poller.state] || ''}`]);
       if (b.blocked) rows.push(['blocked', b.blocked.detail]);
-      if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError]);
-      box.innerHTML = `<div class="kv">${rows.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('')}</div>`;
+      if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError, 'bad']);
+      box.innerHTML = `<div class="kv">${rows.map(([k, v, cls]) => `<span class="k">${esc(k)}</span><span class="v${cls ? ' ' + cls : ''}">${esc(v)}</span>`).join('')}</div>`;
     } else if (which === 'pairing') {
+      box.innerHTML = '<p class="loading">Loading pairing</p>';
       const p = await api('GET', `/api/bots/${b.name}/pairing`);
       if (!p.present) { box.innerHTML = `<p class="hint">${esc(p.reason)}</p>`; return; }
       const age = (s) => s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
@@ -198,17 +203,17 @@ async function renderDrawer(which) {
         const expired = q.expiresInS != null && q.expiresInS <= 0;
         html += `<div class="row"><span class="m">${esc(q.senderId)}</span><span class="dim grow">code ${esc(q.code)} · ${age(q.ageS)}${expired ? ' · expired' : ''}</span><button class="btn" data-pair="${esc(q.senderId)}">Approve</button><button class="btn quiet" data-deny="${esc(q.senderId)}">Deny</button></div>`;
       }
-      html += '<div class="field"><input id="pairId" placeholder="or a Telegram user id (@userinfobot tells you yours)" inputmode="numeric" style="flex:1" /><button class="btn" id="pairManual">Approve id</button></div><div class="err" id="pairErr"></div>';
+      html += '<div class="field"><input id="pairId" class="grow" placeholder="or a Telegram user id (@userinfobot tells you yours)" inputmode="numeric" /><button class="btn" id="pairManual">Approve id</button></div><div class="err" id="pairErr"></div>';
       box.innerHTML = html;
       box.querySelectorAll('[data-pair]').forEach((btn) => { btn.onclick = () => approve(b.name, btn.dataset.pair); });
       box.querySelectorAll('[data-deny]').forEach((btn) => { btn.onclick = () => deny(b.name, btn.dataset.deny); });
       el('pairManual').onclick = () => approve(b.name, el('pairId').value.trim());
     } else if (which === 'vault') {
-      box.innerHTML = '<p class="hint">loading</p>';
+      box.innerHTML = '<p class="loading">Loading the vault</p>';
       const list = await api('GET', `/api/bots/${b.name}/secrets`);
       let html = '<p class="hint">Values are encrypted at rest and never shown. Set a key to replace its value.</p>';
-      html += list.length ? list.map((s) => `<div class="row"><span class="m grow">${esc(s.key)}</span><span class="dim">${esc(s.masked)}</span></div>`).join('') : '<p class="hint">No secrets yet.</p>';
-      html += '<div class="field"><input id="secKey" placeholder="key (oauth_token, telegram_token, ...)" /><input id="secVal" type="password" placeholder="value" style="flex:1" autocomplete="off" /><button class="btn" id="secSave">Set</button></div><div class="err" id="secErr"></div>';
+      html += list.length ? list.map((s) => `<div class="row"><span class="m grow">${esc(s.key)}</span><span class="dim num">${esc(s.masked)}</span></div>`).join('') : '<p class="hint">No secrets yet.</p>';
+      html += '<div class="field"><input id="secKey" class="key" placeholder="key, e.g. oauth_token" /><input id="secVal" class="grow" type="password" placeholder="value" autocomplete="off" /><button class="btn" id="secSave">Set</button></div><div class="err" id="secErr"></div>';
       box.innerHTML = html;
       el('secSave').onclick = async () => {
         el('secErr').textContent = '';
@@ -220,16 +225,21 @@ async function renderDrawer(which) {
         } catch (e) { el('secErr').textContent = e.message; }
       };
     } else if (which === 'runs') {
+      box.innerHTML = '<p class="loading">Loading runs</p>';
       const r = await api('GET', `/api/bots/${b.name}/automations`);
       let html = '';
-      if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
+      if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.kind === 'prompt' ? ', prompt' : ''}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
       if (!r.present) html += '<p class="hint">No runs recorded yet (the daemon writes them).</p>';
       for (const run of r.runs.slice().reverse()) {
-        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow">${esc(run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="m" style="color:${run.exit === 0 ? 'var(--ok)' : 'var(--bad)'}">exit ${esc(run.exit)}</span></div>${run.summary ? `<div class="dim" style="padding:0 0 6px">${esc(run.summary)}</div>` : ''}`;
+        // a prompt automation records `result` (sent / skipped: why / failed: why); a command, its exit code
+        const res = typeof run.result === 'string' ? run.result : '';
+        const outcome = res ? res.split(':')[0] : `exit ${run.exit}`;
+        const cls = res ? (res === 'sent' ? 'ok' : res.startsWith('skipped') ? 'warn' : 'bad') : run.exit === 0 ? 'ok' : 'bad';
+        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow num" title="${esc(run.start || run.ts || '')}">${esc(fmtWhen(run.start || run.ts) || run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="out ${cls}">${esc(outcome)}</span></div>${run.summary ? `<div class="run-sum">${esc(run.summary)}</div>` : ''}`;
       }
       box.innerHTML = html || '<p class="hint">Nothing here.</p>';
     }
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 
 async function approve(bot, senderId) {
@@ -255,9 +265,11 @@ async function deny(bot, senderId) {
 /* ---- terminal ---- */
 function ensureTerm() {
   if (state.term) return;
+  // The terminal's colours are the --term-* tokens (tokens.css), the same in both themes.
+  const tok = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
   const term = new window.Terminal({
-    fontFamily: '"Cascadia Code", Consolas, ui-monospace, monospace', fontSize: 13, cursorBlink: true, scrollback: 5000,
-    theme: { background: '#0d100e', foreground: '#d8ded3', cursor: '#9fbb94', selectionBackground: '#2f4a3a' },
+    fontFamily: tok('--font-mono'), fontSize: 13, cursorBlink: true, scrollback: 5000,
+    theme: { background: tok('--term-bg'), foreground: tok('--term-fg'), cursor: tok('--term-cursor'), selectionBackground: tok('--term-selection') },
   });
   const fit = new FitAddonCtor();
   term.loadAddon(fit);
@@ -414,7 +426,7 @@ el('vtTerm').onclick = () => setView('term');
 
 function resetChat() {
   state.pendingUser = null; state.chatFile = null; state.status = null;
-  el('msgs').innerHTML = '<div class="cempty">loading</div>';
+  el('msgs').innerHTML = '<div class="cempty">Loading the conversation</div>';
   renderStats();
 }
 
@@ -428,22 +440,42 @@ function fmtWhen(ts) {
 function bubble(turn) {
   const d = document.createElement('div');
   d.className = 'bubble ' + (turn.role === 'user' ? 'user' : 'assistant');
-  // Channel messages (Telegram, ...): "Telegram · user · 16:34 · image". Media
-  // arrive as markers from the server, never as paths.
+  // Channel messages (Telegram, ...): "Telegram · user · 16:34", then one
+  // labelled line per attachment ("Voice note 0:12", "File report.pdf"). The
+  // server sends labels, never a path or a file id.
   if (turn.meta) {
     const m = document.createElement('div');
     m.className = 'meta';
-    m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts), ...(turn.meta.media || [])].filter(Boolean).join(' · ');
+    m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts)].filter(Boolean).join(' · ');
     d.appendChild(m);
+    for (const it of turn.meta.media || []) {
+      const item = typeof it === 'string' ? { label: it } : it;
+      const line = document.createElement('div');
+      line.className = 'att';
+      const k = document.createElement('span');
+      k.className = 'att-k';
+      k.textContent = String(item.label || 'Attachment');
+      line.appendChild(k);
+      if (item.detail) {
+        const dd = document.createElement('span');
+        dd.className = 'att-d';
+        dd.textContent = String(item.detail);
+        line.appendChild(dd);
+      }
+      d.appendChild(line);
+      if (item.kind === 'voice') d.classList.add('voice');
+    }
   }
-  const body = document.createElement('div');
-  body.className = 'md';
-  // Transcript text is untrusted. md.js escapes every input character and emits
-  // only its own fixed tag set, so its output is the one thing that may go
-  // through innerHTML here; without it, plain text.
-  if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(turn.text);
-  else body.textContent = turn.text;
-  d.appendChild(body);
+  if (turn.text) {
+    const body = document.createElement('div');
+    body.className = 'md';
+    // Transcript text is untrusted. md.js escapes every input character and emits
+    // only its own fixed tag set, so its output is the one thing that may go
+    // through innerHTML here; without it, plain text.
+    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(turn.text);
+    else body.textContent = turn.text;
+    d.appendChild(body);
+  }
   if (turn.tools?.length) {
     const t = document.createElement('span');
     t.className = 'tools';
@@ -498,10 +530,35 @@ function taskCard(turn) {
   return d;
 }
 
+// A voice-note transcript (the bot ran the transcriber; the server passes its
+// output on as a `transcript` turn) goes under the voice note it belongs to:
+// the oldest one still without a transcript that came after the last one that
+// has one. With no such note it stands alone in the operator lane.
+function addTranscript(box, turn) {
+  const notes = [...box.querySelectorAll('.bubble.voice')];
+  let lastDone = -1;
+  notes.forEach((n, i) => { if (n.querySelector('.att-t')) lastDone = i; });
+  let host = notes.slice(lastDone + 1).find((n) => !n.querySelector('.att-t'));
+  if (!host) {
+    host = document.createElement('div');
+    host.className = 'bubble user';
+    box.appendChild(host);
+  }
+  const t = document.createElement('div');
+  t.className = 'att-t';
+  const label = document.createElement('span');
+  label.className = 'att-tl';
+  label.textContent = 'Transcript';
+  const body = document.createElement('div');
+  body.textContent = String(turn.text || '');
+  t.append(label, body);
+  host.appendChild(t);
+}
+
 function onChatPush(msg) {
   const box = el('msgs');
-  if (msg.available === false) { box.innerHTML = `<div class="cempty">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
-  if (msg.rotated) { box.innerHTML = '<div class="cempty">new session, reloading</div>'; state.pendingUser = null; return; }
+  if (msg.available === false) { box.innerHTML = `<div class="cempty err">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
+  if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.pendingUser = null; return; }
   if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; return; }
   if (msg.initial) box.innerHTML = '';
   const ph = box.querySelector('.cempty');
@@ -509,6 +566,7 @@ function onChatPush(msg) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   for (const turn of msg.turns) {
     if (turn.role === 'user' && state.pendingUser && turn.text.trim() === state.pendingUser) { state.pendingUser = null; continue; }
+    if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
     box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
   if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
@@ -535,7 +593,7 @@ el('chatInput').addEventListener('input', function () { this.style.height = 'aut
 
 /* ---- status chips: pushed by the server (cockpit/chatstatus.mjs) over the same
    socket when they change; ages and reset countdowns are computed here. A value
-   the server could not read arrives as {na: why} and shows as a dash. ---- */
+   the server could not read arrives as {na: why} and shows as n/a. ---- */
 const fmtTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 function fmtIn(s) {
   if (s <= 0) return 'now';
@@ -552,22 +610,22 @@ function renderStats() {
   const box = el('stats');
   const s = state.status;
   if (!s) { box.innerHTML = ''; return; }
-  if (s.error) { box.innerHTML = statHtml('status', '—', '', s.error); return; }
+  if (s.error) { box.innerHTML = statHtml('status', 'n/a', '', s.error); return; }
   const now = Date.now() / 1000;
   const age = s.ts ? now - s.ts : null;
   const read = age === null ? '' : `status.json written ${fmtAgo(age)}`;
   const out = [];
   const c = s.context;
-  out.push(c.na ? statHtml('context', '—', '', c.na)
+  out.push(c.na ? statHtml('context', 'n/a', '', c.na)
     : statHtml('context', `${c.pct}%`, `${fmtTok(c.used)} / ${fmtTok(c.window)}`, tip(`${c.used.toLocaleString()} of ${c.window.toLocaleString()} tokens`, `window: ${c.source}`, read), level(c.pct)));
   for (const [k, name, w] of [['5h', '5-hour', s.fiveHour], ['7d', '7-day', s.sevenDay]]) {
-    out.push(w.na ? statHtml(k, '—', '', w.na)
+    out.push(w.na ? statHtml(k, 'n/a', '', w.na)
       : statHtml(k, `${Math.round(w.pct)}%`, w.resetsAt ? `↻ ${fmtIn(w.resetsAt - now)}` : '', tip(`${w.pct}% of the ${name} limit used`, w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : 'reset time not reported', read), level(w.pct)));
   }
   const a = s.account;
-  out.push(a.na ? statHtml('account', '—', '', a.na) : statHtml('account', a.email || `token ****${a.tokenLast4}`, '', a.source));
+  out.push(a.na ? statHtml('account', 'n/a', '', a.na) : statHtml('account', a.email || `token ****${a.tokenLast4}`, '', a.source));
   const m = s.model, e = s.effort;
-  out.push(statHtml('model', m.na ? '—' : m.name, e.na ? '' : e.level,
+  out.push(statHtml('model', m.na ? 'n/a' : m.name, e.na ? '' : e.level,
     tip(m.na ? `model: ${m.na}` : `model ${m.id || m.name}, from ${m.source}`, e.na ? `effort: ${e.na}` : `effort ${e.level}, from ${e.source}`)));
   box.innerHTML = out.join('');
   box.classList.toggle('stale', age !== null && age > 900);
@@ -608,7 +666,7 @@ document.addEventListener('click', (e) => { const m = el('more'); if (m.open && 
 
 /* ---- releases (machine-wide, not per-bot) ---- */
 function relCard(r) {
-  const statusCls = r.status === 'applied' ? 'applied' : r.status === 'failed' ? 'failed' : '';
+  const statusCls = ['applied', 'failed', 'pending'].includes(r.status) ? r.status : '';
   const actions = r.status === 'pending' ? `<div class="actions"><button class="btn primary" data-apply="${esc(r.tag)}">Apply</button><button class="btn" data-skip="${esc(r.tag)}">Skip</button></div>` : '';
   return `<div class="rel">
     <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(r.status)}</span></div>
@@ -622,13 +680,13 @@ function relCard(r) {
 }
 async function loadUpdates() {
   const box = el('updatesList');
-  box.innerHTML = '<p class="hint">loading</p>';
+  box.innerHTML = '<p class="loading">Loading releases</p>';
   try {
     const { releases } = await api('GET', '/api/updates');
     box.innerHTML = releases.length ? releases.map(relCard).join('') : '<p class="hint">No releases recorded yet.</p>';
     box.querySelectorAll('[data-apply]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.apply, 'apply'); });
     box.querySelectorAll('[data-skip]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.skip, 'skip'); });
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 async function updateAction(tag, action) {
   try {
@@ -644,7 +702,7 @@ el('updatesBg').onclick = (e) => { if (e.target === el('updatesBg')) el('updates
 /* ---- new chat modal ---- */
 async function loadChatAccounts() {
   const sel = el('chatAccount');
-  sel.innerHTML = '<option>loading...</option>';
+  sel.innerHTML = '<option>Loading accounts</option>';
   try {
     const { accounts, error } = await api('GET', '/api/accounts');
     if (!accounts.length) {
@@ -705,16 +763,16 @@ el('historyBtn').onclick = async () => {
   if (!state.selected) return;
   el('histTitle').textContent = `Sessions: ${state.selected}`;
   const box = el('histList');
-  box.innerHTML = '<p class="hint">loading</p>';
+  box.innerHTML = '<p class="loading">Loading sessions</p>';
   el('historyBg').classList.add('show');
   try {
     const sessions = await api('GET', `/api/bots/${state.selected}/sessions`);
     box.innerHTML = sessions.length ? '' : '<p class="hint">No sessions yet.</p>';
     for (const s of sessions) {
       const d = new Date(s.mtime);
-      box.insertAdjacentHTML('beforeend', `<div class="hrow"><div class="top"><span>${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>${s.own ? '<span class="own">bot home</span>' : ''}<span class="sz">${(s.size / 1024).toFixed(0)} KB</span></div><div class="prev">${esc(s.preview) || '(no preview)'}</div>${s.own ? '' : `<div class="proj">${esc(s.project)}</div>`}</div>`);
+      box.insertAdjacentHTML('beforeend', `<div class="hrow"><div class="top"><span class="num">${d.toLocaleDateString()} ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>${s.own ? '<span class="own">bot home</span>' : ''}<span class="sz">${(s.size / 1024).toFixed(0)} KB</span></div><div class="prev">${esc(s.preview) || '(no preview)'}</div>${s.own ? '' : `<div class="proj">${esc(s.project)}</div>`}</div>`);
     }
-  } catch (e) { box.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 };
 el('histClose').onclick = () => el('historyBg').classList.remove('show');
 el('historyBg').onclick = (e) => { if (e.target === el('historyBg')) el('historyBg').classList.remove('show'); };

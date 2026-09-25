@@ -185,15 +185,60 @@ function transcriptBot(lines) {
 }
 const userLine = (content, extra = {}) => ({ type: 'user', timestamp: '2026-09-25T14:00:00.000Z', message: { role: 'user', content }, ...extra });
 
-test('parseChannelText: body + meta, media as markers, never paths', () => {
-  const r = parseChannelText('<channel source="plugin:telegram:telegram" chat_id="1" message_id="9" user="operator" user_id="1" ts="2026-09-25T14:34:00.000Z" image_path="D:\\bot\\inbox\\photo.jpg">look at this</channel>');
+test('parseChannelText: body + meta, media as labelled items, never paths', () => {
+  const r = parseChannelText('<channel source="plugin:telegram:telegram" chat_id="1" message_id="9" user="operator" user_id="1" ts="2026-09-25T14:34:00.000Z" image_path="D:\\bot\\inbox\\snap.jpg">look at this</channel>');
   assert.equal(r.text, 'look at this');
-  assert.deepEqual(r.meta, { source: 'Telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: ['image'] });
-  assert.doesNotMatch(JSON.stringify(r), /inbox|photo/);
-  const f = parseChannelText('<channel source="plugin:telegram:telegram" attachment_file_id="abc" attachment_name="C:\\tmp\\secret\\report.pdf" user="m"></channel>');
-  assert.deepEqual(f.meta.media, ['report.pdf']);
-  assert.doesNotMatch(JSON.stringify(f), /tmp|secret/);
+  assert.deepEqual(r.meta, { source: 'Telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [{ kind: 'photo', label: 'Photo', detail: '' }] });
+  assert.doesNotMatch(JSON.stringify(r), /inbox|snap/);
+  const f = parseChannelText('<channel source="plugin:telegram:telegram" attachment_kind="document" attachment_file_id="abc" attachment_name="C:\\tmp\\secret\\report.pdf" user="m"></channel>');
+  assert.deepEqual(f.meta.media, [{ kind: 'document', label: 'File', detail: 'report.pdf' }]);
+  assert.doesNotMatch(JSON.stringify(f), /tmp|secret|abc/);
   assert.equal(parseChannelText('no wrapper here'), null);
+});
+
+// What the Telegram plugin sends for media: attachment_* attributes and a
+// placeholder body when there is no caption. The bot transcribes a voice note
+// with the harness transcriber; its tool result is the transcript.
+const TG = 'source="plugin:telegram:telegram" chat_id="1" user="operator" user_id="1"';
+const VOICE_FIXTURE = [
+  userLine(`<channel ${TG} message_id="20" ts="2026-09-25T14:40:00.000Z" attachment_kind="voice" attachment_file_id="AwACAgQAAxkBAAIFILE" attachment_size="18342" attachment_mime="audio/ogg">(voice message)</channel>`, { isMeta: true }),
+  { type: 'assistant', timestamp: '2026-09-25T14:40:05.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_dl', name: 'mcp__plugin_telegram_telegram__download_attachment', input: { file_id: 'AwACAgQAAxkBAAIFILE' } }] } },
+  userLine([{ type: 'tool_result', tool_use_id: 'toolu_dl', content: 'D:\\bot\\inbox\\1727275200-AgADq.oga' }]),
+  { type: 'assistant', timestamp: '2026-09-25T14:40:08.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_tr', name: 'Bash', input: { command: 'PYTHONIOENCODING=utf-8 python tools/tg/transcribe.py "D:\\bot\\inbox\\1727275200-AgADq.oga"' } }] } },
+  userLine([{ type: 'tool_result', tool_use_id: 'toolu_tr', content: '[transcribe] groq whisper-large-v3\nMove the standup to ten and ship the fix.' }]),
+  { type: 'assistant', timestamp: '2026-09-25T14:40:12.000Z', message: { role: 'assistant', content: [{ type: 'text', text: 'Done, standup is at ten.' }] } },
+  userLine(`<channel ${TG} message_id="21" ts="2026-09-25T14:41:00.000Z" image_path="D:\\bot\\inbox\\1727275260-AgADr.jpg">(photo)</channel>`, { isMeta: true }),
+  userLine(`<channel ${TG} message_id="22" ts="2026-09-25T14:42:00.000Z" attachment_kind="document" attachment_file_id="BQACAgQAAxkBAAIFIzz" attachment_size="245760" attachment_mime="application/pdf" attachment_name="invoice-march.pdf">(document: invoice-march.pdf)</channel>`, { isMeta: true }),
+  userLine(`<channel ${TG} message_id="23" ts="2026-09-25T14:43:00.000Z" attachment_kind="voice" attachment_file_id="AwACAgQAAxkBAAIFJJJ" attachment_size="9000" attachment_duration="73">(voice message)</channel>`, { isMeta: true }),
+  { type: 'assistant', timestamp: '2026-09-25T14:43:04.000Z', message: { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_tr2', name: 'Bash', input: { command: 'python tools/tg/transcribe.py x.oga' } }] } },
+  userLine([{ type: 'tool_result', tool_use_id: 'toolu_tr2', is_error: true, content: 'Traceback: no backend' }]),
+];
+
+test('chatState: voice notes, photos and files render as labelled operator turns with the real transcript', async () => {
+  const st = await chatState(transcriptBot(VOICE_FIXTURE), 0);
+  assert.deepEqual(st.turns.map((t) => [t.role, t.text, t.meta?.media]), [
+    ['user', '', [{ kind: 'voice', label: 'Voice note', detail: '' }]],
+    ['transcript', 'Move the standup to ten and ship the fix.', undefined],
+    ['assistant', 'Done, standup is at ten.', undefined],
+    ['user', '', [{ kind: 'photo', label: 'Photo', detail: '' }]],
+    ['user', '', [{ kind: 'document', label: 'File', detail: 'invoice-march.pdf · 240 KB' }]],
+    // a duration shows when the attributes carry one; a failed transcription adds nothing
+    ['user', '', [{ kind: 'voice', label: 'Voice note', detail: '1:13' }]],
+  ]);
+  const wire = JSON.stringify(st.turns);
+  assert.doesNotMatch(wire, /<channel|attachment_|AwACAg|BQACAg|inbox|\.oga|\.jpg|\[transcribe\]|voice message|Traceback/);
+});
+
+test('a caption stays; a channel tag with no body and no media renders nothing', async () => {
+  const c = parseChannelText(`<channel ${TG} image_path="D:\\x.jpg">the whiteboard</channel>`);
+  assert.equal(c.text, 'the whiteboard');
+  assert.equal(c.meta.media[0].label, 'Photo');
+  // unknown kinds fall back to a file; a hostile kind cannot become markup
+  const odd = parseChannelText(`<channel ${TG} attachment_kind="&lt;img src=x&gt;" attachment_name="a.bin" attachment_size="12">(document: a.bin)</channel>`);
+  assert.deepEqual(odd.meta.media, [{ kind: 'document', label: 'File', detail: 'a.bin · 12 B' }]);
+  assert.deepEqual(parseChannelText(`<channel ${TG} attachment_kind="constructor">x</channel>`).meta.media, [{ kind: 'document', label: 'File', detail: '' }]);
+  const st = await chatState(transcriptBot([userLine(`<channel ${TG} message_id="30">  </channel>`, { isMeta: true })]), 0);
+  assert.deepEqual(st.turns, []);
 });
 
 // The shape Claude Code writes (a background agent finishing), path included.
