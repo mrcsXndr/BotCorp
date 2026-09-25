@@ -90,6 +90,7 @@ function writeStatusFile(j, harnessV) {
       session_id: j.session_id,
       version: j.version,
       model: j.model,
+      effort: j.effort,
       context_window: j.context_window,
       cost: j.cost,
       rate_limits: j.rate_limits,
