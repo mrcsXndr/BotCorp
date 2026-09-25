@@ -12,6 +12,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+import { botLiveness, processParentsAsync, sessionAliveVerdict, bgJobFile, bgBlockVerdict, firstInt } from '../cli/_lib.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const BOTCORP_ROOT = path.resolve(__dirname, '..');
@@ -46,6 +47,45 @@ export async function ptyEndpoint(name) {
   return rec;
 }
 
+// The process tree (is the Telegram poller below this bot's claude?) costs a
+// pwsh spawn, so it is fetched only when an answer depends on it, off the event
+// loop, and shared for TREE_TTL_MS across bots and clients.
+const TREE_TTL_MS = 30_000;
+let tree = { at: 0, promise: null };
+function processTree() {
+  if (!tree.promise || Date.now() - tree.at > TREE_TTL_MS) tree = { at: Date.now(), promise: processParentsAsync() };
+  return tree.promise;
+}
+
+// Whether the bot's session is alive and how, by the same checks as `botcorp
+// status` / `doctor` (cli/_lib.mjs): a pty-host OR a live claude --bg session
+// counts, and the Telegram poller is OWNED only while its bot.pid runs under
+// that claude.
+export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) {
+  const telegram = !!cfg?.harness?.modules?.telegram;
+  let botPid = 0;
+  try { botPid = firstInt(await fsp.readFile(path.join(cfgDir, 'channels', 'telegram', 'bot.pid'), 'utf-8')); } catch {}
+  let live = botLiveness({ pty, state, telegram, botPid });
+  if (live.poller === 'UNKNOWN') live = botLiveness({ pty, state, telegram, botPid, parents: await processTree() });
+  let paused = false;
+  try { await fsp.access(path.join(STATE_DIR, `${name}.paused`)); paused = true; } catch {}
+  const session = sessionAliveVerdict({ running: live.alive, state, paused });
+  const bgId = state && state.bg_id != null ? String(state.bg_id) : '';
+  const jobFile = live.claudeAlive ? bgJobFile(cfgDir, bgId) : null;
+  const job = jobFile ? await readJson(jobFile) : null;
+  const block = bgBlockVerdict({ running: live.alive, bgId, job });
+  return {
+    running: live.alive,
+    pid: pty?.ptyPid ?? (live.claudeAlive ? Number(state.claude_pid) : null),
+    // doctor `session alive`: FAIL = the state says it runs but nothing does
+    down: session.level === 'FAIL' ? session.detail : null,
+    // doctor `session not blocked`: FAIL = it waits on something only a person answers
+    blocked: block.level === 'FAIL' ? { needs: String(job.needs).trim(), detail: block.detail } : null,
+    // doctor `telegram channel running`
+    poller: telegram ? { state: live.poller, up: live.poller === 'OWNED' } : null,
+  };
+}
+
 export async function getBot(name) {
   if (!NAME_RE.test(name || '')) return null;
   const home = botHome(name);
@@ -55,6 +95,7 @@ export async function getBot(name) {
   let yamlError = null;
   try { cfg = yaml.load(raw) || {}; } catch (e) { yamlError = e.message; }
   const [state, pty] = await Promise.all([readJson(path.join(STATE_DIR, `${name}.json`)), ptyEndpoint(name)]);
+  const live = await liveness(name, cfg, state, pty);
   const modules = cfg?.harness?.modules || {};
   return {
     name,
@@ -70,10 +111,16 @@ export async function getBot(name) {
     configDir: configDir(name),
     yamlError,
     state,                                 // daemon-written, passed through
-    running: !!pty,
-    pid: pty?.ptyPid ?? null,
+    // A pty-host OR a live claude --bg session (was `!!pty`: a bg bot always
+    // read "stopped", so Start stayed enabled on a live bot).
+    running: live.running,
+    kind: cfg?.harness?.session === 'pty' ? 'pty' : 'bg',
+    poller: live.poller,
+    blocked: live.blocked,
+    down: live.down,
+    pid: live.pid,
     hostPid: pty?.pid ?? null,
-    startedAt: pty?.startedAt ?? null,
+    startedAt: pty?.startedAt ?? (live.running && state?.started_at ? state.started_at : null),
     mode: pty?.mode ?? null,
     // Background-session attach mode: read both fields defensively, since
     // either can be absent on an older bot.yaml or a state file the daemon

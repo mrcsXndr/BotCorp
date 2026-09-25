@@ -48,7 +48,7 @@ function toast(msg, isErr) {
 let lastSnapshot = '';
 async function refresh() {
   try { state.bots = await api('GET', '/api/bots'); } catch (e) { return; }
-  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram]), state.selected]);
+  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
     const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
@@ -66,14 +66,46 @@ function renderList() {
   }
   for (const b of state.bots) {
     const btn = document.createElement('button');
-    btn.className = 'bot' + (b.running ? ' on' : '') + (state.selected === b.name ? ' active' : '');
-    btn.innerHTML = `<span class="n">${esc(b.name)}</span><span class="s">${b.running ? 'running · pid ' + esc(b.pid) : 'stopped'}</span>`;
+    const s = botState(b);
+    btn.className = 'bot ' + s.cls + (state.selected === b.name ? ' active' : '');
+    btn.innerHTML = `<span class="n">${esc(b.name)}</span><span class="s">${esc(s.short)}</span>`;
     btn.onclick = () => select(b.name);
     list.appendChild(btn);
   }
 }
 
 function current() { return state.bots.find((b) => b.name === state.selected); }
+
+// running = a pty-host OR a live claude --bg session (the server measures it the
+// way `botcorp doctor` does); blocked = that session waits on a person.
+function botState(b) {
+  if (b.running && b.blocked) return { cls: 'on blocked', short: 'waiting on you', long: 'waiting on you' };
+  if (b.running) {
+    const how = b.kind === 'bg' ? `background session${b.bgId ? ' ' + b.bgId : ''}` : `pid ${b.pid}${b.mode ? ' · ' + b.mode : ''}`;
+    return { cls: 'on', short: b.kind === 'bg' ? 'running · background' : `running · pid ${b.pid}`, long: `running · ${how}` };
+  }
+  return { cls: b.down ? 'down' : '', short: 'stopped', long: 'stopped' };
+}
+
+// doctor `telegram channel running`: OWNED = a poller runs under this bot's claude.
+const POLLER_WHY = {
+  OWNED: 'the Telegram poller runs under this bot\'s session',
+  DEAD: 'no live Telegram poller under this bot\'s session',
+  FOREIGN: 'another process holds this bot\'s Telegram token',
+  NONE: 'the session started without its Telegram channel',
+  ORPHAN: 'a Telegram poller is left over with no session',
+  UNKNOWN: 'cannot tell (the process list was unavailable)',
+  none: 'the session is not running',
+};
+function renderTelegram(b) {
+  const chip = el('hTg');
+  if (!b.poller) { chip.style.display = 'none'; return; }
+  const up = b.poller.up;
+  chip.style.display = '';
+  chip.className = 'chip ' + (up ? 'ok' : b.running ? 'bad' : '');
+  chip.textContent = up ? 'Telegram on' : b.poller.state === 'UNKNOWN' ? 'Telegram ?' : 'Telegram off';
+  chip.title = POLLER_WHY[b.poller.state] || String(b.poller.state || '');
+}
 
 function renderHeader() {
   const b = current();
@@ -82,12 +114,17 @@ function renderHeader() {
   el('tabs').style.display = 'flex';
   el('empty').style.display = 'none';
   el('hName').textContent = b.displayName && b.displayName !== b.name ? `${b.displayName} (${b.name})` : b.name;
-  const bg = b.service === 'bg' && b.bgId;
+  const s = botState(b);
   const st = el('hState');
-  st.textContent = b.running ? (bg ? `background session ${b.bgId} (attach)` : `running · pid ${b.pid}${b.mode ? ' · ' + b.mode : ''}`) : 'stopped';
-  st.className = 'st' + (b.running ? ' on' : '');
+  st.textContent = s.long;
+  st.className = 'st ' + s.cls;
+  st.title = b.down || '';
+  renderTelegram(b);
+  el('waitbar').classList.toggle('show', !!(b.running && b.blocked));
+  el('waitbarText').textContent = b.running && b.blocked ? `Waiting on you: ${b.blocked.needs}` : '';
+  el('waitbarText').title = b.running && b.blocked ? b.blocked.detail : '';
+  // Never Start a live session: a second one means two Telegram pollers.
   el('startBtn').disabled = b.running;
-  el('startBtn').textContent = bg ? 'Attach' : 'Start';
   el('stopBtn').disabled = !b.running;
   el('restartBtn').disabled = !b.running;
   el('tabPairing').style.display = b.telegram ? '' : 'none';
@@ -133,8 +170,11 @@ async function renderDrawer(which) {
         ['telegram', b.telegram ? 'enabled' : 'off'], ['remote control', b.remoteControl ? 'enabled' : 'off'],
         ['modules', Object.entries(b.modules || {}).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'],
         ['daemon state', b.state ? JSON.stringify(b.state) : 'none written yet'],
-        ['pty host', b.running ? `pid ${b.hostPid}, since ${new Date(b.startedAt).toLocaleString()}` : 'not running'],
+        ['session', b.running ? `${b.kind === 'bg' ? 'background' : 'pty'}, pid ${b.pid}${b.startedAt ? `, since ${new Date(b.startedAt).toLocaleString()}` : ''}` : (b.down || 'not running')],
       ];
+      if (b.running && b.kind === 'pty') rows.push(['pty host', `pid ${b.hostPid}`]);
+      if (b.poller) rows.push(['telegram poller', `${b.poller.state}: ${POLLER_WHY[b.poller.state] || ''}`]);
+      if (b.blocked) rows.push(['blocked', b.blocked.detail]);
       if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError]);
       box.innerHTML = `<div class="kv">${rows.map(([k, v]) => `<span class="k">${esc(k)}</span><span class="v">${esc(v)}</span>`).join('')}</div>`;
     } else if (which === 'pairing') {

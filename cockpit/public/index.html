@@ -94,6 +94,14 @@
     .notice.exit { border-color: var(--bad); }
     .notice .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .notice .x { background: none; border: 0; color: var(--mute); cursor: pointer; }
+    .notice.wait { border-color: var(--warn); }
+    .notice.wait .grow { white-space: normal; overflow-wrap: anywhere; }
+    header .title .st.blocked, .bot.blocked .s { color: var(--warn); }
+    .bot.blocked::before { background: var(--warn); }
+    header .title .st.down { color: var(--bad); }
+    .chip { font-size: 11.5px; color: var(--mute); border: 1px solid var(--edge); border-radius: 4px; padding: 0 6px; cursor: help; }
+    .chip.ok { color: var(--ok); }
+    .chip.bad { color: var(--bad); }
 
     .empty { flex: 1; display: grid; place-items: center; color: var(--mute); text-align: center; padding: 20px; }
     .empty b { display: block; color: var(--ink-2); font-weight: 600; margin-bottom: 4px; }
@@ -222,7 +230,7 @@
 
   <main id="main">
     <header id="header" style="display:none">
-      <div class="title"><span id="hName"></span><span class="st" id="hState"></span></div>
+      <div class="title"><span id="hName"></span><span class="st" id="hState"></span><span class="chip" id="hTg" style="display:none"></span></div>
       <div class="grow"></div>
       <div class="seg" id="viewSeg"><button id="vtChat" class="active">Chat</button><button id="vtTerm">Terminal</button></div>
       <button class="btn primary" id="startBtn">Start</button>
@@ -249,6 +257,7 @@
       <button data-drawer="runs">runs</button>
     </div>
     <div class="drawer" id="drawer"></div>
+    <div class="notice wait" id="waitbar"><span id="waitbarText" class="grow"></span></div>
     <div class="notice" id="linkbar"><span id="linkbarText" class="grow"></span><button class="btn primary" id="linkbarBtn">Open</button><button class="x" id="linkbarClose">dismiss</button></div>
     <div class="notice exit" id="exitbar"><span id="exitbarText" class="grow"></span><button class="btn primary" id="exitRestartBtn">Restart</button><button class="x" id="exitbarClose">dismiss</button></div>
 
