@@ -116,6 +116,48 @@ export function pollerVerdict({ alive, telegram, recorded = null, botPid = 0, bo
   return underClaude ? 'OWNED' : 'DEAD';
 }
 
+// Resolve the command the Telegram plugin's .mcp.json runs (a bare `bun`) the
+// way launch.ps1 does (Resolve-BunExe): for bun, harness.bun_path (when it is
+// a file) > PATH > <userProfile>/.bun/bin; any other bare name, PATH only; an
+// absolute path, itself. -> { path, source } (path '' = does not resolve).
+export function resolvePluginCommand({ command, override = '', pathEnv = '', userProfile = '', platform = process.platform, exists = (p) => fs.existsSync(p) }) {
+  const win = platform === 'win32';
+  const sep = win ? ';' : ':';
+  const join = (a, b) => (win ? path.win32.join(a, b) : path.posix.join(a, b));
+  if (!command) return { path: '', source: '' };
+  if (/[\\/]/.test(command)) return exists(command) ? { path: command, source: 'absolute' } : { path: '', source: '' };
+  const isBun = command.toLowerCase().replace(/\.(exe|cmd)$/, '') === 'bun';
+  if (isBun && override && exists(override)) return { path: override, source: 'harness.bun_path' };
+  const names = win && !/\.(exe|cmd|bat)$/i.test(command) ? [`${command}.exe`, `${command}.cmd`] : [command];
+  for (const d of String(pathEnv).split(sep).map((s) => s.replace(/^"|"$/g, '')).filter(Boolean)) {
+    for (const n of names) { const p = join(d, n); if (exists(p)) return { path: p, source: 'PATH' }; }
+  }
+  if (isBun && userProfile) { const p = join(userProfile, win ? '.bun\\bin\\bun.exe' : '.bun/bin/bun'); if (exists(p)) return { path: p, source: '~/.bun/bin' }; }
+  return { path: '', source: '' };
+}
+
+// doctor `<bot>: bun resolvable for telegram plugin`. A command found only on
+// THIS shell's PATH may be missing from a daemon / session-0 launch's PATH
+// (the reference host's failure), so that is a WARN; harness.bun_path or the
+// standard install folder is what every launch finds.
+export function pluginCommandVerdict(command, resolved) {
+  if (!command) return { level: 'WARN', detail: "the telegram plugin's .mcp.json names no command" };
+  if (!resolved.path) return { level: 'FAIL', detail: `the telegram plugin's .mcp.json runs "${command}", which resolves nowhere (harness.bun_path, PATH, %USERPROFILE%\\.bun\\bin): its MCP server dies with "'${command}' is not recognized". Fix: install bun (https://bun.sh), or botcorp config set <bot> harness.bun_path <path to bun.exe>` };
+  if (resolved.source === 'PATH') return { level: 'WARN', detail: `"${command}" -> ${resolved.path}, found only on this shell's PATH; a daemon launch may not have it (pin it: harness.bun_path)` };
+  return { level: 'PASS', detail: `"${command}" -> ${resolved.path} (${resolved.source}); the launcher puts its folder first on the session's PATH` };
+}
+
+// doctor `<bot>: session alive`: a bot whose state says it runs (or whose last
+// launch failed) with no live claude process is down, not "not running".
+export function sessionAliveVerdict({ running, state = null, paused = false }) {
+  if (running) return { level: 'PASS', detail: `claude pid ${state && state.claude_pid ? state.claude_pid : '?'} alive${state && state.session_id ? ` (session ${state.session_id})` : ''}` };
+  if (paused) return { level: 'INFO', detail: 'paused (botcorp start un-pauses it)' };
+  if (!state) return { level: 'INFO', detail: 'never started' };
+  if (['running', 'starting'].includes(state.status)) return { level: 'FAIL', detail: `state says ${state.status} (session ${state.session_id || '?'}, bg_id ${state.bg_id || '?'}) but no live claude process runs it` };
+  if (state.status === 'exited' && Number(state.exit_code)) return { level: 'FAIL', detail: `the last launch failed (exit ${state.exit_code}; launches.log says why)` };
+  return { level: 'INFO', detail: `not running (${state.status || 'stopped'})` };
+}
+
 // The session-env row (<config>/botcorp/session-env.json `sessions`) of the
 // bot's current session: of the rows written since the launch, the one of
 // sessionId, else the newest (a `--resume` that started a copy has an id the

@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -851,28 +851,51 @@ function telegramPluginInstalled(bot) {
   return Array.isArray(rows) && rows.some((r) => r && r.installPath && fs.existsSync(path.join(r.installPath, 'server.ts')));
 }
 
+// The command the installed plugin's .mcp.json starts its MCP server with
+// (a bare `bun` in 0.0.7); '' when the plugin or its .mcp.json is not there.
+function telegramPluginCommand(bot) {
+  const j = readJson(path.join(configDir(bot), 'plugins', 'installed_plugins.json'));
+  const rows = (j && j.plugins && j.plugins['telegram@claude-plugins-official']) || [];
+  for (const r of Array.isArray(rows) ? rows : []) {
+    const m = r && r.installPath ? readJson(path.join(r.installPath, '.mcp.json')) : null;
+    const srv = m && m.mcpServers && (m.mcpServers.telegram || Object.values(m.mcpServers)[0]);
+    if (srv && srv.command) return String(srv.command);
+  }
+  return '';
+}
+
 // The plugin's own stderr lands in Claude Code's per-project MCP log, keyed by
 // the bot home slug; its last `error` line for THIS session says why the
 // poller never came up (`TELEGRAM_BOT_TOKEN required` = the session ran
-// without the token). null = no log line for the session at all.
+// without the token; `'bun' is not recognized` = no bun on its PATH). No line
+// for the session (a copy's id, a session that never came up) -> the newest
+// log of any session, `other_session` set. null = no log at all.
 function telegramMcpLastError(bot, sessionId) {
+  const own = telegramMcpLastErrorOf(bot, sessionId);
+  if (own || !sessionId) return own;
+  const any = telegramMcpLastErrorOf(bot, null);
+  return any ? { ...any, other_session: any.session || true } : null;
+}
+
+function telegramMcpLastErrorOf(bot, sessionId) {
   try {
     const dir = path.join(process.env.LOCALAPPDATA || '', 'claude-cli-nodejs', 'Cache', botHome(bot).replace(/[^A-Za-z0-9]/g, '-'), 'mcp-logs-plugin-telegram-telegram');
     // one file per connection attempt, named by its start time: newest first
     for (const f of fs.readdirSync(dir).filter((n) => n.endsWith('.jsonl')).sort().reverse()) {
       // the plugin's own stderr beats the generic "Connection closed" that follows it
-      let last = null, stderr = null, seen = false;
+      let last = null, stderr = null, seen = false, session = null;
       for (const line of fs.readFileSync(path.join(dir, f), 'utf-8').split(/\r?\n/)) {
         try {
           const row = JSON.parse(line);
           if (sessionId && row.sessionId !== sessionId) continue;
           seen = true;
+          session = row.sessionId || session;
           if (!row.error) continue;
           const first = String(row.error).replace(/^Server stderr:\s*/, '').split(/\r?\n/)[0].trim();
           if (/^Server stderr:/.test(String(row.error))) stderr = first; else last = first;
         } catch {}
       }
-      if (seen) return { file: path.join(dir, f), error: (stderr || last) ? scrub(stderr || last).slice(0, 160) : null };
+      if (seen) return { file: path.join(dir, f), session, error: (stderr || last) ? scrub(stderr || last).slice(0, 160) : null };
     }
     return null;
   } catch { return null; }
@@ -1967,6 +1990,9 @@ async function cmdDoctor({ flags }) {
       }
       if (!cfg) continue;
       const s = botStatus(bot);
+      const rawState = botState(bot);
+      const alive = sessionAliveVerdict({ running: s.running, state: rawState, paused: fs.existsSync(pausedPath(bot)) });
+      add(alive.level, `${bot}: session alive`, `${alive.detail}${alive.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh` : ''}`, 'bots');
       // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
       {
         const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };
@@ -1981,17 +2007,25 @@ async function cmdDoctor({ flags }) {
         add(open ? 'WARN' : 'PASS', `${bot}: pairing`, `policy=${st.policy} allowlisted=${st.allowFrom.length} pending=${st.pending.length}${open ? ` (nobody can talk to the bot without a pairing code: botcorp pair ${bot} <id>)` : ''}${st.present ? '' : ' (access.json absent until sync/start)'}`, 'bots');
         const installed = telegramPluginInstalled(bot);
         add(installed ? 'PASS' : 'FAIL', `${bot}: telegram plugin installed`, installed ? `telegram@claude-plugins-official in .claude-${bot}/plugins` : `not in .claude-${bot}/plugins, so --channels starts nothing: botcorp sync ${bot}`, 'bots');
+        if (installed) {
+          const command = telegramPluginCommand(bot);
+          const bv = pluginCommandVerdict(command, resolvePluginCommand({ command, override: cfg.harness.bun_path || '', pathEnv: process.env.PATH || '', userProfile: process.env.USERPROFILE || os.homedir() }));
+          add(bv.level, `${bot}: bun resolvable for telegram plugin`, bv.detail.replace('<bot>', bot), 'bots');
+        }
         // measured, like `status`: the plugin's bot.pid alive under this bot's claude
         const poller = s.state && s.state.poller;
-        if (!s.running) add('INFO', `${bot}: telegram channel running`, 'bot not running', 'bots');
+        const quote = () => {
+          const sid = rawState.session_id || null;
+          const why = telegramMcpLastError(bot, sid);
+          return !why ? ` - no plugin MCP log for session ${sid || '?'} (the plugin never started: /mcp in \`claude attach\` shows it)` : why.error ? ` - the plugin said${why.other_session ? ` (newest log, session ${why.other_session})` : ''}: "${why.error}"` : '';
+        };
+        if (!s.running && alive.level === 'FAIL') add('FAIL', `${bot}: telegram channel running`, `the bot should be running but no claude process is${quote()}. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh --debug`, 'bots');
+        else if (!s.running) add('INFO', `${bot}: telegram channel running`, 'bot not running', 'bots');
         else if (poller === 'OWNED') add('PASS', `${bot}: telegram channel running`, `bot.pid ${s.poller_pid} under claude ${s.state.claude_pid ?? (s.pty && s.pty.ptyPid)}`, 'bots');
         else if (poller === 'FOREIGN') add('WARN', `${bot}: telegram channel running`, 'launched WITHOUT --channels: another live process held the owner-lock (launches.log says which)', 'bots');
         else if (poller === 'UNKNOWN') add('WARN', `${bot}: telegram channel running`, 'bot.pid is alive but the process tree could not be read', 'bots');
         else {
-          const sid = botState(bot).session_id || null;
-          const why = telegramMcpLastError(bot, sid);
-          const said = !why ? ` - no plugin MCP log for session ${sid || '?'} (the plugin never started: /mcp in \`claude attach\` shows it)` : why.error ? ` - the plugin said: "${why.error}"` : '';
-          add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${said}. Fix: botcorp stop ${bot}; botcorp start ${bot} --debug (launches.log shows the daemon and poller lines, .claude-${bot}/debug/ the session's own log)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
+          add('FAIL', `${bot}: telegram channel running`, `poller=${poller}: no live bot.pid under the bot's claude${quote()}. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh --debug (launches.log shows the daemon and poller lines, .claude-${bot}/debug/ the session's own log)${installed ? '' : `; the plugin is missing first: botcorp sync ${bot}`}`, 'bots');
         }
       }
       // the backup module makes the folder a repo; then the vault and the config home must be ignored THERE

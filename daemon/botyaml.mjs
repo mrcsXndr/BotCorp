@@ -37,6 +37,7 @@ export const DEFAULTS = {
     git_pull: false,                // bounded `git pull` of the BOT repo at launch
     telegram_token_file: false,     // write <config>/channels/telegram/.env (fallback if env inheritance fails)
     debug: false,                   // every launch gets --debug-file <config>/debug/<stamp>.txt (the plugin's stderr included); `botcorp start --debug` for one launch
+    bun_path: '',                   // bun.exe for the Telegram plugin when it is neither on PATH nor in %USERPROFILE%\.bun\bin ('' = look there)
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     modules: {
@@ -101,6 +102,7 @@ export function validate(cfg) {
   if (!['daemon', 'manual'].includes(cfg.harness.service)) errs.push(`harness.service: daemon | manual (got ${cfg.harness.service})`);
   if (!['bg', 'pty'].includes(cfg.harness.session)) errs.push(`harness.session: bg | pty (got ${cfg.harness.session})`);
   if (typeof cfg.harness.debug !== 'boolean') errs.push(`harness.debug: true | false (got ${JSON.stringify(cfg.harness.debug)})`);
+  if (typeof cfg.harness.bun_path !== 'string') errs.push(`harness.bun_path: a path to bun.exe, or '' (got ${JSON.stringify(cfg.harness.bun_path)})`);
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
     const known = hookNames();
