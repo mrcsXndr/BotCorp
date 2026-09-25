@@ -73,17 +73,35 @@ export function firstInt(text) {
 
 // pid -> parent pid for every process, or null when the query failed (the
 // caller then cannot tell, which is not the same as "dead").
-export function processParents() {
-  const r = process.platform === 'win32'
-    ? runPwshCommand('Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }', { timeoutMs: 60_000 })
-    : run('ps', ['-e', '-o', 'pid=,ppid='], { timeoutMs: 30_000 });
-  if (r.code !== 0) return null;
+const PARENTS_PWSH = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }';
+function parseParents(out) {
   const parents = new Map();
-  for (const line of r.out.split(/\r?\n/)) {
+  for (const line of String(out).split(/\r?\n/)) {
     const [p, pp] = line.trim().split(/\s+/).map(Number);
     if (p > 0 && Number.isInteger(pp)) parents.set(p, pp);
   }
   return parents.size ? parents : null;
+}
+export function processParents() {
+  const r = process.platform === 'win32'
+    ? runPwshCommand(PARENTS_PWSH, { timeoutMs: 60_000 })
+    : run('ps', ['-e', '-o', 'pid=,ppid='], { timeoutMs: 30_000 });
+  if (r.code !== 0) return null;
+  return parseParents(r.out);
+}
+// The same query without blocking the event loop (the cockpit server).
+export function processParentsAsync({ timeoutMs = 60_000 } = {}) {
+  const [file, args] = process.platform === 'win32'
+    ? [resolvePwsh(), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', PARENTS_PWSH]]
+    : ['ps', ['-e', '-o', 'pid=,ppid=']];
+  return new Promise((resolve) => {
+    let out = '';
+    let child;
+    try { child = spawn(file, args, { windowsHide: true, timeout: timeoutMs }); } catch { resolve(null); return; }
+    child.stdout.on('data', (d) => { out += d; });
+    child.on('error', () => resolve(null));
+    child.on('close', (code) => resolve(code === 0 ? parseParents(out) : null));
+  });
 }
 
 // Is `pid` `ancestor` itself or below it in `parents` (a Map or a plain object)?
@@ -114,6 +132,27 @@ export function pollerVerdict({ alive, telegram, recorded = null, botPid = 0, bo
   if (!(botPid > 0) || !botPidAlive) return 'DEAD';
   if (underClaude === null) return 'UNKNOWN';
   return underClaude ? 'OWNED' : 'DEAD';
+}
+
+// `status` / `doctor` / the cockpit: is the bot's session alive, and does it
+// own its Telegram poller. Measured, never read back from the state file: a bg
+// bot whose claude worker died leaves `poller: OWNED` behind, so the poller is
+// only reported while a claude (bg) or pty process is actually alive; a live
+// bun poller with no claude is an orphan. `parents` (a Map, or a function
+// returning one) is only consulted when the answer depends on the process tree;
+// without it that answer is UNKNOWN.
+export function botLiveness({ pty = null, state = null, telegram = false, botPid = 0, parents = null }) {
+  const claudeAlive = !!(state && pidAlive(Number(state.claude_pid)));
+  const alive = !!pty || claudeAlive;
+  const botPidAlive = pidAlive(botPid);
+  let underClaude = null;
+  if (alive && telegram && botPidAlive) {
+    const tree = typeof parents === 'function' ? parents() : parents;
+    const root = claudeAlive ? Number(state.claude_pid) : Number(pty && pty.ptyPid);
+    if (tree) underClaude = isDescendant(tree, botPid, root);
+  }
+  const poller = pollerVerdict({ alive, telegram, recorded: (state && state.poller) ?? null, botPid, botPidAlive, underClaude });
+  return { alive, claudeAlive, botPidAlive, poller };
 }
 
 // Resolve the command the Telegram plugin's .mcp.json runs (a bare `bun`) the
@@ -314,6 +353,9 @@ export function sessionSecretEnvVerdict({ running, launch, declaredEnv = [] }) {
 // (<config>/jobs/<short>/state.json) says the session waits on something no
 // unattended launch answers (daemon/_common.ps1 Get-BgBlock: tempo blocked,
 // `needs` other than "send a prompt to start").
+export function bgJobFile(cfgDir, bgId) {
+  return /^[0-9a-f]{6,12}$/.test(String(bgId || '')) ? path.join(cfgDir, 'jobs', String(bgId), 'state.json') : null;
+}
 export function bgBlockVerdict({ running, bgId = '', job = null }) {
   if (!running) return { level: 'INFO', detail: 'not running' };
   if (!job) return { level: 'INFO', detail: `no job record for ${bgId || 'the session'} (cannot tell)` };

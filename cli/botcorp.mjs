@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgSlotProbe, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgSlotProbe, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -684,24 +684,11 @@ function botStatus(bot) {
   catch (e) { yamlError = e.message; }
   const pty = ptyLive(bot);
   const state = readJson(path.join(STATE_DIR, `${bot}.json`));
-  // Liveness is measured, never read back from the state file: a bg bot whose
-  // claude worker died leaves `poller: OWNED` behind, so the poller is only
-  // reported while a claude (or pty) process is actually alive; a live bun
-  // poller with no claude is an orphan. While alive, OWNED needs the plugin's
-  // bot.pid alive under this bot's claude (pollerVerdict); otherwise DEAD.
-  const claudeAlive = !!(state && pidAlive(Number(state.claude_pid)));
+  // Liveness is measured, never read back from the state file (botLiveness).
   let botPid = 0;
   try { botPid = firstInt(fs.readFileSync(path.join(configDir(bot), 'channels', 'telegram', 'bot.pid'), 'utf-8')); } catch {}
-  const alive = !!pty || claudeAlive;
-  const botPidAlive = pidAlive(botPid);
   const telegram = !!(cfg && cfg.harness.modules.telegram);
-  let underClaude = null;
-  if (alive && telegram && botPidAlive) {
-    const parents = processParents();
-    const root = claudeAlive ? Number(state.claude_pid) : Number(pty && pty.ptyPid);
-    if (parents) underClaude = isDescendant(parents, botPid, root);
-  }
-  const poller = pollerVerdict({ alive, telegram, recorded: (state && state.poller) ?? null, botPid, botPidAlive, underClaude });
+  const { alive, claudeAlive, botPidAlive, poller } = botLiveness({ pty, state, telegram, botPid, parents: processParents });
   const sessionEnv = sessionEnvOf(bot, state, alive, telegram);
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
   let statusAgeS = null, ctxUsedPct = null, rateLimits = null;
@@ -2070,7 +2057,8 @@ async function cmdDoctor({ flags }) {
         }
         const pv = bgPinVerdict({ running: s.running, bgId, pins, pinsError });
         add(pv.level, `${bot}: bg session pinned`, pv.detail.replace(/<bot>/g, bot), 'bots');
-        const job = /^[0-9a-f]{6,12}$/.test(bgId) ? readJson(path.join(configDir(bot), 'jobs', bgId, 'state.json')) : null;
+        const jobFile = bgJobFile(configDir(bot), bgId);
+        const job = jobFile ? readJson(jobFile) : null;
         const bv = bgBlockVerdict({ running: s.running, bgId, job });
         add(bv.level, `${bot}: session not blocked`, bv.detail, 'bots');
       }
