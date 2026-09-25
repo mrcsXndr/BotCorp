@@ -157,6 +157,13 @@ opts the bot into `permissions: bypass`, and only in these USER settings
 bypass disclaimer has been accepted and the workspace is trusted, which a
 fresh config home the daemon starts unattended can never do interactively.
 
+With the telegram module on, `botcorp sync` (the CLI command, not
+`daemon/sync.mjs`, which the tick runs offline) also installs the Telegram
+plugin into the config home when it is missing - `new` always did, `import`
+and `adopt` never did, and `--channels` then started nothing. It runs the
+same three `claude plugin` steps as `new` (marketplace add, install,
+disable); `--dry-run` only says it is missing.
+
 ### `secrets set <bot> <key>` / `secrets list <bot> [--json]` / `secrets delete <bot> <key>`
 
 Front for `daemon/secrets.ps1` (DPAPI, CurrentUser, per-bot entropy). `set`
@@ -377,7 +384,12 @@ says so). `reject` drops the entry.
   its pty pid, host pid and loopback port (never the attach token). Refuses if
   a live host already owns the bot.
 - `stop`: `pty-host --stop <bot>` (tree-kill of the shell: claude and the
-  Telegram poller included). Then removes `<config home>/channels/telegram/bot.pid`
+  Telegram poller included); a bg bot goes through `daemon/stop.ps1`:
+  `claude stop <bg id>`, the guarded tree-kill on the recorded claude pid,
+  and `claude stop` on every OTHER live session of the bot (cwd = bot home,
+  e.g. a copy a `--resume` started) - each one would keep the config home's
+  Claude Code daemon, and the env it started with, alive for the next start
+  (docs/daemon.md, "bg sessions and the daemon's env"). Then removes `<config home>/channels/telegram/bot.pid`
   if ITS pid is dead and `<config home>/botcorp/tg_owner.lock` if ITS pid is
   dead (the plugin's own stale-pid cleanup is a no-op on Windows; a stale lock
   would make the next launch think the poller is foreign).
@@ -393,7 +405,14 @@ alive as a process - measured, never read back from the file), pty/host
 pids and port, the daemon's `state/<bot>.json` (`status`, `started_by`,
 `poller`, `claude_pid`; with nothing alive `status=stopped`,
 `claude_pid=-` and `poller=none`, or `poller=ORPHAN` when only the Telegram
-poller's `bot.pid` is alive), telegram module, model, harness version
+poller's `bot.pid` is alive). While the bot is alive with the telegram
+module on, `poller` is measured too: `OWNED` (plus `bot.pid=<pid>`) only when
+`<config home>/channels/telegram/bot.pid` names a live process that descends
+from the bot's claude (bg) or pty root - the plugin writes that file only
+after its token check - otherwise `DEAD`; `FOREIGN` when the launch went
+without `--channels` because another live process held the owner-lock,
+`UNKNOWN` when the process tree could not be read. `--json` adds
+`poller_pid`. Then the telegram module, model, harness version
 (`harness/.claude-plugin/plugin.json`), the age of `<config
 home>/botcorp/status.json` with context used %, 5 h / 7 d rate-limit usage
 and the running CC version (written by the statusline on every render), the
@@ -520,9 +539,10 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   home's `settings.json` must carry `skipDangerousModePermissionPrompt`) and
   `<bot>: workspace trusted` (the config home's `.claude.json` must trust
   `bots/<bot>`), both FAIL with `botcorp sync <bot>` as the fix - a `--bg`
-  launch refuses without them; no
+  launch refuses without them; no plugin ENABLED by
   `enabledPlugins` in `bots/<bot>/.claude/settings.json` or `<config
-  home>/settings.json`; `<bot>: oauth token` — the vault `oauth_token` must
+  home>/settings.json` (the `false` entry `claude plugin disable` writes is
+  fine); `<bot>: oauth token` — the vault `oauth_token` must
   exist and must not be the machine-wide `CLAUDE_CODE_OAUTH_TOKEN` (compared
   on the last 4 characters only); FAIL means the bot would run on another
   bot's account; `<bot>: google account` — with `integrations.google.account`
@@ -533,7 +553,13 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   `.claude-<bot>` must be ignored THERE or it is a FAIL);
   with telegram on: `pairing: policy=<p> allowlisted=<n> pending=<n>`, WARN
   when the policy is `pairing` and `allowFrom` is empty (nobody can talk to
-  the bot without a code); `integrations.access.team` set but the cockpit
+  the bot without a code); `<bot>: telegram plugin installed` (FAIL: `botcorp
+  sync <bot>` installs it); `<bot>: telegram channel running`, the `status`
+  measurement - PASS on `OWNED`, FAIL on `DEAD` with the plugin's last error
+  from its MCP log (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
+  slug>\mcp-logs-plugin-telegram-telegram`, e.g. `TELEGRAM_BOT_TOKEN
+  required`) and `botcorp stop <bot>; botcorp start <bot>` as the fix, INFO
+  when the bot is not running; `integrations.access.team` set but the cockpit
   not exposed, or a different team than the machine file => WARN;
   `integrations.cloudflare: {account_id, workers}` + `CLOUDFLARE_API_TOKEN`
   in the env (never read from the vault here; the daemon injects it) => one

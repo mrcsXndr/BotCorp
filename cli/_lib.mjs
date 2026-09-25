@@ -71,6 +71,51 @@ export function firstInt(text) {
   return m ? Number(m[0]) : 0;
 }
 
+// pid -> parent pid for every process, or null when the query failed (the
+// caller then cannot tell, which is not the same as "dead").
+export function processParents() {
+  const r = process.platform === 'win32'
+    ? runPwshCommand('Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId)" }', { timeoutMs: 60_000 })
+    : run('ps', ['-e', '-o', 'pid=,ppid='], { timeoutMs: 30_000 });
+  if (r.code !== 0) return null;
+  const parents = new Map();
+  for (const line of r.out.split(/\r?\n/)) {
+    const [p, pp] = line.trim().split(/\s+/).map(Number);
+    if (p > 0 && Number.isInteger(pp)) parents.set(p, pp);
+  }
+  return parents.size ? parents : null;
+}
+
+// Is `pid` `ancestor` itself or below it in `parents` (a Map or a plain object)?
+export function isDescendant(parents, pid, ancestor, maxDepth = 12) {
+  if (!parents || !(pid > 0) || !(ancestor > 0)) return false;
+  const get = (k) => (parents instanceof Map ? parents.get(k) : parents[k]);
+  let cur = pid;
+  for (let i = 0; i <= maxDepth && cur > 4; i++) {
+    if (cur === ancestor) return true;
+    const next = Number(get(cur));
+    if (!(next > 0) || next === cur) return false;
+    cur = next;
+  }
+  return false;
+}
+
+// The Telegram poller as `status` / `doctor` report it. The plugin writes
+// channels/telegram/bot.pid (its bun server pid) only AFTER its token check,
+// so OWNED needs that pid alive AND below this bot's claude (bg) or pty root.
+// The launcher's own record ('OWNED') is an intent, not a measurement: a bg
+// session that inherited a daemon without the token has it too. A bot that
+// launched without --channels keeps FOREIGN (someone else owns the lock), a
+// bot without the telegram module keeps what was recorded (NONE).
+//   underClaude: true / false, or null when the process tree was unreadable
+export function pollerVerdict({ alive, telegram, recorded = null, botPid = 0, botPidAlive = false, underClaude = null }) {
+  if (!alive) return botPidAlive ? 'ORPHAN' : 'none';
+  if (!telegram || recorded === 'FOREIGN' || recorded === 'NONE') return recorded;
+  if (!(botPid > 0) || !botPidAlive) return 'DEAD';
+  if (underClaude === null) return 'UNKNOWN';
+  return underClaude ? 'OWNED' : 'DEAD';
+}
+
 // Same token shapes the cockpit scrubs (cockpit/cli.mjs): belt and braces on
 // top of the children's own masking.
 const TOKEN_SHAPES = [

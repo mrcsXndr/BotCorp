@@ -77,7 +77,7 @@ pty/fg launch, the claude worker's pid for a bg launch).
 
 | `session` | The bot process | Liveness | Stop | Seen through |
 |---|---|---|---|---|
-| `bg` (default) | a Claude Code background session: `launch.ps1 -Bg` runs `claude --bg [--resume <session_id>] --dangerously-skip-permissions --plugin-dir <harness> [--channels ... --settings <tg-enable>]` (channels LAST) and exits; the session runs under Claude Code's per-user supervisor in session 0 | `claude agents --json` (run with the bot's `CLAUDE_CONFIG_DIR`) lists the id / session id / cwd with a live `pid` or state `working`/`blocked`, OR the recorded `claude_pid` is alive | `claude stop <id>` (bounded 45 s; the conversation is kept), then the guarded tree-kill on the recorded pid if it lingers | `claude attach <id>` (BotCorp-Launch task, `botcorp attach`), the cockpit via `pty-host --attach` |
+| `bg` (default) | a Claude Code background session: `launch.ps1 -Bg` runs `claude --bg [--resume <session_id>] --dangerously-skip-permissions --plugin-dir <harness> [--channels ... --settings <tg-enable>]` (channels LAST) and exits; the session runs under Claude Code's supervisor for the bot's config home (`<config home>/daemon.lock`) | `claude agents --json` (run with the bot's `CLAUDE_CONFIG_DIR`) lists the id / session id / cwd with a live `pid` or state `working`/`blocked`, OR the recorded `claude_pid` is alive | `claude stop <id>` (bounded 45 s; the conversation is kept), then the guarded tree-kill on the recorded pid if it lingers | `claude attach <id>` (BotCorp-Launch task, `botcorp attach`), the cockpit via `pty-host --attach` |
 | `pty` | `pty-host.mjs` owns a ConPTY that runs `launch.ps1 -InPty`, which execs `claude --continue ...` | the launcher shell + its `claude.exe` child, or the claude pid | `pty-host --stop <bot>` (`taskkill /T /F` on the pty root, then the host) | the cockpit attaches to the pty-host; the BotCorp-Launch task opens a visible launch |
 
 `harness.service: manual` (distinct key) means the daemon never cold-starts
@@ -107,6 +107,38 @@ unexpectedly, keeps a working / blocked / attached process running, and stops
 a finished, unattached process after about an hour (the roster row stays). The
 tick reads a row without a live pid and outside `working`/`blocked` as dead
 and relaunches with `--resume`, so the conversation survives either way.
+
+**bg sessions and the daemon's env.** The supervisor (`claude daemon run`,
+one per config home: `<config home>/daemon.lock` names its pid, `daemon.log`
+its starts and stops) is started by the first `claude --bg` client and spawns
+EVERY worker with that client's environment. A later client's environment
+never reaches its session: probed on Claude Code 2.1.282, a session started
+through an already-running daemon carried the first client's
+`BOT_LAUNCHER_PID` and none of the new launcher's variables, so the
+`TELEGRAM_BOT_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN` the launcher had just read
+from the vault were not there; the plugin printed `telegram channel:
+TELEGRAM_BOT_TOKEN required` into its MCP log and exited before writing
+`bot.pid` (no bun child, statusline TG red). The daemon exits 5 s after its
+last worker and client are gone, so a stale one is alive only while another
+session of the bot (a copy, an unrecorded earlier launch) or an attached
+client holds it. Hence, before `claude --bg`, `launch.ps1 -Bg`:
+
+- no live daemon -> the launch's own `claude --bg` starts one with the
+  launch's env (the vault tokens stay in process memory, never on disk);
+- a live daemon with no live session -> `claude daemon stop --any`, then the
+  launch starts a fresh one (`bg: daemon pid <n> ... had no live session ->
+  stopped` in `launches.log`);
+- a live daemon WITH live sessions (after a 10 s settle wait) -> left alone
+  and a `WARN ... inherits the DAEMON's env` line; `botcorp stop <bot>` stops
+  every session of the bot, after which the next start is clean.
+
+After the launch it waits up to 30 s for the poller (`bot.pid` alive under
+the new claude) and records `poller: OWNED` or `DEAD` in `state/<bot>.json`.
+With `harness.telegram_token_file: true` the ACL'd `channels/telegram/.env` is
+written just before the launch and deleted right after that wait (or on any
+failure path; a foreground launch deletes it from a background job, and at
+session exit at the latest), with a
+`telegram: token file deleted ...` line; it is never left at rest.
 
 ## The two tasks
 

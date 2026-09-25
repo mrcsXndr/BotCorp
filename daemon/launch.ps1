@@ -31,7 +31,12 @@
 #      foreign owner => launch WITHOUT --channels
 #   7. vault -> env (in-process DPAPI unprotect; never argv, never printed)
 #   8. writes the state record, then execs (or backgrounds) claude with
-#      --plugin-dir <BotCorp>/harness; `--channels ... --settings <tg-enable>` LAST
+#      --plugin-dir <BotCorp>/harness; `--channels ... --settings <tg-enable>` LAST.
+#      -Bg first stops the config home's Claude Code daemon when it has no live
+#      session: a bg session runs with the env of whoever STARTED that daemon,
+#      so an older daemon would hand it no Telegram token (Get-BgDaemon). After
+#      the launch, the poller is checked (bot.pid alive under this claude) and
+#      the state records poller OWNED / DEAD.
 #
 # -DryRun prints the exact exe + argv and the env with secrets masked (****last4)
 # and exits 0. Fail-open everywhere except "no bot.yaml" / "bot.yaml invalid".
@@ -213,6 +218,7 @@ if ($canOwn -and -not $DryRun) {
 # unattested launch skips the block entirely.
 $secrets = @{}
 $vaultNote = @()
+$tokenFile = ''
 $declared = @(); try { $declared = @($cfg.secrets | Where-Object { $_ }) } catch {}
 if (-not $attested) { $vaultNote += 'vault: skipped (unattested launch)' }
 else { try {
@@ -233,12 +239,18 @@ else { try {
             $secrets['telegram_token'] = $tt; $vaultNote += "telegram: vault ok ($(Mask $tt))"
             if ($cfg.harness.telegram_token_file -eq $true -and -not $DryRun) {
                 # Fallback for a plugin whose MCP server does not inherit the env:
-                # the file the plugin reads, ACL'd to the user. Not "encrypted by BotCorp".
+                # the file the plugin reads, ACL'd to the user. Not "encrypted by
+                # BotCorp", so it is transient: deleted as soon as the plugin has
+                # read it (bot.pid under this session's claude) or the wait ran
+                # out (Complete-TgTokenFile), and on every failure path.
                 $tgDir = Join-Path $ConfigDir 'channels\telegram'
                 if (-not (Test-Path $tgDir)) { New-Item -ItemType Directory -Force -Path $tgDir | Out-Null }
-                [System.IO.File]::WriteAllText((Join-Path $tgDir '.env'), "TELEGRAM_BOT_TOKEN=$tt`n")
-                & (Join-Path $env:SystemRoot 'System32\icacls.exe') (Join-Path $tgDir '.env') /inheritance:r /grant:r "$env:USERDOMAIN\$env:USERNAME:F" 2>&1 | Out-Null
-                $vaultNote += 'telegram: token file written (harness.telegram_token_file)'
+                $tokenFile = Join-Path $tgDir '.env'
+                [System.IO.File]::WriteAllText($tokenFile, '')
+                # "${env:USERNAME}:F", braced: "$env:USERNAME:F" expands to an empty name
+                & (Join-Path $env:SystemRoot 'System32\icacls.exe') $tokenFile /inheritance:r /grant:r "${env:USERDOMAIN}\${env:USERNAME}:F" 2>&1 | Out-Null
+                [System.IO.File]::WriteAllText($tokenFile, "TELEGRAM_BOT_TOKEN=$tt`n")
+                $vaultNote += 'telegram: transient token file written (harness.telegram_token_file; removed once the plugin has read it)'
             }
         } elseif ($declared -contains 'telegram_token') { $vaultNote += 'telegram: module on but no vault entry -> launching WITHOUT --channels'; $canOwn = $false }
     }
@@ -305,6 +317,12 @@ if ($DryRun) {
         Write-Host "  env : $k=$v"
     }
     Write-Host "  mode: $modeText  service: $botService  poller: $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'n/a' })  attested: $(if ($attested) { 'yes' } else { 'NO (no secrets would be injected)' })"
+    if ($Bg) {
+        $dmn = Get-BgDaemon -ConfigDir $ConfigDir
+        $live = 0
+        if ($dmn.Alive) { $agents = Get-BgAgents -Bot $Bot -TimeoutSec 20; $live = $(if ($null -eq $agents) { -1 } else { @(@($agents) | Where-Object { Test-BgAgentAlive $_ }).Count }) }
+        Write-Host "  daemon: $(Get-BgDaemonAction -DaemonAlive $dmn.Alive -LiveWorkers $live) (pid $($dmn.Pid) alive=$($dmn.Alive) live sessions=$live)"
+    }
     exit 0
 }
 
@@ -329,6 +347,31 @@ if ($Bg) {
     # runs under the supervisor. Bounded: a hung client must not hold the tick.
     $code = 1
     try {
+        # The session gets the env of whoever started the config home's daemon,
+        # not ours (Get-BgDaemon). A daemon with no live session is stopped so
+        # the one `claude --bg` starts now carries this launch's env; a worker
+        # `claude stop` just ended is given a few seconds to settle first.
+        $paths = Get-BotPaths -Bot $Bot
+        $until = (Get-Date).AddSeconds(10)
+        while ($true) {
+            $dmn = Get-BgDaemon -ConfigDir $ConfigDir
+            $live = 0
+            if ($dmn.Alive) {
+                $agents = Get-BgAgents -Bot $Bot -Paths $paths -TimeoutSec 20
+                $live = $(if ($null -eq $agents) { -1 } else { @(@($agents) | Where-Object { Test-BgAgentAlive $_ }).Count })
+            }
+            $dmnAction = Get-BgDaemonAction -DaemonAlive $dmn.Alive -LiveWorkers $live
+            if ($dmnAction -ne 'inherit' -or (Get-Date) -ge $until) { break }
+            Start-Sleep -Milliseconds 1500
+        }
+        if ($dmnAction -eq 'recycle') {
+            $gone = Stop-BgDaemon -Bot $Bot -Paths $paths -DaemonPid $dmn.Pid
+            if ($gone) { Write-LaunchLog "bg: daemon pid $($dmn.Pid) (up since $($dmn.StartedAt), started by pid $($dmn.SpawnedByPid)) had no live session -> stopped, so the new one carries this launch's env" }
+            else { Write-LaunchLog "bg: WARN daemon pid $($dmn.Pid) did not stop -> the session inherits ITS env (Telegram token / OAuth from the vault may not reach it)" }
+        } elseif ($dmnAction -eq 'inherit') {
+            Write-LaunchLog "bg: WARN daemon pid $($dmn.Pid) (up since $($dmn.StartedAt)) still has $(if ($live -lt 0) { 'an unreadable roster' } else { "$live live session(s)" }) -> not stopped; the new session inherits the DAEMON's env, not this launch's (stop them first: botcorp stop $Bot)"
+        } else { Write-LaunchLog 'bg: no daemon running -> claude --bg starts one with this launch''s env' }
+
         $r = Invoke-Bounded -Exe $exe -Arguments $argv -TimeoutSec 120 -Label 'claude --bg' -Capture -Env $childEnv -WorkingDirectory $BotHome -Bot $Bot
         $code = $(if ($null -eq $r.ExitCode) { 124 } else { $r.ExitCode })
         $outLines = @(("$($r.Output)" -split "`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
@@ -361,10 +404,27 @@ if ($Bg) {
         Write-State $upd
         if ($canOwn -and $cpid -gt 0) { try { [System.IO.File]::WriteAllText($lockFile, "$cpid`n$((Get-Date).ToString('o'))") } catch {} }
         Write-LaunchLog "bg: id=$bgId session=$sid claude_pid=$cpid exit=$code"
+        # The poller is up only when the plugin's bot.pid is alive UNDER this
+        # claude (it is written after the token check); the state says so.
+        if ($canOwn -and $code -eq 0) {
+            if ($tokenFile) {
+                $tp = Complete-TgTokenFile -TokenFile $tokenFile -BotPidFile $botPidFile -ClaudePid $cpid -TimeoutSec 30
+                Write-LaunchLog "telegram: token file $(if ($tp.Deleted) { 'deleted' } else { 'NOT deleted (remove it by hand)' }) after $(if ($tp.Up) { "the plugin read it (bot.pid $($tp.BotPid))" } else { 'the wait ran out' }): $tokenFile"
+                if ($tp.Deleted) { $tokenFile = '' }
+            } else { $tp = Wait-TgPoller -BotPidFile $botPidFile -ClaudePid $cpid -TimeoutSec 30 }
+            if ($tp.Up) { Write-LaunchLog "telegram: poller up (bot.pid $($tp.BotPid) under claude $cpid)" }
+            else { Write-LaunchLog "telegram: poller NOT up after 30 s (bot.pid $(if ($tp.BotPid) { "$($tp.BotPid), not under claude $cpid" } else { 'absent' })) - the plugin log is under %LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home slug>\mcp-logs-plugin-telegram-telegram" }
+            Write-State @{ poller = $(if ($tp.Up) { 'OWNED' } else { 'DEAD' }); updated_at = (Get-Date).ToString('o') }
+        }
     } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Write-State @{ status = 'exited'; exit_code = 1; updated_at = (Get-Date).ToString('o') } }
     finally {
         foreach ($k in $secretEnvNames) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
         if ($attested) { Confirm-LaunchNonce -Bot $Bot }   # consumed: the child is up (or failed); never reusable
+        # every failure path: the transient token file never outlives the launcher
+        if ($tokenFile -and (Test-Path $tokenFile)) {
+            Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue
+            Write-LaunchLog "telegram: token file $(if (Test-Path $tokenFile) { 'NOT deleted (remove it by hand)' } else { 'deleted' }) (launch did not complete): $tokenFile"
+        }
         # The owner-lock is NOT released here: the session is still running.
         # A failed launch leaves our own pid in it, which reads as stale (dead)
         # to the next launcher and is reclaimed.
@@ -373,10 +433,31 @@ if ($Bg) {
 }
 
 if ($attested) { Confirm-LaunchNonce -Bot $Bot }   # consumed: every decrypt is done, the child execs now
+# Foreground: claude is OUR child and blocks this thread, so the transient
+# token file is removed from a background job once the plugin under this launcher
+# has read it (and in the finally below, whatever happened).
+$tokenJob = $null
+if ($tokenFile) {
+    try {
+        # Windows PowerShell 5.1 (the pty shell) may lack the ThreadJob module: a process job then
+        $jobCmd = $(if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) { 'Start-ThreadJob' } else { 'Start-Job' })
+        $tokenJob = & $jobCmd -ArgumentList $PSScriptRoot, $tokenFile, $botPidFile, $PID, $LaunchLog, $Bot -ScriptBlock {
+            param($Dir, $TokenFile, $BotPidFile, $LauncherPid, $Log, $BotName)
+            . (Join-Path $Dir '_common.ps1')
+            $tp = Complete-TgTokenFile -TokenFile $TokenFile -BotPidFile $BotPidFile -ClaudePid $LauncherPid -TimeoutSec 60
+            "$((Get-Date).ToString('o'))  [$BotName] telegram: token file $(if ($tp.Deleted) { 'deleted' } else { 'NOT deleted (remove it by hand)' }) after $(if ($tp.Up) { "the plugin read it (bot.pid $($tp.BotPid))" } else { 'the wait ran out' }): $TokenFile" | Out-File -FilePath $Log -Append -Encoding utf8
+        }
+    } catch { Write-LaunchLog "telegram: token-file cleanup job did not start ($($_.Exception.Message)); it is removed when the session exits" }
+}
 try {
     & $exe @argv
     $code = $LASTEXITCODE
 } finally {
+    if ($tokenFile -and (Test-Path $tokenFile)) {
+        Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue
+        Write-LaunchLog "telegram: token file $(if (Test-Path $tokenFile) { 'NOT deleted (remove it by hand)' } else { 'deleted' }) at session exit: $tokenFile"
+    }
+    if ($tokenJob) { Remove-Job -Job $tokenJob -Force -ErrorAction SilentlyContinue }
     Write-State @{ status = 'exited'; exit_code = $code; updated_at = (Get-Date).ToString('o'); claude_pid = $null }
     # Release our own owner-lock only (SessionEnd does the same from inside;
     # this covers a kill that never fired the hook).
