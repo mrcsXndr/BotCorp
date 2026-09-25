@@ -3,6 +3,12 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.7
+
+v0.2.6 plus v0.1.9 below: the same code, with the v0.1.8 test that failed
+on the Linux CI runner made platform-neutral. Upgrading: as for v0.2.6, from
+`v0.2.7`.
+
 ## v0.2.6
 
 v0.2.5 plus the v0.1.8 release below: the launcher puts bun's folder first on
@@ -145,6 +151,12 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.9
+
+v0.1.8 with its CI green: one v0.1.8 test forced Windows path handling and
+failed on the Linux runner; it now runs on the host's platform. No code
+change. Upgrade: as for v0.1.8, from `v0.1.9`.
 
 ## v0.1.8
 
