@@ -17,7 +17,10 @@ Usage:
 Behavior:
     - Token: TELEGRAM_BOT_TOKEN env var, then <config_home>/channels/telegram/.env,
       then <instance_root>/.env
-    - Default chat_id: TELEGRAM_CHAT_ID env var, then <instance_root>/.env
+    - Default chat_id: TELEGRAM_CHAT_ID env var, then <instance_root>/.env, then
+      bot.yaml integrations.telegram.chat_id (via <config_home>/botcorp/telegram.json),
+      then the only allowFrom id in <config_home>/channels/telegram/access.json
+    - --check prints what a send would use (token last 4, chat, source); no network
     - Converts CommonMark idioms (**bold**, *italic*, _italic_, `code`,
       ```block```, [text](url)) to Telegram HTML
     - Splits at 4000 chars on newline boundaries
@@ -67,21 +70,70 @@ def _read_env_file(path: Path) -> dict:
     return env
 
 
-def resolve_token() -> str:
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def resolve_token_source() -> tuple[str, str]:
+    """(token, where it came from). The launcher puts the bot's vault token in
+    the session env, so the first hit is the normal case."""
     if os.environ.get("TELEGRAM_BOT_TOKEN"):
-        return os.environ["TELEGRAM_BOT_TOKEN"]
+        return os.environ["TELEGRAM_BOT_TOKEN"], "env TELEGRAM_BOT_TOKEN"
     plugin_env = _read_env_file(config_home() / "channels" / "telegram" / ".env")
     if plugin_env.get("TELEGRAM_BOT_TOKEN"):
-        return plugin_env["TELEGRAM_BOT_TOKEN"]
+        return plugin_env["TELEGRAM_BOT_TOKEN"], "<config home>/channels/telegram/.env"
     bot_env = _read_env_file(instance_root() / ".env")
-    return bot_env.get("TELEGRAM_BOT_TOKEN", "")
+    if bot_env.get("TELEGRAM_BOT_TOKEN"):
+        return bot_env["TELEGRAM_BOT_TOKEN"], "<bot>/.env"
+    return "", ""
+
+
+def resolve_chat_id_source() -> tuple[str, str]:
+    """(default chat id, where it came from). bot.yaml
+    integrations.telegram.chat_id reaches the tools through the telegram.json
+    `botcorp sync` writes; without one, a bot with exactly one allowlisted id
+    (its operator's DM: a DM chat id is the user id) sends there. Several ids
+    and no chat_id is ambiguous, so there is no default."""
+    if os.environ.get("TELEGRAM_CHAT_ID"):
+        return os.environ["TELEGRAM_CHAT_ID"], "env TELEGRAM_CHAT_ID"
+    bot_env = _read_env_file(instance_root() / ".env")
+    if bot_env.get("TELEGRAM_CHAT_ID"):
+        return bot_env["TELEGRAM_CHAT_ID"], "<bot>/.env"
+    gen = _read_json(config_home() / "botcorp" / "telegram.json")
+    if isinstance(gen, dict) and gen.get("default_chat_id"):
+        return str(gen["default_chat_id"]), "bot.yaml integrations.telegram.chat_id"
+    access = _read_json(config_home() / "channels" / "telegram" / "access.json")
+    ids = access.get("allowFrom") if isinstance(access, dict) else None
+    if isinstance(ids, list) and len(ids) == 1 and str(ids[0]).strip():
+        return str(ids[0]).strip(), "the only allowFrom id in access.json"
+    return "", ""
+
+
+def resolve_token() -> str:
+    return resolve_token_source()[0]
 
 
 def resolve_chat_id() -> str:
-    if os.environ.get("TELEGRAM_CHAT_ID"):
-        return os.environ["TELEGRAM_CHAT_ID"]
-    bot_env = _read_env_file(instance_root() / ".env")
-    return bot_env.get("TELEGRAM_CHAT_ID", "")
+    return resolve_chat_id_source()[0]
+
+
+NO_CHAT_HINT = ("no default chat: pass --chat-id, or set integrations.telegram.chat_id "
+                "in bot.yaml and run botcorp sync <bot>")
+
+
+def check_report() -> str:
+    """What --check prints: which harness file ran and what a send would use.
+    No network; the token is shown as its last 4 only."""
+    token, tsrc = resolve_token_source()
+    chat, csrc = resolve_chat_id_source()
+    return "\n".join([
+        f"harness: {Path(__file__).resolve()}",
+        f"token: {'...' + token[-4:] + ' (' + tsrc + ')' if token else 'none'}",
+        f"chat: {chat + ' (' + csrc + ')' if chat else 'none - ' + NO_CHAT_HINT}",
+    ])
 
 
 def escape_md2(text: str) -> str:
@@ -337,8 +389,14 @@ def main() -> int:
                         "that genuinely cannot wait for a reply, not for one more update.")
     p.add_argument("--unanswered", action="store_true",
                    help="Print the unanswered backlog and exit.")
+    p.add_argument("--check", action="store_true",
+                   help="Print which harness file ran and the token (last 4) and default chat a "
+                        "send would use, then exit. No network.")
     args = p.parse_args()
 
+    if args.check:
+        print(check_report())
+        return 0
     if args.answered:
         _unanswered_save({"count": 0, "since": None, "last": []})
         print("unanswered backlog cleared")
@@ -445,8 +503,11 @@ def main() -> int:
 
     token = resolve_token()
     chat_id = args.chat_id or resolve_chat_id()
-    if not token or not chat_id:
-        print("error: TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID required", file=sys.stderr)
+    if not token:
+        print("error: no TELEGRAM_BOT_TOKEN (env, <config home>/channels/telegram/.env, <bot>/.env)", file=sys.stderr)
+        return 1
+    if not chat_id:
+        print(f"error: {NO_CHAT_HINT}", file=sys.stderr)
         return 1
 
     if args.plain:

@@ -18,14 +18,14 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { DEFAULTS, deepMerge, loadBotYaml, validate } from '../daemon/botyaml.mjs';
-import { sync } from '../daemon/sync.mjs';
+import { sync, toolShimState, toolShimText } from '../daemon/sync.mjs';
 import { zipWrite, zipList, zipExtract, zipEntryData } from './_zip.mjs';
 import {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, sessionAliveVerdict, tgToolsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -862,6 +862,23 @@ function telegramPluginCommand(bot) {
     if (srv && srv.command) return String(srv.command);
   }
   return '';
+}
+
+// `<bot>: tg tools reachable`: every harness tools/tg tool resolves from the bot
+// folder (a shim or the bot's own copy), and a relative `python
+// tools/tg/tg_send.py --check` there really runs (no network), with the env a
+// session has minus the token (the vault holds that, not the doctor's shell).
+function tgToolsVerdict(bot) {
+  const home = botHome(bot);
+  const rows = toolShimState(home, ROOT);
+  const outdated = rows.filter((r) => r.kind === 'shim' && fs.readFileSync(path.join(home, ...r.rel.split('/')), 'utf-8') !== toolShimText(r.rel, ROOT)).map((r) => r.rel);
+  const py = resolvePython();
+  const probe = py ? run(py.file, [path.join('tools', 'tg', 'tg_send.py'), '--check'], {
+    cwd: home, timeoutMs: 30_000,
+    env: { BOT_HOME: home, BOT_NAME: bot, CLAUDE_CONFIG_DIR: configDir(bot), BOTCORP_HOME, PYTHONIOENCODING: 'utf-8', TELEGRAM_BOT_TOKEN: '', TELEGRAM_CHAT_ID: '' },
+  }) : null;
+  const v = tgToolsVerdictOf({ rows, outdated, probe });
+  return { level: v.level, detail: v.detail.replace(/<bot>/g, bot) };
 }
 
 // The plugin's own stderr lands in Claude Code's per-project MCP log, keyed by
@@ -2011,6 +2028,10 @@ async function cmdDoctor({ flags }) {
           const command = telegramPluginCommand(bot);
           const bv = pluginCommandVerdict(command, resolvePluginCommand({ command, override: cfg.harness.bun_path || '', pathEnv: process.env.PATH || '', userProfile: process.env.USERPROFILE || os.homedir() }));
           add(bv.level, `${bot}: bun resolvable for telegram plugin`, bv.detail.replace('<bot>', bot), 'bots');
+        }
+        {
+          const v = tgToolsVerdict(bot);
+          add(v.level, `${bot}: tg tools reachable`, v.detail, 'bots');
         }
         // measured, like `status`: the plugin's bot.pid alive under this bot's claude
         const poller = s.state && s.state.poller;

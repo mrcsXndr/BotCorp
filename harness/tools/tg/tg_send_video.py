@@ -2,34 +2,22 @@
 """
 tg_send_video.py — send a video to Telegram via the Bot API sendVideo endpoint.
 
-Stdlib only. Reads TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID from the bot's .env.
-Sends as inline-playable video (not as a document).
+Stdlib only. Token and default chat resolve as in tg_send.py (the session env
+first, then the bot's .env, bot.yaml chat_id, the only allowlisted id).
+BOT_TG_MUTE=1 sends nothing. Sends as inline-playable video (not as a document).
 
 Usage:
     python tools/tg/tg_send_video.py /abs/path/clip.mp4 "caption text"
 """
 import json
+import os
 import sys
 import time
 import urllib.request
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _paths import instance_root  # noqa: E402
-
-ENV_FILE = instance_root() / ".env"
-
-
-def load_env() -> dict:
-    env = {}
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if not s or s.startswith("#") or "=" not in s:
-                continue
-            k, v = s.split("=", 1)
-            env[k.strip()] = v.strip()
-    return env
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from tg_send import NO_CHAT_HINT, resolve_chat_id, resolve_token  # noqa: E402
 
 
 def main():
@@ -41,11 +29,15 @@ def main():
         sys.exit(f"error: {video_path} not found")
     caption = sys.argv[2] if len(sys.argv) >= 3 else ""
 
-    env = load_env()
-    token = env.get("TELEGRAM_BOT_TOKEN", "")
-    chat_id = env.get("TELEGRAM_CHAT_ID", "")
-    if not token or not chat_id:
-        sys.exit("error: TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID required in .env")
+    if os.environ.get("BOT_TG_MUTE", "0") == "1":
+        print(f"[BOT_TG_MUTE] suppressed TG video: {video_path.name}", file=sys.stderr)
+        return
+    token = resolve_token()
+    chat_id = resolve_chat_id()
+    if not token:
+        sys.exit("error: no TELEGRAM_BOT_TOKEN (env, <config home>/channels/telegram/.env, <bot>/.env)")
+    if not chat_id:
+        sys.exit(f"error: {NO_CHAT_HINT}")
 
     boundary = f"----BotVideo{int(time.time()*1000)}"
     video_bytes = video_path.read_bytes()
