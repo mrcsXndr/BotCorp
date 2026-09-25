@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DEFAULTS, deepMerge, loadBotYaml, validate } from '../daemon/botyaml.mjs';
+import { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } from '../daemon/botyaml.mjs';
 import { sync, toolShimState, toolShimText } from '../daemon/sync.mjs';
 import { zipWrite, zipList, zipExtract, zipEntryData } from './_zip.mjs';
 import {
@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -2039,6 +2039,12 @@ async function googleTokenEmail(tokenFile) {
 // env) is some other bot's account. Every bot must launch on its own vault
 // token; the launcher takes the vault first, so this asserts the vault entry
 // exists and is not that same token (last 4 characters, never more).
+// A machine-wide (HKCU) env var, else this shell's; '' when neither has it.
+function userEnvVar(name) {
+  const pv = process.platform === 'win32' ? runPwshCommand(`[Environment]::GetEnvironmentVariable('${name}','User')`, { timeoutMs: 30_000 }) : { out: '' };
+  return (pv.out || '').trim() || process.env[name] || '';
+}
+
 function userEnvTokenLast4() {
   const pv = process.platform === 'win32' ? runPwshCommand("[Environment]::GetEnvironmentVariable('CLAUDE_CODE_OAUTH_TOKEN','User')", { timeoutMs: 30_000 }) : { out: '' };
   const v = (pv.out || '').trim() || process.env.CLAUDE_CODE_OAUTH_TOKEN || '';
@@ -2143,6 +2149,7 @@ async function cmdDoctor({ flags }) {
 
     // per bot (a bot folder is a plain folder: no per-bot git checks)
     const envLast4 = userEnvTokenLast4();
+    const machineCompactWindow = userEnvVar('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
     const trayEntries = process.platform === 'win32' ? trayRunEntries() : new Set();
     for (const bot of listBots()) {
       let cfg = null;
@@ -2230,8 +2237,12 @@ async function cmdDoctor({ flags }) {
         const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4 });
         add(v.level, `${bot}: session env`, `${v.env ? `${v.env}: ` : ''}${v.detail}${v.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log: the "bg:" daemon line and the "env:" line)` : ''}`, 'bots');
         // names only: which vault keys the running session's env holds
-        const se = sessionSecretEnvVerdict({ running: s.running, launch: sessionLaunchOf(bot, botState(bot)).launch, declaredEnv: declaredSecretEnv(cfg) });
+        const launch = sessionLaunchOf(bot, botState(bot)).launch;
+        const se = sessionSecretEnvVerdict({ running: s.running, launch, declaredEnv: declaredSecretEnv(cfg) });
         add(se.level, `${bot}: session secrets env`, se.detail.replace(/<bot>/g, bot), 'bots');
+        const us = readJson(path.join(configDir(bot), 'settings.json'));
+        const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, running: s.running, launch });
+        add(cw.level, `${bot}: context window`, cw.detail.replace(/<bot>/g, bot), 'bots');
       }
       {
         const v = harnessToolsVerdict(bot);

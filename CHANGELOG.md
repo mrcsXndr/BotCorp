@@ -3,6 +3,16 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.12
+
+v0.2.11 plus the v0.1.14 release below: `harness.context_window` (default
+`70%`) becomes `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in every launch's session
+env (over a machine-wide value) and `autoCompactWindow` in the config home's
+settings.json, with doctor `<bot>: context window`; automation runs log a
+chained command's whole output. Upgrading: check out `v0.2.12`, then
+`botcorp sync <bot>`; the window reaches a running bg session at its next
+fresh launch.
+
 ## v0.2.11
 
 v0.2.10 plus the v0.1.13 release below: bg sessions are pinned in
@@ -190,6 +200,31 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.14
+
+- **Per-bot context window.** `bot.yaml` `harness.context_window`: `70%`
+  (default) of the model's context window (1M for the Opus 5 / Fable 5
+  family, 200k for Haiku, unknown = 1M), an integer 100000-1000000, or
+  `auto`. Every launch sets `CLAUDE_CODE_AUTO_COMPACT_WINDOW` in the session
+  env, which Claude Code ranks above any `autoCompactWindow` setting, so the
+  bot's value also beats a machine-wide one (logged: `overrides the
+  inherited <n>`); `auto` removes an inherited one. Sync merges the same
+  number into the config home's settings.json as `autoCompactWindow`.
+  `botcorp config set <bot> harness.context_window 50%` works as typed from
+  pwsh and bash. Doctor: `<bot>: context window` shows the effective value
+  and source, the machine-wide value it overrides, and WARNs on a stale
+  settings.json or a running session started with another value. Applies at
+  the next session start.
+- **Automation logs carry a chained command's whole output.** A run was
+  `cmd /c "<command> > log"`, so `a & b` logged only b. The command is now
+  grouped: `cmd /c "(<command>) > log 2>&1"`; the exit code is still the
+  last command's.
+
+Upgrade: check out `v0.1.14`, then `botcorp sync <bot>` (writes
+`autoCompactWindow`); to change a bot's window, `botcorp config set <bot>
+harness.context_window <value>`. The new window reaches a running bg session
+only through a fresh launch: `botcorp stop <bot>; botcorp start <bot>`.
 
 ## v0.1.13
 

@@ -53,7 +53,11 @@ streak and the interval/cron schedule resumes from the end of that run.
 ## How a run executes
 
 - cwd = `BOT_HOME`; the command goes through `cmd.exe /d /s /c` verbatim, with
-  stdout+stderr redirected to the run's log file by cmd itself.
+  stdout+stderr redirected to the run's log file by cmd itself, the command
+  grouped (`cmd /d /s /c "(<command>) > <log> 2>&1"`) so every part of a
+  chained `a & b` / `a && b` reaches the log; the exit code is the group's
+  (its last command's). An unquoted `)` in the command ends the group early:
+  quote it.
 - env = the bot env (`BOT_HOME`, `BOT_NAME`, `BOT_MODULES`, `BOTCORP_HOME`,
   `CLAUDE_CONFIG_DIR`, `CLAUDE_PLUGIN_ROOT`, `PYTHONIOENCODING`) plus
   `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, and every key listed in

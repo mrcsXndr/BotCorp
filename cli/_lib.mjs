@@ -208,6 +208,23 @@ export function bgPinVerdict({ running, bgId = '', pins = null, pinsError = '' }
 // launch it came from (launch-env.json `secret_env`). `declaredEnv` = the names
 // bot.yaml secrets: maps to; one missing from the session is a WARN (a stale
 // daemon env, or the key has no vault entry).
+// doctor `<bot>: context window`: the auto-compact window bot.yaml resolves to
+// (botyaml.mjs resolveContextWindow), where it reaches the session (the launch
+// env, which Claude Code ranks above any autoCompactWindow setting), and the
+// two places it can disagree: the config home's settings.json (a session not
+// started by BotCorp reads that) and the running session's own launch.
+export function contextWindowVerdict({ resolved, settingsValue, machineEnv = '', running = false, launch = null }) {
+  if (resolved.error) return { level: 'FAIL', detail: `harness.context_window: ${resolved.error}` };
+  const machine = machineEnv ? String(machineEnv).trim() : '';
+  if (!resolved.tokens) return { level: 'INFO', detail: `auto: Claude Code picks the window${machine ? `; launches drop the machine-wide CLAUDE_CODE_AUTO_COMPACT_WINDOW=${machine} for this bot` : ''}` };
+  const shape = `${resolved.tokens} tokens (${resolved.source}), set as CLAUDE_CODE_AUTO_COMPACT_WINDOW by every launch${machine && machine !== String(resolved.tokens) ? `; overrides the machine-wide ${machine}` : ''}`;
+  if (settingsValue !== resolved.tokens) return { level: 'WARN', detail: `${shape}; .claude-<bot>/settings.json autoCompactWindow is ${settingsValue ?? 'unset'} (a session not started by BotCorp reads that): botcorp sync <bot>` };
+  if (running && launch && Object.prototype.hasOwnProperty.call(launch, 'auto_compact_window') && launch.auto_compact_window !== resolved.tokens) {
+    return { level: 'WARN', detail: `${shape}; the running session started with ${launch.auto_compact_window ?? 'auto'} - it applies at the next session start` };
+  }
+  return { level: 'PASS', detail: shape };
+}
+
 // daemon/_common.ps1 Get-SecretEnvName, the same rule.
 export function secretEnvName(key) {
   return key === 'oauth_token' ? 'CLAUDE_CODE_OAUTH_TOKEN' : key === 'telegram_token' ? 'TELEGRAM_BOT_TOKEN' : String(key).toUpperCase();

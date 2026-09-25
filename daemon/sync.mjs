@@ -13,8 +13,9 @@
 //   bots/<name>/.claude-<name>/settings.json          MERGED user settings: skipDangerousModePermissionPrompt
 //                                                     when bot.yaml permissions: bypass (a --bg launch
 //                                                     refuses until the disclaimer is accepted; only
-//                                                     USER settings are honoured for it).
-//   bots/<name>/.claude-<name>/.claude.json           MERGED: projects[<bot home>].hasTrustDialogAccepted
+//                                                     USER settings are honoured for it);
+//                                                     autoCompactWindow from harness.context_window.
+//   bots/<name>/.claude-<name>/.claude.json          MERGED: projects[<bot home>].hasTrustDialogAccepted
 //                                                     (a --bg launch refuses an untrusted workspace).
 //   bots/<name>/.claude-<name>/channels/telegram/access.json
 //                                                     dmPolicy + allowFrom from bot.yaml,
@@ -49,7 +50,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadBotYaml, validate } from './botyaml.mjs';
+import { loadBotYaml, validate, resolveContextWindow } from './botyaml.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -137,9 +138,14 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
 // skipDangerousModePermissionPrompt from USER settings only (not the
 // project .claude/settings.json). Written only when bot.yaml already opts
 // the bot into bypass; an existing key is left alone otherwise.
+// autoCompactWindow = harness.context_window resolved to tokens, for a session
+// the launcher did not start (the launcher also sets the env var, which Claude
+// Code ranks above this setting); 'auto' leaves the key as it is.
 export function mergeConfigHomeSettings(existing, cfg) {
   const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
   if (cfg.permissions === 'bypass') cur.skipDangerousModePermissionPrompt = true;
+  const cw = resolveContextWindow(cfg);
+  if (cw.tokens) cur.autoCompactWindow = cw.tokens;
   return cur;
 }
 

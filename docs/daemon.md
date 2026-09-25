@@ -150,6 +150,20 @@ home's Claude Code daemon fresh (below): `botcorp stop <bot>; botcorp start
 `<bot>: session secrets env` (the names the running session's env holds,
 also `botcorp status`'s `secrets env:` line; never a value).
 
+**Context window.** `harness.context_window` (default `70%`) resolves in
+`botyaml.mjs` (`resolveContextWindow`) to a token count; the launch puts it in
+the session env as `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and logs `context window:
+<n> tokens (<source>) ...; overrides the inherited <m>` when the launcher
+inherited another value (a machine-wide one). Claude Code 2.1.282 ranks that
+variable above any `autoCompactWindow` setting ("CLAUDE_CODE_AUTO_COMPACT_WINDOW
+is set and takes precedence"); sync also writes `autoCompactWindow` into the
+config home's settings.json so a session BotCorp did not start gets the same
+number unless a machine-wide variable is set. `auto` removes an inherited
+variable for the session. The launch-env record keeps `auto_compact_window`
+so doctor can tell a running session that started with another value. Like
+every env change it reaches a bg session only through a fresh Claude Code
+daemon (below).
+
 **Which env a session actually got.** Claude Code strips
 `CLAUDE_CODE_OAUTH_TOKEN` from its hooks' environment (a `claude -p` run on a
 token got a 401 from the API while its SessionStart hook saw no such

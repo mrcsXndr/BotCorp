@@ -871,14 +871,15 @@ function ConvertTo-UtcTime {
 function Add-LaunchEnvRecord {
     # Records this launch's env (last 4 only; source vault | inherited | none),
     # keyed by launcher pid, newest $Keep kept. Fail-open. $SecretEnv = the
-    # env var NAMES of the vault keys it injected (bot.yaml secrets:), never values.
-    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [string[]]$SecretEnv = @(), [int]$Keep = 20)
+    # env var NAMES of the vault keys it injected (bot.yaml secrets:), never values;
+    # $AutoCompactWindow = the CLAUDE_CODE_AUTO_COMPACT_WINDOW it set ('' = auto).
+    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [string[]]$SecretEnv = @(), [string]$AutoCompactWindow = '', [int]$Keep = 20)
     try {
         $path = Join-Path $ConfigDir 'botcorp\launch-env.json'
         $all = @{}
         $j = Read-JsonFile -Path $path
         if ($j -and $j.launches) { foreach ($p in $j.launches.PSObject.Properties) { $all[$p.Name] = $p.Value } }
-        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }); secret_env = @($SecretEnv | Where-Object { $_ }) }
+        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }); secret_env = @($SecretEnv | Where-Object { $_ }); auto_compact_window = $(if ($AutoCompactWindow) { [int]$AutoCompactWindow } else { $null }) }
         $kept = [ordered]@{}
         foreach ($k in @($all.Keys | Sort-Object { ConvertTo-UtcTime $all[$_].at } -Descending | Select-Object -First $Keep)) { $kept[$k] = $all[$k] }
         return (Write-JsonFile -Path $path -Object @{ launches = $kept })
