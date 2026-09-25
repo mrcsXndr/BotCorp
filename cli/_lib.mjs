@@ -136,13 +136,42 @@ export function resolvePluginCommand({ command, override = '', pathEnv = '', use
   return { path: '', source: '' };
 }
 
-// doctor `<bot>: bun resolvable for telegram plugin`. A command found only on
-// THIS shell's PATH may be missing from a daemon / session-0 launch's PATH
-// (the reference host's failure), so that is a WARN; harness.bun_path or the
-// standard install folder is what every launch finds.
-export function pluginCommandVerdict(command, resolved) {
+// What a daemon launch resolves bun to: the launcher's own Resolve-BunExe
+// (daemon/_common.ps1), run with an EMPTY PATH, because this shell's PATH is
+// not the one a daemon / session-0 launch has. -> { path, source } or
+// { path: '', source: '', error } when pwsh could not run it.
+export function launcherBunResolve({ override = '', userProfile = '' } = {}) {
+  const common = path.join(ROOT, 'daemon', '_common.ps1').replace(/'/g, "''");
+  const r = runPwshCommand(`. '${common}'; $r = Resolve-BunExe -Override $env:BOTCORP_BUN_OVERRIDE -PathEnv '' -UserProfile $env:BOTCORP_BUN_PROFILE; [pscustomobject]$r | ConvertTo-Json -Compress`,
+    { timeoutMs: 60_000, env: { BOTCORP_BUN_OVERRIDE: override, BOTCORP_BUN_PROFILE: userProfile } });
+  const last = r.out.trim().split(/\r?\n/).filter(Boolean).pop() || '';
+  try {
+    const j = JSON.parse(last);
+    return { path: String(j.Path || ''), source: String(j.Source || '') };
+  } catch {
+    return { path: '', source: '', error: (r.err || r.out || `exit ${r.code}`).trim().split(/\r?\n/).pop().slice(0, 160) };
+  }
+}
+
+// doctor `<bot>: bun resolvable for telegram plugin`.
+//   resolved  the command resolved with THIS shell's PATH (resolvePluginCommand)
+//   launch    for bun: launcherBunResolve(), the launcher's order WITHOUT this
+//             shell's PATH (harness.bun_path > <profile>/.bun/bin); null for
+//             any other command
+// The launch result decides: found there = PASS naming its source; found only
+// on this shell's PATH = WARN (a daemon launch may not have it: the reference
+// host's failure); nowhere = FAIL.
+export function pluginCommandVerdict(command, resolved, launch = null) {
   if (!command) return { level: 'WARN', detail: "the telegram plugin's .mcp.json names no command" };
-  if (!resolved.path) return { level: 'FAIL', detail: `the telegram plugin's .mcp.json runs "${command}", which resolves nowhere (harness.bun_path, PATH, %USERPROFILE%\\.bun\\bin): its MCP server dies with "'${command}' is not recognized". Fix: install bun (https://bun.sh), or botcorp config set <bot> harness.bun_path <path to bun.exe>` };
+  const where = '(harness.bun_path, PATH, %USERPROFILE%\\.bun\\bin)';
+  const fix = 'Fix: install bun (https://bun.sh), or botcorp config set <bot> harness.bun_path <path to bun.exe>';
+  if (launch) {
+    if (launch.path) return { level: 'PASS', detail: `"${command}" -> ${launch.path} (${launch.source}), what a daemon launch resolves without this shell's PATH; the launcher puts its folder first on the session's PATH` };
+    if (launch.error) return { level: 'WARN', detail: `could not run the launcher's Resolve-BunExe (${launch.error}); this shell resolves "${command}" to ${resolved.path || 'nothing'}` };
+    if (resolved.path) return { level: 'WARN', detail: `"${command}" -> ${resolved.path}, found only on this shell's PATH; a daemon launch (harness.bun_path, %USERPROFILE%\\.bun\\bin) does not find it (pin it: harness.bun_path)` };
+    return { level: 'FAIL', detail: `the telegram plugin's .mcp.json runs "${command}", which resolves nowhere ${where}: its MCP server dies with "'${command}' is not recognized". ${fix}` };
+  }
+  if (!resolved.path) return { level: 'FAIL', detail: `the telegram plugin's .mcp.json runs "${command}", which resolves nowhere ${where}: its MCP server dies with "'${command}' is not recognized". ${fix}` };
   if (resolved.source === 'PATH') return { level: 'WARN', detail: `"${command}" -> ${resolved.path}, found only on this shell's PATH; a daemon launch may not have it (pin it: harness.bun_path)` };
   return { level: 'PASS', detail: `"${command}" -> ${resolved.path} (${resolved.source}); the launcher puts its folder first on the session's PATH` };
 }

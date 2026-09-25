@@ -180,8 +180,11 @@ else `%USERPROFILE%\.bun\bin`), puts its folder FIRST on the session's PATH
 before `claude --bg` (so the daemon that keeps that env has it) and logs
 `bun: <path> (<source>)`; the plugin's own files are never patched (an update
 would reset them). Doctor's `<bot>: bun resolvable for telegram plugin` reads
-the installed plugin's `.mcp.json` command and resolves it the same way:
-FAIL when nothing resolves, WARN when only this shell's PATH has it.
+the installed plugin's `.mcp.json` command and, for bun, runs the launcher's
+own `Resolve-BunExe` with an EMPTY PATH (this shell's PATH is not what a
+daemon / session-0 launch has): PASS naming the source (`harness.bun_path` or
+`~/.bun/bin`) when that finds it, WARN when only this shell's PATH has it,
+FAIL when nothing resolves.
 
 Not a way round it: the per-session dispatch record the daemon keeps
 (`<config home>/daemon/roster.json` `workers.<id>.dispatch.env`, mirrored in

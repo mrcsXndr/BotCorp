@@ -3,6 +3,14 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.10
+
+v0.2.9 plus the v0.1.12 release below: doctor's `<bot>: bun resolvable for
+telegram plugin` runs the launcher's own `Resolve-BunExe` without this
+shell's PATH, so a bun in `%USERPROFILE%\.bun\bin` that is also on the
+shell's PATH is a PASS, not a WARN. Doctor-only; upgrading: check out
+`v0.2.10`.
+
 ## v0.2.9
 
 v0.2.8 plus the v0.1.11 release below: `sync` shims every `.py` / `.sh` /
@@ -168,6 +176,18 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.12
+
+Doctor-only. On the reference host `<bot>: bun resolvable for telegram
+plugin` WARNed "found only on this shell's PATH" for a bun that lives in
+`%USERPROFILE%\.bun\bin`: that folder was also on the shell's PATH, PATH
+wins the lookup, and the verdict judged the source of the SHELL's hit. A
+daemon launch finds it through the `~/.bun/bin` fallback. The check now
+runs the launcher's own `Resolve-BunExe` (daemon/_common.ps1) with an empty
+PATH: PASS naming its source (`harness.bun_path` / `~/.bun/bin`), WARN only
+when nothing but this shell's PATH has bun, FAIL when nothing does. No
+change to what a launch does. Upgrade: check out `v0.1.12`; nothing else.
 
 ## v0.1.11
 
