@@ -114,10 +114,45 @@
     .chatwrap.show { display: flex; }
     .msgs { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding: 12px 4px; scrollbar-width: thin; scrollbar-color: var(--edge-strong) transparent; }
     .msgs .cempty { margin: auto; color: var(--mute); font-size: 13px; text-align: center; line-height: 1.6; }
-    .bubble { max-width: 78%; padding: 9px 13px; border-radius: 10px; font-size: 13.5px; white-space: pre-wrap; word-wrap: break-word; }
+    .bubble { max-width: 78%; min-width: 0; padding: 9px 13px; border-radius: 10px; font-size: 13.5px; overflow-wrap: anywhere; }
     .bubble.user { align-self: flex-end; background: var(--raised); border: 1px solid var(--edge-strong); border-bottom-right-radius: 3px; }
     .bubble.assistant { align-self: flex-start; background: var(--panel); border: 1px solid var(--edge); border-bottom-left-radius: 3px; }
     .bubble .tools { display: block; margin-top: 6px; color: var(--mute); font: 11px var(--mono); }
+    .bubble .meta { color: var(--mute); font-size: 11.5px; margin-bottom: 3px; }
+    /* markdown inside a bubble (md.js): quiet, same ink, mono only for code */
+    .md > :first-child { margin-top: 0; }
+    .md > :last-child { margin-bottom: 0; }
+    .md p, .md ul, .md ol, .md pre, .md blockquote, .md .tbl { margin: 0 0 8px; }
+    .md h3, .md h4, .md h5 { margin: 12px 0 4px; font-weight: 600; line-height: 1.35; }
+    .md h3 { font-size: 15px; }
+    .md h4 { font-size: 14px; }
+    .md h5 { font-size: 13.5px; color: var(--ink-2); }
+    .md ul, .md ol { padding-left: 20px; }
+    .md li > ul, .md li > ol { margin: 2px 0 0; }
+    .md li + li { margin-top: 2px; }
+    .md code { font: 12px var(--mono); background: var(--sunk); border-radius: 4px; padding: 1px 4px; }
+    .md pre { background: var(--sunk); border: 1px solid var(--edge); border-radius: 6px; padding: 8px 10px; overflow-x: auto; white-space: pre; overflow-wrap: normal; scrollbar-width: thin; }
+    .md pre code { background: none; padding: 0; font-size: 12px; line-height: 1.5; }
+    .md blockquote { margin-left: 0; padding: 0 0 0 10px; border-left: 2px solid var(--edge-strong); color: var(--ink-2); }
+    .md a { color: var(--ink); text-decoration: underline; text-decoration-color: var(--mute); text-underline-offset: 2px; }
+    .md a:hover { text-decoration-color: var(--ink); }
+    .md hr { border: 0; border-top: 1px solid var(--edge-strong); margin: 10px 0; }
+    .md .tbl { overflow-x: auto; scrollbar-width: thin; }
+    .md table { border-collapse: collapse; font-size: 12.5px; }
+    .md th, .md td { padding: 4px 12px 4px 0; border-bottom: 1px solid var(--edge); text-align: left; vertical-align: top; overflow-wrap: normal; }
+    .md th { color: var(--ink-2); font-weight: 600; border-bottom-color: var(--edge-strong); }
+    .md th.r, .md td.r { text-align: right; }
+    .md th.c, .md td.c { text-align: center; }
+
+    /* ---- status readouts under the title: data, so values are mono ---- */
+    .stats { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 2px 20px; }
+    .stat { background: none; border: 0; padding: 2px 0; cursor: help; display: inline-flex; align-items: baseline; gap: 6px; text-align: left; }
+    .stat .k { color: var(--mute); font-size: 11.5px; }
+    .stat .v { font: 12px var(--mono); color: var(--ink); }
+    .stat .v.warn { color: var(--warn); }
+    .stat .v.bad { color: var(--bad); }
+    .stat .r { font: 11px var(--mono); color: var(--mute); }
+    .stats.stale .v { color: var(--mute); }
     .compose { display: flex; gap: 8px; align-items: flex-end; padding-top: 8px; }
     .compose textarea { flex: 1; resize: none; max-height: 160px; min-height: 40px; background: var(--sunk); border: 1px solid var(--edge); border-radius: 8px; padding: 10px 12px; font: 13.5px var(--sans); color: var(--ink); }
     .compose textarea:focus { outline: none; border-color: var(--edge-strong); }
@@ -148,7 +183,7 @@
     .rel dl dd { margin: 0; color: var(--ink-2); }
     .rel .actions { display: flex; gap: 8px; margin-top: 10px; }
 
-    .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 9px 16px; font-size: 13px; transition: transform .2s; z-index: 20; pointer-events: none; max-width: 92vw; }
+    .toast { position: fixed; left: 50%; bottom: 20px; transform: translate(-50%, 80px); background: var(--ink); color: var(--bg); border-radius: 8px; padding: 9px 16px; font-size: 13px; transition: transform .2s; z-index: 20; pointer-events: none; max-width: 92vw; white-space: pre-line; }
     .toast.show { transform: translate(-50%, 0); }
     .toast.err { background: var(--bad); color: #fff; }
     .drop { outline: 2px dashed var(--edge-strong); outline-offset: -6px; }
@@ -205,6 +240,7 @@
           <label><input type="checkbox" id="copySel" /> Copy on select</label>
         </div>
       </details>
+      <div class="stats" id="stats"></div>
     </header>
     <div class="tabs" id="tabs" style="display:none">
       <button data-drawer="details">details</button>
@@ -294,6 +330,7 @@
   <script src="/vendor/xterm/xterm.js"></script>
   <script src="/vendor/xterm-fit/addon-fit.js"></script>
   <script src="/vendor/xterm-links/addon-web-links.js"></script>
+  <script src="/md.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

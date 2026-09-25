@@ -284,6 +284,7 @@ function openTerminal(name) {
     else if (msg.t === 'exit') { showExit(msg.code); refresh(); }
     else if (msg.t === 'detached') { state.term.writeln('\r\n\x1b[90mdetached\x1b[0m'); }
     else if (msg.t === 'chat') { onChatPush(msg); }
+    else if (msg.t === 'status') { state.status = msg; renderStats(); }
     else if (msg.t === 'err') { state.term.writeln(`\r\n\x1b[31m${msg.m}\x1b[0m`); }
   };
   ws.onclose = () => {
@@ -356,14 +357,37 @@ el('vtChat').onclick = () => setView('chat');
 el('vtTerm').onclick = () => setView('term');
 
 function resetChat() {
-  state.pendingUser = null; state.chatFile = null;
+  state.pendingUser = null; state.chatFile = null; state.status = null;
   el('msgs').innerHTML = '<div class="cempty">loading</div>';
+  renderStats();
+}
+
+function fmtWhen(ts) {
+  const d = new Date(ts);
+  if (!ts || isNaN(d)) return '';
+  const t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${t}`;
 }
 
 function bubble(turn) {
   const d = document.createElement('div');
   d.className = 'bubble ' + (turn.role === 'user' ? 'user' : 'assistant');
-  d.textContent = turn.text;   // transcript text is untrusted: never innerHTML
+  // Channel messages (Telegram, ...): "Telegram · user · 16:34 · image". Media
+  // arrive as markers from the server, never as paths.
+  if (turn.meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts), ...(turn.meta.media || [])].filter(Boolean).join(' · ');
+    d.appendChild(m);
+  }
+  const body = document.createElement('div');
+  body.className = 'md';
+  // Transcript text is untrusted. md.js escapes every input character and emits
+  // only its own fixed tag set, so its output is the one thing that may go
+  // through innerHTML here; without it, plain text.
+  if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(turn.text);
+  else body.textContent = turn.text;
+  d.appendChild(body);
   if (turn.tools?.length) {
     const t = document.createElement('span');
     t.className = 'tools';
@@ -407,6 +431,49 @@ function sendChat() {
 el('chatSend').onclick = sendChat;
 el('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
 el('chatInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(160, this.scrollHeight) + 'px'; });
+
+/* ---- status chips: pushed by the server (cockpit/chatstatus.mjs) over the same
+   socket when they change; ages and reset countdowns are computed here. A value
+   the server could not read arrives as {na: why} and shows as a dash. ---- */
+const fmtTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+function fmtIn(s) {
+  if (s <= 0) return 'now';
+  if (s < 60) return '<1m';
+  const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
+  return d ? `${d}d ${h}h` : h ? `${h}h ${m}m` : `${m}m`;
+}
+const fmtAgo = (s) => (s < 90 ? `${Math.round(s)}s ago` : s < 5400 ? `${Math.round(s / 60)} min ago` : s < 172800 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} days ago`);
+const level = (p) => (p >= 90 ? ' bad' : p >= 75 ? ' warn' : '');
+const tip = (...lines) => lines.filter(Boolean).join('\n');
+const statHtml = (k, v, r, title, cls = '') => `<button class="stat" title="${esc(title)}"><span class="k">${esc(k)}</span><span class="v${cls}">${esc(v)}</span>${r ? `<span class="r">${esc(r)}</span>` : ''}</button>`;
+
+function renderStats() {
+  const box = el('stats');
+  const s = state.status;
+  if (!s) { box.innerHTML = ''; return; }
+  if (s.error) { box.innerHTML = statHtml('status', '—', '', s.error); return; }
+  const now = Date.now() / 1000;
+  const age = s.ts ? now - s.ts : null;
+  const read = age === null ? '' : `status.json written ${fmtAgo(age)}`;
+  const out = [];
+  const c = s.context;
+  out.push(c.na ? statHtml('context', '—', '', c.na)
+    : statHtml('context', `${c.pct}%`, `${fmtTok(c.used)} / ${fmtTok(c.window)}`, tip(`${c.used.toLocaleString()} of ${c.window.toLocaleString()} tokens`, `window: ${c.source}`, read), level(c.pct)));
+  for (const [k, name, w] of [['5h', '5-hour', s.fiveHour], ['7d', '7-day', s.sevenDay]]) {
+    out.push(w.na ? statHtml(k, '—', '', w.na)
+      : statHtml(k, `${Math.round(w.pct)}%`, w.resetsAt ? `↻ ${fmtIn(w.resetsAt - now)}` : '', tip(`${w.pct}% of the ${name} limit used`, w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : 'reset time not reported', read), level(w.pct)));
+  }
+  const a = s.account;
+  out.push(a.na ? statHtml('account', '—', '', a.na) : statHtml('account', a.email || `token ****${a.tokenLast4}`, '', a.source));
+  const m = s.model, e = s.effort;
+  out.push(statHtml('model', m.na ? '—' : m.name, e.na ? '' : e.level,
+    tip(m.na ? `model: ${m.na}` : `model ${m.id || m.name}, from ${m.source}`, e.na ? `effort: ${e.na}` : `effort ${e.level}, from ${e.source}`)));
+  box.innerHTML = out.join('');
+  box.classList.toggle('stale', age !== null && age > 900);
+}
+// Tooltips do not exist on a phone: a tap shows the same text as a toast.
+el('stats').onclick = (e) => { const b = e.target.closest('.stat'); if (b) toast(b.title); };
+setInterval(renderStats, 30000);
 
 /* ---- lifecycle (through the server, through the CLI) ---- */
 async function lifecycle(action, fresh = false) {
