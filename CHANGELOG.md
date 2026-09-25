@@ -3,6 +3,46 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.1.13
+
+Found in a reboot test on the reference host: the bot died every ~63 min
+and was cold-started again, the tick logged `poller=UNKNOWN` all night, and
+after the reboot nothing visible said the bot was back.
+
+- **Idle bg sessions are pinned.** Claude Code's bg supervisor retires a
+  settled (idle, or blocked on input) unpinned worker 60 min after its job
+  last changed; the roster row ends `done`/`failed` and the next tick
+  cold-starts it (60 + 3 = 63). Nothing in BotCorp had that period. The
+  launcher now adds the session to `<config home>/jobs/pins.json` (the file
+  the fleet view's ctrl+t writes, re-read by the supervisor every sweep) and
+  drops the id it replaced; every tick re-pins a live session that is
+  missing, which heals a running bot without a restart. Doctor: `<bot>: bg
+  session pinned`.
+- **Fork chain made explicit.** A resume that comes back under a new session
+  id logs `resumed as <new> (fork of <old>)` and records the new id as the
+  conversation of record; the pre-launch line no longer claims "same
+  conversation".
+- **Tick poller = the status verdict.** The tick asked `tg_watchdog.py
+  --probe-only`, which needs the bot token that is deleted after launch and
+  absent from the tick's env, so it always said UNKNOWN. It now uses
+  `Get-PollerVerdict` (bot.pid alive under the recorded claude -> OWNED, the
+  same rule as `status`). A DEAD poller restarts the bot only once its launch
+  is older than `LauncherGraceMin`.
+- **Boot kick-off.** A daemon cold-start after a host reboot
+  (`LastBootUpTime` later than the bot's previous start) seeds the session
+  with `harness.boot_prompt`: by default a telegram bot sends ONE "back
+  online after reboot, <time>, all checks OK / <what failed>" line via
+  `tools/tg/tg_send.py` and carries on. `''` disables it. At most once per
+  boot per bot (`boot_kick_boot` / `boot_kick_at` in `state/<bot>.json`);
+  routine relaunches never kick.
+- **Blocked sessions are reported.** A bg job blocked on a login /
+  permission / question logs `BLOCKED: session <id> waits on '<needs>'` in
+  `daemon.log` (once per change); doctor: `<bot>: session not blocked`.
+
+Upgrade: check out `v0.1.13`, then `botcorp sync <bot>`. No restart: the
+next tick pins the running session and measures the poller the new way; the
+boot kick-off applies from the next reboot.
+
 ## v0.1.12
 
 Doctor-only. On the reference host `<bot>: bun resolvable for telegram

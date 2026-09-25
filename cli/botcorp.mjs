@@ -25,7 +25,7 @@ import {
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, isDescendant, pollerVerdict, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgBlockVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -2026,6 +2026,16 @@ async function cmdDoctor({ flags }) {
       const rawState = botState(bot);
       const alive = sessionAliveVerdict({ running: s.running, state: rawState, paused: fs.existsSync(pausedPath(bot)) });
       add(alive.level, `${bot}: session alive`, `${alive.detail}${alive.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh` : ''}`, 'bots');
+      if (cfg.harness.session !== 'pty') {
+        const bgId = String((rawState && rawState.bg_id) || '');
+        let pins = null;
+        try { const j = JSON.parse(fs.readFileSync(path.join(configDir(bot), 'jobs', 'pins.json'), 'utf-8')); pins = Array.isArray(j) ? j.map(String) : null; } catch {}
+        const pv = bgPinVerdict({ running: s.running, bgId, pins });
+        add(pv.level, `${bot}: bg session pinned`, pv.detail.replace(/<bot>/g, bot), 'bots');
+        const job = /^[0-9a-f]{6,12}$/.test(bgId) ? readJson(path.join(configDir(bot), 'jobs', bgId, 'state.json')) : null;
+        const bv = bgBlockVerdict({ running: s.running, bgId, job });
+        add(bv.level, `${bot}: session not blocked`, bv.detail, 'bots');
+      }
       // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
       {
         const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };

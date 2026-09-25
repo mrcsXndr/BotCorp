@@ -187,6 +187,30 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
   return { level: 'INFO', detail: `not running (${state.status || 'stopped'})` };
 }
 
+// doctor `<bot>: bg session pinned`. Claude Code's supervisor retires an
+// unpinned idle background session 60 min after its last activity (the
+// reference host's "dies every ~63 min"); the pin set is <config>/jobs/pins.json
+// (daemon/_common.ps1 Set-BgPin), which the launcher and every tick maintain.
+export function bgPinVerdict({ running, bgId = '', pins = null }) {
+  if (!running) return { level: 'INFO', detail: 'not running' };
+  if (!bgId) return { level: 'WARN', detail: 'no bg_id recorded, so the pin cannot be checked' };
+  if (pins === null) return { level: 'FAIL', detail: `session ${bgId} is not pinned (no readable jobs/pins.json): Claude Code retires it after 60 min idle. The daemon tick pins it within one tick; or botcorp start <bot>` };
+  if (pins.includes(bgId)) return { level: 'PASS', detail: `session ${bgId} in .claude-<bot>/jobs/pins.json (not retired for idleness)` };
+  return { level: 'FAIL', detail: `session ${bgId} is not pinned: Claude Code retires it after 60 min idle. The daemon tick pins it within one tick; or botcorp start <bot>` };
+}
+
+// doctor `<bot>: session not blocked`: Claude Code's own job record
+// (<config>/jobs/<short>/state.json) says the session waits on something no
+// unattended launch answers (daemon/_common.ps1 Get-BgBlock: tempo blocked,
+// `needs` other than "send a prompt to start").
+export function bgBlockVerdict({ running, bgId = '', job = null }) {
+  if (!running) return { level: 'INFO', detail: 'not running' };
+  if (!job) return { level: 'INFO', detail: `no job record for ${bgId || 'the session'} (cannot tell)` };
+  const needs = String(job.needs || '').trim();
+  if (job.tempo === 'blocked' && needs && needs !== 'send a prompt to start') return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+  return { level: 'PASS', detail: `session ${bgId} ${job.tempo === 'blocked' ? 'idle, waiting for its next prompt' : `is ${job.tempo || job.state || 'running'}`}` };
+}
+
 // The file half of both tools checks: every harness tool has a shim or the
 // bot's own copy in the bot folder, and no shim is left for a removed tool.
 // `<bot>: harness tools reachable` is this alone; `shape` is the summary.

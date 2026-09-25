@@ -636,6 +636,82 @@ function Stop-BgDaemon {
     } catch { return $false }
 }
 
+# --- pinning: the supervisor's idle retirement ----------------------------------------
+# Claude Code's supervisor sweeps its workers and RETIRES a settled (idle) one
+# 60 min after its last activity (CC 2.1.282 retireIfSettled: grace 3600000 ms;
+# 60 s under low memory) unless it is attached, or PINNED: the roster row ends
+# `done` and the Telegram poller dies with the worker. That was the reference
+# host's "dies every ~63 min" (60 min idle + the next 3-min tick cold-starting
+# it). The pin set is <config>/jobs/pins.json, a JSON array of short ids - the
+# file the `claude agents` fleet view writes on ctrl+t ("Pinned"); the sweep
+# re-reads it every pass, so a pin takes effect without a restart. No CLI flag
+# pins a session, so BotCorp writes that file: its own entry only, everything
+# else in it is kept.
+function Get-BgPinsPath { param([Parameter(Mandatory)][string]$ConfigDir) return (Join-Path (Join-Path $ConfigDir 'jobs') 'pins.json') }
+
+function Get-BgPins {
+    # The pinned short ids (an empty array when the file is absent or unreadable).
+    param([Parameter(Mandatory)][string]$ConfigDir)
+    try {
+        $f = Get-BgPinsPath -ConfigDir $ConfigDir
+        if (-not (Test-Path -LiteralPath $f)) { return @() }
+        $j = ConvertFrom-Json -InputObject (Get-Content -LiteralPath $f -Raw -ErrorAction Stop) -NoEnumerate -ErrorAction Stop
+        return @(@($j) | Where-Object { $_ -is [string] -and $_ })
+    } catch { return @() }
+}
+
+function Set-BgPin {
+    # Pin $BgId (and unpin $Replace, the previous session BotCorp pinned for this
+    # bot, when it differs). -> 'pinned' | 'already' | 'failed: <why>'.
+    # An unreadable pins.json is not overwritten: the fleet view owns it too.
+    param([Parameter(Mandatory)][string]$ConfigDir, [Parameter(Mandatory)][string]$BgId, [string]$Replace = '')
+    if ($BgId -notmatch '^[0-9a-f]{6,12}$') { return "failed: '$BgId' is not a short session id" }
+    try {
+        $f = Get-BgPinsPath -ConfigDir $ConfigDir
+        $cur = @()
+        if (Test-Path -LiteralPath $f) {
+            $raw = Get-Content -LiteralPath $f -Raw -ErrorAction Stop
+            if ("$raw".Trim()) {
+                $j = ConvertFrom-Json -InputObject $raw -NoEnumerate -ErrorAction Stop
+                if ($null -ne $j -and $j -isnot [array]) { return 'failed: jobs/pins.json is not a JSON array (left alone)' }
+                $cur = @(@($j) | Where-Object { $_ -is [string] -and $_ })
+            }
+        }
+        $next = @($cur | Where-Object { -not ($Replace -and $_ -eq $Replace -and $Replace -ne $BgId) })
+        if ($next -contains $BgId -and $next.Count -eq $cur.Count) { return 'already' }
+        if ($next -notcontains $BgId) { $next += $BgId }
+        New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
+        $tmp = "$f.botcorp.tmp"
+        [System.IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject @($next) -Depth 2))
+        Move-Item -LiteralPath $tmp -Destination $f -Force
+        return 'pinned'
+    } catch { return "failed: $($_.Exception.Message)" }
+}
+
+# --- boot kick-off ------------------------------------------------------------------
+function Get-BootKey {
+    # A stable text key for this host boot (LastBootUpTime, UTC, to the second); '' when unreadable.
+    param($BootAt)
+    try { if ($BootAt) { return ([datetime]$BootAt).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ') } } catch {}
+    return ''
+}
+
+function Test-BootKickDue {
+    # Does THIS daemon cold-start seed the boot prompt? Only the first one after
+    # the host booted: the bot's previous launch predates the boot (or an
+    # earlier attempt this boot marked it pending and did not come up), and no
+    # kick-off has gone out for this boot yet. A bot never launched before is
+    # not "back after a reboot". Routine relaunches within one boot never fire.
+    param([string]$BootKey, $PrevStartedAt, [string]$LastKickBoot, [string]$PendingBoot)
+    if (-not $BootKey -or $LastKickBoot -eq $BootKey) { return $false }
+    if ($PendingBoot -eq $BootKey) { return $true }
+    if (-not $PrevStartedAt) { return $false }
+    $prev = ConvertTo-UtcTime $PrevStartedAt
+    if ($prev -eq [datetime]::MinValue) { return $false }
+    $boot = [datetime]::ParseExact($BootKey, 'yyyy-MM-ddTHH:mm:ssZ', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]'AdjustToUniversal, AssumeUniversal')
+    return ($prev -lt $boot)
+}
+
 # --- the Telegram poller ------------------------------------------------------------
 function Test-ProcDescendant {
     # Is $ProcId $AncestorId itself or somewhere below it (ParentProcessId walk)?
@@ -657,6 +733,50 @@ function Get-TgPoller {
     try { if (Test-Path $BotPidFile) { $botPid = Get-FirstPid ((Get-Content $BotPidFile -ErrorAction Stop | Select-Object -First 1)) } } catch {}
     $alive = Test-ProcAlive $botPid
     return @{ BotPid = $botPid; Alive = $alive; Up = ($alive -and (Test-ProcDescendant -ProcId $botPid -AncestorId $ClaudePid)) }
+}
+
+function Get-PollerVerdict {
+    # The daemon tick's poller verdict, the SAME measurement as `status` /
+    # `doctor` (cli/_lib.mjs pollerVerdict): the plugin's bot.pid alive AND
+    # below this bot's claude = OWNED; bot.pid missing or dead, or alive
+    # outside the tree = DEAD; an unreadable process tree = UNKNOWN (no action).
+    # A launch without --channels keeps FOREIGN, a bot without the module NONE.
+    # (The tick used tg_watchdog.py's getUpdates probe, which needs the bot's
+    # token: the tick never has it, so every tick read UNKNOWN while status
+    # said OWNED.)
+    param([Parameter(Mandatory)][string]$BotPidFile, [int]$ClaudePid, [string]$Recorded = '', [int]$MaxDepth = 12)
+    if ($Recorded -in @('FOREIGN', 'NONE')) { return $Recorded }
+    $botPid = 0
+    try { if (Test-Path -LiteralPath $BotPidFile) { $botPid = Get-FirstPid ((Get-Content -LiteralPath $BotPidFile -ErrorAction Stop | Select-Object -First 1)) } } catch {}
+    if ($botPid -le 0 -or -not (Test-ProcAlive $botPid)) { return 'DEAD' }
+    if ($ClaudePid -le 0) { return 'UNKNOWN' }
+    $cur = $botPid
+    try {
+        for ($i = 0; $i -le $MaxDepth -and $cur -gt 4; $i++) {
+            if ($cur -eq $ClaudePid) { return 'OWNED' }
+            $pr = Get-CimInstance Win32_Process -Filter "ProcessId=$cur" -ErrorAction Stop
+            if (-not $pr) { return 'DEAD' }   # the chain ended below claude: not our poller
+            $cur = [int]$pr.ParentProcessId
+        }
+    } catch { return 'UNKNOWN' }
+    return 'DEAD'
+}
+
+function Get-BgBlock {
+    # The session is waiting on something no unattended launch can answer (a
+    # login, a dialog, a permission) - '' when it is not, or when that cannot
+    # be read. From Claude Code's own job record <config>/jobs/<short>/state.json
+    # (the fleet view's "Needs input"): tempo 'blocked' with a `needs` other than
+    # "send a prompt to start" (an idle session waiting for its next prompt).
+    param([Parameter(Mandatory)][string]$ConfigDir, [string]$BgId)
+    if ($BgId -notmatch '^[0-9a-f]{6,12}$') { return '' }
+    try {
+        $j = Read-JsonFile -Path (Join-Path (Join-Path (Join-Path $ConfigDir 'jobs') $BgId) 'state.json')
+        if (-not $j) { return '' }
+        $needs = "$($j.needs)".Trim()
+        if ("$($j.tempo)" -eq 'blocked' -and $needs -and $needs -ne 'send a prompt to start') { return $needs }
+    } catch {}
+    return ''
 }
 
 function Wait-TgPoller {

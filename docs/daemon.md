@@ -170,6 +170,56 @@ with no live claude process running the session is `bg: FAIL` and exit 3
 (`Get-BgLaunchResult`); doctor's `<bot>: session alive` FAILs a bot whose
 state says running, or whose last launch failed, with no claude process.
 
+A resume can come back under a NEW session id (the roster reports the id
+only after the launch). The launch then logs `bg: resumed as <new> (fork of
+<old>): <new> is the conversation of record now` and records `<new>` as
+`session_id`, so the next resume targets it; the same id logs `resumed <id>
+(same session id)`, no roster id logs `unconfirmed`. It never claims "same
+conversation" before it has measured it.
+
+**Idle retirement and the pin.** Claude Code's bg supervisor (2.1.282)
+retires a SETTLED worker (idle, or blocked waiting on input) once its job has
+not changed for 60 min (60 s under memory pressure): the process exits and
+the roster row ends `done`/`failed`. A bot that waits for Telegram messages is
+settled most of the night, so it died every ~63 min (60 + one tick) and the
+daemon cold-started it again. Exempt are attached sessions, recent input,
+running tasks, cron/routine sessions and PINNED ones. The pin set is
+`<config>/jobs/pins.json`, a JSON array of short session ids that the
+supervisor re-reads every sweep (the file `claude agents` writes with ctrl+t;
+there is no CLI flag). `launch.ps1 -Bg` pins the new session and unpins the
+one it replaced (`bg: pin <id> -> pinned`), and every tick re-pins a live
+session missing from the file (`bg session <id> was not pinned -> pinned`),
+which heals a running bot without a restart. A pins.json that is not a JSON
+array is left alone and reported. Doctor: `<bot>: bg session pinned`.
+
+**Blocked sessions.** A job whose `tempo` is `blocked` on anything but "send a
+prompt to start" (a login, a permission, a question) waits for a human that
+an unattended start does not have. The tick logs `BLOCKED: session <id> waits
+on '<needs>' ...` once per change (and `no longer blocked`), records
+`session_blocked`, and doctor's `<bot>: session not blocked` FAILs with the
+`claude attach <id>` hint. What an unattended start does to avoid the known
+prompts: onboarding and workspace trust are pre-seeded in the config home's
+`.claude.json` (`botcorp new`, re-merged by `botcorp sync`), `permissions:
+bypass` (the default) passes `--dangerously-skip-permissions`, and a resume
+is bare (no "keeps its own saved options" copy). `permissions: default` on
+an unattended bot will block on the first tool call; the BLOCKED line and
+doctor say so.
+
+**Boot kick-off.** After a reboot a resumed bot sits idle until prompted, so
+nothing visible says it is back. When a daemon cold-start (`StartedBy
+daemon-cold`) finds that the host booted (`Win32_OperatingSystem`
+`LastBootUpTime`) after the bot's previous `started_at`, it seeds the session
+with `harness.boot_prompt` (`{boot}` and `{now}` are substituted; appended to
+a usage-resume seed when both apply). `null` (default) = a bot with the
+telegram module sends ONE short `tools/tg/tg_send.py` line ("back online after
+reboot, <time>", then "all checks OK" or what failed) and carries on; `''` =
+off; any other string is the prompt. It fires at most once per boot per bot:
+`state/<bot>.json` records `boot_kick_boot` (the boot time) and
+`boot_kick_at`; `boot_kick_pending` carries a kick whose launch failed to the
+next attempt within the same boot. Routine relaunches (restart, heal, usage
+resume, `botcorp start`) never kick. Log: `boot: host booted <t> ... seeding
+the boot prompt`.
+
 **bun.** The Telegram plugin's `.mcp.json` starts its server with a bare
 `bun`. bun's installer puts it in `%USERPROFILE%\.bun\bin`, which a daemon /
 session-0 / bg launch's PATH may lack (the plugin's MCP log then says `Server
@@ -262,11 +312,14 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
   liveness              bg : claude agents --json (bot config home) row by bg_id / session_id / cwd with a live pid
                              or state working|blocked, OR state.claude_pid alive as claude
                         pty: state.shell_pid alive as pwsh/powershell WITH a claude.exe child, OR state.claude_pid alive
-  poller probe          telegram module only, only while alive:
-                        python tools/v2/tg_watchdog.py --config-dir <config> --probe-only [--claude-pid N]
-  decision              not alive              -> cold-start   (unless state/<bot>.paused or harness.service: manual)
-                        alive + DEAD / STOLEN  -> restart      (idle-gated)
-                        else                   -> none
+  poller                telegram module only, only while alive: Get-PollerVerdict, the verdict `status` prints
+                        (bot.pid alive under the recorded claude -> OWNED; missing/dead bot.pid or a chain that
+                        never reaches claude -> DEAD; process tree unreadable -> UNKNOWN)
+  bg pin + block        bg only, while alive: bg_id missing from <config>/jobs/pins.json -> Set-BgPin (logged);
+                        jobs/<bg_id>/state.json tempo blocked on anything but "send a prompt to start" -> BLOCKED line
+  decision              not alive                                    -> cold-start (unless state/<bot>.paused or harness.service: manual)
+                        alive + DEAD, launch older than LauncherGraceMin -> restart   (idle-gated)
+                        alive + OWNED / UNKNOWN                      -> none
   guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
                         hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
   isolated ticks        usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
@@ -284,9 +337,13 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                                     bg: launch.ps1 -Bg (bounded) / pty: session 0 + logged-in user -> BotCorp-Launch task, else pty-host --continue
 ```
 
-The process record is authoritative over the poller probe: a poller that
-still answers 409 after the session died is an orphan and must never mask a
-dead bot. Nothing in the tick holds the mutex across an unbounded call: every
+The process record comes before the poller verdict: the verdict is measured
+only for a live session, so an orphan bun still holding the getUpdates slot
+never masks a dead bot. The tick used to ask `tg_watchdog.py --probe-only`
+instead, which needs the bot token; the token file is deleted after launch
+and the tick's env has no token, so every tick logged `poller=UNKNOWN` while
+`status` said OWNED. UNKNOWN never restarts a bot. Nothing in the tick holds
+the mutex across an unbounded call: every
 child runs through `Invoke-Bounded` (hard timeout, tree kill), long work
 (triage, automations) is spawned detached with its own waiter.
 
@@ -313,8 +370,9 @@ than any late heal.
 
 **Fresh marker (restart.ps1).** A `.botcorp_fresh_restart` younger than 300 s
 is honoured and re-touched (the launcher's window then counts from the
-launch); a stale one is deleted; none = the same conversation (`--resume
-<session_id>` for bg, `--continue` for pty). The daemon's own restart path
+launch); a stale one is deleted; none = resume the recorded conversation
+(`--resume <session_id>` for bg, which may come back as a fork with a new id
+that is then recorded, see "Resuming a bg session"; `--continue` for pty). The daemon's own restart path
 never creates one, so a heal always keeps the running context; only a roll
 the bot declared itself starts fresh. `restart.ps1 -DryRun` prints `START
 FRESH`, `--continue` or `--resume <id>`. `restart.ps1 -OldPid 0` is refused

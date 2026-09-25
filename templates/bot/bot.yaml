@@ -23,6 +23,7 @@ harness:
   telegram_token_file: false      # fallback: also write <config>/channels/telegram/.env (ACL'd), deleted once the plugin read it
   debug: false                    # every launch writes a Claude Code debug log to <config>/debug/ (plugin stderr included); one launch: botcorp start --debug
   bun_path: ''                    # bun.exe for the Telegram plugin if it is neither on PATH nor in %USERPROFILE%\.bun\bin
+  boot_prompt: null               # once per host boot, a daemon cold-start seeds this prompt: null = a telegram bot sends one "back online" line; '' = off
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
   hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot

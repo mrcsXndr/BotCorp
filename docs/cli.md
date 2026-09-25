@@ -343,6 +343,12 @@ debug log, which carries every MCP server's stderr (`MCP server
 `harness.debug: true` does the same for every launch, the daemon's included
 (the only way for a pty bot). Off by default; the newest 10 logs are kept.
 
+`harness.boot_prompt` is the one prompt a daemon cold-start sends after the
+HOST rebooted (never on a routine relaunch or a `start`): `null` (default) =
+a telegram bot sends one "back online after reboot" line via
+`tools/tg/tg_send.py`, `''` = off, a string = that prompt (`{boot}` / `{now}`
+substituted). Once per boot per bot (docs/daemon.md, "Boot kick-off").
+
 A bg bot's session resumes WITHOUT flags while the config home's roster holds
 it (running or stopped): its saved options apply, and any flag would make
 Claude Code start a copy (docs/daemon.md, "Resuming a bg session"). So a
@@ -528,7 +534,13 @@ One `PASS` / `WARN` / `FAIL` / `INFO` line per check, grouped under
   from its MCP log (`%LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home
   slug>\mcp-logs-plugin-telegram-telegram`, e.g. `TELEGRAM_BOT_TOKEN
   required`) and `botcorp stop <bot>; botcorp start <bot>` as the fix, INFO
-  when the bot is not running; `integrations.access.team` set but the cockpit
+  when the bot is not running; bg bots: `<bot>: bg session pinned` - the
+  recorded `bg_id` is in `<config home>/jobs/pins.json` (FAIL: unpinned, Claude
+  Code retires an idle bg session after 60 min; the next daemon tick pins it)
+  and `<bot>: session not blocked` - its `jobs/<bg_id>/state.json` is not
+  blocked on a login / permission / question (FAIL with the `claude attach
+  <id>` hint), both INFO when the bot is not running (docs/daemon.md, "Idle
+  retirement and the pin"); `integrations.access.team` set but the cockpit
   not exposed, or a different team than the machine file => WARN;
   `integrations.cloudflare: {account_id, workers}` + `CLOUDFLARE_API_TOKEN`
   in the env (never read from the vault here; the daemon injects it) => one
