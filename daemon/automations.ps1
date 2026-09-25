@@ -27,6 +27,13 @@
 # Per-automation state (failure_streak, next_due, runs_today, last_ok, ...) in
 # <rt>/state/<bot>/automations.json.
 #
+# `kind: prompt` entries run no command: daemon/inject.mjs types `prompt:` into
+# the bot's live session (the cockpit chat's path). A fire that finds the
+# session down, blocked on a dialog or busy (or the account blocked, or
+# max_per_day reached) is recorded as `skipped: <reason>` and the NEXT fire is
+# the next chance: no queue, no per-tick retry, no backoff. Records carry
+# `result` (sent | failed: ... | skipped: ...), state `last_result`.
+#
 # `botcorp automations pause` flips `enabled: false` in bot.yaml; this script
 # only honours it. -RunNow <name> queues one run now, respecting timeout_min but
 # not max_per_day (the cockpit's "Run now").
@@ -152,6 +159,23 @@ function Get-NextDueAfterSuccess {
     return $null
 }
 
+function Get-PromptSkip {
+    # Why a prompt must not be typed into this bot's session now ('' = type it).
+    # Up = a live pty-host or a live claude pid (what `botcorp status` reads);
+    # blocked = the tick saw the bg session waiting on a dialog, which typed
+    # text + Enter could answer; busy = Test-SessionBusy, every restart's gate.
+    $bst = Read-BotState -Bot $Bot
+    $pty = Read-JsonFile -Path $P.PtyFile
+    $hostUp = $pty -and (Test-ProcAlive ([int](Num $pty.pid 0)) @('node'))
+    $claudeUp = $bst -and (Test-ProcAlive ([int](Num $bst.claude_pid 0)) @('claude'))
+    if (-not $hostUp -and -not $claudeUp) { return 'session down' }
+    if ($bst -and ($bst.PSObject.Properties.Name -contains 'session_blocked') -and $bst.session_blocked) { return "session blocked on '$($bst.session_blocked)'" }
+    if (Test-SessionBusy -Bot $Bot) { return 'session busy' }
+    return ''
+}
+
+function Get-PromptPreview { param($A) $t = ("$($A.prompt)" -replace '\s+', ' ').Trim(); if ($t.Length -gt 60) { $t = $t.Substring(0, 60) + '...' }; return $t }
+
 # --- the run itself (inline or in the detached waiter) -------------------------------
 function Invoke-AutomationJob {
     param([string]$JobFile)
@@ -170,6 +194,13 @@ function Invoke-AutomationJob {
         CLAUDE_CONFIG_DIR = $P.ConfigDir; CLAUDE_PLUGIN_ROOT = $Harness; PYTHONIOENCODING = 'utf-8'
         BOT_MODULES = (@($job.modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
         GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
+    }
+    # kind: prompt runs inject.mjs; the prompt rides in the env, never on the command line.
+    $isPrompt = ("$($a.kind)" -eq 'prompt')
+    $command = "$($a.command)"
+    if ($isPrompt) {
+        $command = "`"$(Resolve-Node)`" `"$(Join-Path $PSScriptRoot 'inject.mjs')`" --bot $Bot --session $($job.session)"
+        $envMap['BOT_PROMPT'] = "$($a.prompt)"
     }
     $secretNames = @(); try { $secretNames = @($a.secrets | Where-Object { $_ }) } catch {}
     if ($secretNames.Count -gt 0) {
@@ -195,7 +226,7 @@ function Invoke-AutomationJob {
         # chatty job. /s strips the outer quotes; the command runs verbatim,
         # grouped: without the parentheses a chained `a & b` / `a && b` sent
         # only b's output to the log. The exit code is the group's (its last command).
-        $psi.Arguments = "/d /s /c `"($($a.command)) > `"$logPath`" 2>&1`""
+        $psi.Arguments = "/d /s /c `"($command) > `"$logPath`" 2>&1`""
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $P.BotHome
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
@@ -221,6 +252,12 @@ function Invoke-AutomationJob {
     if ($summary.Length -gt 200) { $summary = $summary.Substring(0, 200) }
 
     $rec = [ordered]@{ automation = $name; run_id = $runId; start = (ToIso $start); end = (ToIso $end); exit = $exit; duration_s = $durationS; summary = $summary; log = $logPath }
+    $result = $null
+    if ($isPrompt) {
+        $result = ($summary -replace '^SUMMARY:\s*', '')
+        if ($exit -eq 0) { $result = 'sent' } elseif ($result -notmatch '^failed') { $result = "failed: $result" }
+        $rec['result'] = $result
+    }
     try { ($rec | ConvertTo-Json -Compress -Depth 3) | Out-File -FilePath $RunsFile -Append -Encoding utf8 } catch { Log "runs.jsonl append failed: $($_.Exception.Message)" }
 
     Use-AutoState {
@@ -229,8 +266,13 @@ function Invoke-AutomationJob {
         $e = $st[$name]
         $e['last_end'] = ToIso $end; $e['last_exit'] = $exit; $e['last_run_id'] = $runId; $e['last_duration_s'] = $durationS; $e['last_summary'] = $summary
         $e['running_run_id'] = $null; $e['running_pid'] = $null; $e['running_since'] = $null
+        if ($isPrompt) { $e['last_result'] = $result }
         if ($exit -eq 0) {
             $e['failure_streak'] = 0; $e['last_ok'] = ToIso $end; $e['backoff_min'] = $null
+            $e['next_due'] = Get-NextDueAfterSuccess -A $a -T $end
+        } elseif ($isPrompt) {
+            # No backoff for a prompt: a retry would type it again, late. The next fire is the next chance.
+            $e['failure_streak'] = [int](Num $e['failure_streak'] 0) + 1
             $e['next_due'] = Get-NextDueAfterSuccess -A $a -T $end
         } else {
             $streak = [int](Num $e['failure_streak'] 0) + 1
@@ -301,6 +343,26 @@ if ($autos.Count -gt 0 -or $RunNow) {
             if (-not $due) { continue }
 
             $critical = (($a.PSObject.Properties.Name -contains 'critical') -and ($a.critical -eq $true))
+            if ("$($a.kind)" -eq 'prompt') {
+                # A gated prompt fire is dropped, never held: typed once the gate
+                # cleared, it would land out of context (a morning prompt at noon).
+                $maxPerDay = [int](Num $a.max_per_day 0)
+                if ($blocked -and -not $critical) { $why = 'account usage-blocked' }
+                elseif ($maxPerDay -gt 0 -and [int](Num $e['runs_today'] 0) -ge $maxPerDay -and -not $RunNow) { $why = "max_per_day $maxPerDay reached" }
+                else { $why = Get-PromptSkip }
+                if ($why) {
+                    if ($DryRun) { Log "DRYRUN would skip ${name}: $why"; continue }
+                    $result = "skipped: $why"
+                    $skipId = $now.ToString('yyyyMMdd-HHmmss') + '-' + ('{0:x4}' -f (Get-Random -Maximum 65535))
+                    $rec = [ordered]@{ automation = $name; run_id = $skipId; start = (ToIso $now); end = (ToIso $now); exit = $null; duration_s = 0; summary = $result; log = $null; result = $result }
+                    try { ($rec | ConvertTo-Json -Compress -Depth 3) | Out-File -FilePath $RunsFile -Append -Encoding utf8 } catch { Log "runs.jsonl append failed: $($_.Exception.Message)" }
+                    $e['last_result'] = $result; $e['last_skip'] = $why
+                    $e['next_due'] = Get-NextDueAfterSuccess -A $a -T $now
+                    if ($eventName) { try { Remove-Item (Join-Path $EventsDir "$eventName.queue") -Force -ErrorAction SilentlyContinue } catch {} }
+                    Log "skip ${name}: $why ($reason; prompt '$(Get-PromptPreview $a)'); next chance $($e['next_due'])"
+                    continue
+                }
+            }
             if ($blocked -and -not $critical) { if ("$($e['last_skip'])" -ne 'blocked') { Log "skip ${name}: account usage-blocked (accounts.json) and not critical"; $e['last_skip'] = 'blocked' }; continue }
             $maxPerDay = [int](Num $a.max_per_day 0)
             if ($maxPerDay -gt 0 -and [int](Num $e['runs_today'] 0) -ge $maxPerDay -and -not $RunNow) { if ("$($e['last_skip'])" -ne 'max_per_day') { Log "skip ${name}: max_per_day $maxPerDay reached ($($e['runs_today']) today)"; $e['last_skip'] = 'max_per_day' }; continue }
@@ -311,7 +373,7 @@ if ($autos.Count -gt 0 -or $RunNow) {
 
             $runId = $now.ToString('yyyyMMdd-HHmmss') + '-' + ('{0:x4}' -f (Get-Random -Maximum 65535))
             $logPath = Join-Path (Join-Path $P.BotLogDir $name) "$runId.log"
-            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
+            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); session = (Get-BotSessionKind $cfg); log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
             $jobFile = Join-Path $JobsDir "$runId.json"
             if (-not (Write-JsonFile -Path $jobFile -Object $job -Depth 8)) { Log "could not write job file for $name"; continue }
             if ($eventName) { try { Remove-Item (Join-Path $EventsDir "$eventName.queue") -Force -ErrorAction SilentlyContinue } catch {} }
@@ -367,6 +429,7 @@ try {
                 try { $r = $ln | ConvertFrom-Json } catch { continue }
                 $d = FromIso $r.start
                 if (-not $d -or $d.ToString('yyyy-MM-dd') -ne $yesterday) { continue }
+                if ("$($r.result)".StartsWith('skipped')) { continue }   # a skipped prompt fire ran nothing
                 if (-not $agg.ContainsKey($r.automation)) { $agg[$r.automation] = @{ runs = 0; failures = 0; secs = 0.0 } }
                 $g = $agg[$r.automation]; $g.runs++; if ($r.exit -ne 0) { $g.failures++ }; $g.secs += (Num $r.duration_s 0)
             }

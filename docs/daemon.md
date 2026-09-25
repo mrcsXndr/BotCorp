@@ -267,7 +267,9 @@ resume, `botcorp start`) never kick. Log: `boot: host booted <t> ... seeding
 the boot prompt`.
 
 **Resume seed.** Every other unattended bg launch (`daemon-cold`,
-`daemon-restart`) with no other seed gets `harness.resume_prompt`: by default
+`daemon-restart`, and `cli`: `botcorp start|restart` or the cockpit, since
+nobody is attached to a bg session) with no other seed gets
+`harness.resume_prompt`, `{reason}` naming which of them it was: by default
 one short turn that re-reads the bot's rules and re-arms the background
 watchers they describe (a background task dies with the session it ran in, so
 a bot that was waiting on one would stay deaf), picks up an interrupted task,

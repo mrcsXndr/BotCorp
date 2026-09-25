@@ -443,7 +443,7 @@ context window` (the value, where it comes from, the machine-wide value it
 overrides; WARN on a stale settings.json or a running session started with
 another value).
 `harness.resume_prompt` is the short turn every other unattended bg launch
-(daemon cold-start / restart) seeds instead: `null` = re-arm the watchers the
+(daemon cold-start / restart, `botcorp start|restart`) seeds instead: `null` = re-arm the watchers the
 rules describe, pick up an interrupted task, else reply "ok"; `''` = off
 (docs/daemon.md, "Resume seed").
 
@@ -508,12 +508,17 @@ and the running CC version (written by the statusline on every render), the
 pending approvals count, and a `vault: <mode> v<version>[ LOCKED - botcorp
 secrets unlock <bot>]` line (`{mode, version, locked, detail}` under
 `vault` in `--json`) — the same lock state the cockpit reads for its vault
-drawer.
+drawer. A bot with declared automations gets an `automations:` line: each
+name, `(prompt)` for a `kind: prompt` entry, and its last result (`sent` /
+`skipped: <reason>` / `failed: ...` for a prompt, `exit N` otherwise);
+`{name, kind, last_result, next_due}` under `automations` in `--json`.
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 
 `list` joins `bot.yaml` `automations[]` with the daemon's
-`<BOTCORP_HOME>/state/<bot>/automations.json` when present. `pause` /
+`<BOTCORP_HOME>/state/<bot>/automations.json` when present; each row carries
+its `kind`, and a `kind: prompt` row shows the prompt's first 60 characters
+and `last_result` (docs/automations.md). `pause` /
 `resume` = `config set automations.<name>.enabled false|true` (non-widening,
 applied at once; the next daemon tick honours it). `run` appends
 `{"automation": "<name>", "ts": "<iso>"}` to

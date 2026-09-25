@@ -847,6 +847,12 @@ function botStatus(bot) {
   const poller = pollerVerdict({ alive, telegram, recorded: (state && state.poller) ?? null, botPid, botPidAlive, underClaude });
   const sessionEnv = sessionEnvOf(bot, state, alive, telegram);
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
+  // Each automation's last outcome: a prompt's result (sent | failed: ... | skipped: ...), else the exit code.
+  const autoState = readJson(path.join(STATE_DIR, bot, 'automations.json'));
+  const automations = (cfg && Array.isArray(cfg.automations) ? cfg.automations : []).map((a) => {
+    const e = isObj(autoState) && isObj(autoState[a.name]) ? autoState[a.name] : {};
+    return { name: a.name, kind: a.kind === 'prompt' ? 'prompt' : 'command', last_result: e.last_result ?? (e.last_exit != null ? `exit ${e.last_exit}` : null), next_due: e.next_due ?? null };
+  });
   let statusAgeS = null, ctxUsedPct = null, rateLimits = null;
   if (status) {
     statusAgeS = Number.isFinite(status.ts) ? Math.round(Date.now() / 1000 - status.ts) : null;
@@ -873,6 +879,7 @@ function botStatus(bot) {
     yaml_error: yamlError,
     status_json: status ? { age_s: statusAgeS, ctx_used_pct: ctxUsedPct, rate_limits: rateLimits, version: status.version ?? null } : null,
     approvals_pending: readApprovals(bot).length,
+    automations,
   };
 }
 
@@ -917,6 +924,7 @@ function printStatus(s) {
     out(`  status.json: ${s.status_json.age_s}s ago  ctx used ${pct(s.status_json.ctx_used_pct)}  5h ${pct(rl.five_hour && rl.five_hour.used_percentage)} / 7d ${pct(rl.seven_day && rl.seven_day.used_percentage)}  cc ${s.status_json.version ?? '?'}`);
   } else out('  status.json: absent (written by the statusline once a session renders)');
   out(`  approvals pending: ${s.approvals_pending}`);
+  if (s.automations.length) out(`  automations: ${s.automations.map((a) => `${a.name}${a.kind === 'prompt' ? ' (prompt)' : ''} ${a.last_result ?? 'no run yet'}`).join(' · ')}`);
 }
 
 function cmdStatus({ pos, flags }) {
@@ -929,6 +937,8 @@ function cmdStatus({ pos, flags }) {
 }
 
 // ---- automations ---------------------------------------------------------------------------
+function promptPreview(t) { const s = String(t ?? '').replace(/\s+/g, ' ').trim(); return s.length > 60 ? `${s.slice(0, 60)}...` : s; }
+
 function cmdAutomations({ pos, flags }) {
   const [, bot, action = 'list', name] = pos;
   requireBot(bot);
@@ -938,13 +948,14 @@ function cmdAutomations({ pos, flags }) {
     const stateFile = path.join(STATE_DIR, bot, 'automations.json');
     const st = readJson(stateFile);
     const byName = (n) => (Array.isArray(st) ? st.find((x) => x && x.name === n) : isObj(st) ? st[n] : null) || null;
-    const rows = list.map((a) => ({ name: a.name, enabled: a.enabled !== false, trigger: a.trigger || null, command: a.command, state: byName(a.name) }));
+    const rows = list.map((a) => ({ name: a.name, kind: a.kind === 'prompt' ? 'prompt' : 'command', enabled: a.enabled !== false, trigger: a.trigger || null, ...(a.kind === 'prompt' ? { prompt: a.prompt } : { command: a.command }), state: byName(a.name) }));
     if (flags.json) { outJson({ bot, state_file: st ? stateFile : null, automations: rows }); return 0; }
     if (!rows.length) { out(`automations: ${bot} has none (bot.yaml automations: [])`); return 0; }
     out(`daemon state: ${st ? stateFile : 'absent (no daemon run yet)'}`);
     for (const r of rows) {
-      const s = r.state ? Object.entries(r.state).filter(([k]) => ['last_run', 'last_status', 'next_due', 'failure_streak', 'runs_today', 'last_exit'].includes(k)).map(([k, v]) => `${k}=${v}`).join(' ') : '';
-      out(`${r.enabled ? 'on ' : 'off'}  ${r.name}  trigger=${JSON.stringify(r.trigger)}  command=${r.command}${s ? '  ' + s : ''}`);
+      const s = r.state ? Object.entries(r.state).filter(([k]) => ['last_run', 'last_status', 'next_due', 'failure_streak', 'runs_today', 'last_exit', 'last_result'].includes(k)).map(([k, v]) => `${k}=${v}`).join(' ') : '';
+      const what = r.kind === 'prompt' ? `prompt=${JSON.stringify(promptPreview(r.prompt))}` : `command=${r.command}`;
+      out(`${r.enabled ? 'on ' : 'off'}  ${r.name}  trigger=${JSON.stringify(r.trigger)}  ${what}${s ? '  ' + s : ''}`);
     }
     return 0;
   }

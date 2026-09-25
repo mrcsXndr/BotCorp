@@ -225,9 +225,14 @@ if ($StartedBy -eq 'daemon-cold' -and "$($cfg._boot_prompt)") {
 # An unattended bg launch with nothing else to say would come up "idle - send a
 # prompt to start" and do nothing until a message arrives. It gets one trivial
 # turn (bot.yaml harness.resume_prompt, botyaml.mjs RESUME_PROMPT_DEFAULT).
-# Only daemon cold-starts / restarts, which pinning keeps rare; never scheduled.
-if ($Bg -and -not $seedPrompt.Count -and $StartedBy -in @('daemon-cold', 'daemon-restart') -and "$($cfg._resume_prompt)") {
-    $why = $(if ($StartedBy -eq 'daemon-cold') { 'the daemon found it not running' } else { 'the daemon restarted it' })
+# Daemon cold-starts / restarts (which pinning keeps rare) and CLI starts: a
+# `botcorp start|restart` bg session has nobody attached either. Never scheduled.
+if ($Bg -and -not $seedPrompt.Count -and $StartedBy -in @('daemon-cold', 'daemon-restart', 'cli') -and "$($cfg._resume_prompt)") {
+    $why = switch ($StartedBy) {
+        'daemon-cold'    { 'the daemon found it not running' }
+        'daemon-restart' { 'the daemon restarted it' }
+        default          { 'an operator started it (botcorp start / restart or the cockpit)' }
+    }
     $seedPrompt = @("$($cfg._resume_prompt)".Replace('{now}', (Get-Date).ToString('yyyy-MM-dd HH:mm')).Replace('{reason}', $why))
     Write-LaunchLog "resume seed: an unattended launch ($StartedBy) -> seeding harness.resume_prompt (one trivial turn)"
 }

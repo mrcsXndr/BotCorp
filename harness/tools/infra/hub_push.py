@@ -319,6 +319,8 @@ def build_activity_payload() -> dict:
         })
 
     for r in _read_jsonl(state_dir / "runs.jsonl"):
+        if str(r.get("result") or "").startswith("skipped"):
+            continue  # a skipped prompt fire ran nothing (daemon/automations.ps1)
         items.append({
             "ts": _iso_to_epoch(r.get("end") or r.get("start") or ""),
             "kind": "automation",

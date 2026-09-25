@@ -317,9 +317,14 @@ def test_a_daemon_cold_start_after_a_boot_passes_the_boot_prompt(repo_bot):
     argv = next(ln for ln in cold.stdout.splitlines() if ln.strip().startswith("argv:"))
     assert "BOOTCHECK 20" in argv and "{now}" not in argv and "RESUMECHECK" not in argv   # the boot seed is the one prompt
     assert "seeding the boot prompt" in cold.stdout
-    manual = subprocess.run(launch + ["-StartedBy", "cli"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+    # botcorp start / restart (and the cockpit) launch a bg session nobody is attached to: it gets the resume seed, never the boot one
+    cli = subprocess.run(launch + ["-StartedBy", "cli"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+    assert cli.returncode == 0, cli.stderr
+    argv = next(ln for ln in cli.stdout.splitlines() if ln.strip().startswith("argv:"))
+    assert "BOOTCHECK" not in argv and "RESUMECHECK an operator started it (botcorp start / restart or the cockpit)" in argv
+    manual = subprocess.run(launch + ["-StartedBy", "manual"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
     assert manual.returncode == 0, manual.stderr
-    assert "BOOTCHECK" not in manual.stdout and "RESUMECHECK" not in manual.stdout   # someone is there to prompt it
+    assert "BOOTCHECK" not in manual.stdout and "RESUMECHECK" not in manual.stdout   # launch.ps1 run by hand: someone is there to prompt it
     # launched since this boot: a routine unattended relaunch gets the trivial resume seed, not the boot one
     state.write_text(json.dumps({"bot": name, "status": "exited", "started_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}), encoding="utf-8")
     for who, why in (("daemon-cold", "the daemon found it not running"), ("daemon-restart", "the daemon restarted it")):

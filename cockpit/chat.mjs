@@ -13,7 +13,7 @@ import { ccProjectSlug } from './bots.mjs';
 
 // Locate the bot's ACTIVE transcript: newest .jsonl under projects/, preferring
 // the dir whose slug is the bot's own BOT_HOME. null when there is none yet.
-async function currentTranscript(bot) {
+export async function currentTranscript(bot) {
   const projectsDir = path.join(bot.configDir, 'projects');
   let dirs;
   try { dirs = await fs.readdir(projectsDir, { withFileTypes: true }); } catch { return null; }

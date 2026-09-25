@@ -193,10 +193,14 @@ async function renderDrawer(which) {
     } else if (which === 'runs') {
       const r = await api('GET', `/api/bots/${b.name}/automations`);
       let html = '';
-      if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
+      if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.kind === 'prompt' ? ', prompt' : ''}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
       if (!r.present) html += '<p class="hint">No runs recorded yet (the daemon writes them).</p>';
       for (const run of r.runs.slice().reverse()) {
-        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow">${esc(run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="m" style="color:${run.exit === 0 ? 'var(--ok)' : 'var(--bad)'}">exit ${esc(run.exit)}</span></div>${run.summary ? `<div class="dim" style="padding:0 0 6px">${esc(run.summary)}</div>` : ''}`;
+        // A prompt automation's record carries `result`: sent | failed: ... | skipped: <reason>.
+        const res = typeof run.result === 'string' ? run.result : null;
+        const outcome = res ? res.split(':')[0] : `exit ${run.exit}`;
+        const color = res ? (res === 'sent' ? 'var(--ok)' : res.startsWith('skipped') ? 'var(--warn)' : 'var(--bad)') : (run.exit === 0 ? 'var(--ok)' : 'var(--bad)');
+        html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow">${esc(run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="m" style="color:${color}">${esc(outcome)}</span></div>${run.summary ? `<div class="dim" style="padding:0 0 6px">${esc(run.summary)}</div>` : ''}`;
       }
       box.innerHTML = html || '<p class="hint">Nothing here.</p>';
     }
