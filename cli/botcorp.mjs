@@ -17,10 +17,26 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } from '../daemon/botyaml.mjs';
-import { sync, toolShimState, toolShimText } from '../daemon/sync.mjs';
+import { fileURLToPath } from 'node:url';
+import { depsVerdict, CLI_DEPS } from './_deps.mjs';
 import { zipWrite, zipList, zipExtract, zipEntryData } from './_zip.mjs';
-import {
+
+// The modules below need node_modules (js-yaml), and a static import of a
+// missing package fails before any line here runs. So check first: a wiped
+// node_modules answers with the fix (doctor: as its FAIL check), not a stack.
+const DEPS = depsVerdict(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..'));
+if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
+  const argv = process.argv.slice(2);
+  const check = { level: 'FAIL', name: 'node_modules', detail: DEPS.detail, group: 'core' };
+  const [stream, text] = argv[0] !== 'doctor' ? [process.stderr, `botcorp: ${DEPS.detail}\n`]
+    : argv.includes('--json') ? [process.stdout, JSON.stringify([check], null, 2) + '\n']
+    : [process.stdout, `[core]\nFAIL node_modules: ${DEPS.detail}\ndoctor: 1 checks, 1 FAIL, 0 WARN\n`];
+  // exit once the write drained (a piped stdout is async on Windows); never resolves
+  await new Promise(() => stream.write(text, () => process.exit(1)));
+}
+const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = await import('../daemon/botyaml.mjs');
+const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
+const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, botExists, listBots,
   CliError, fail, usage,
@@ -30,7 +46,7 @@ import {
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
-} from './_lib.mjs';
+} = await import('./_lib.mjs');
 
 const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
@@ -1961,6 +1977,7 @@ async function cmdDoctor({ flags }) {
     const gitPath = resolveGit();
     const gv = gitPath ? run(gitPath, ['--version'], { timeoutMs: 15_000 }) : null;
     add(gv && gv.code === 0 ? 'PASS' : 'FAIL', 'git', gv && gv.code === 0 ? `${gv.out.trim()} at ${gitPath}` : 'not found on PATH or under Program Files\\Git');
+    add(DEPS.level, 'node_modules', DEPS.detail);
 
     // harness
     const pj = readJson(path.join(ROOT, 'harness', '.claude-plugin', 'plugin.json'));

@@ -515,6 +515,12 @@ logins, `--no-tg-probe` the Telegram slot probe.
 
 - `claude --version` >= `botcorp.json.minClaudeCode`, node >= 20, python
   >= 3.11, pwsh >= 7, git present;
+- `node_modules`: FAIL when the checkout's `node_modules` is missing or empty,
+  or a `package.json` dependency does not resolve (fix: `npm ci` in the
+  checkout). The CLI checks this before loading anything that needs it, so
+  with a wiped `node_modules` every command answers with that fix and
+  `doctor` prints this one check; the daemon's log then reads
+  `bot.yaml unreadable: MODULE_NOT_FOUND '<package>'`;
 - `harness/.claude-plugin/plugin.json` readable; `claude plugin validate
   harness --strict` passes;
 - `python` / `pwsh` / `git` are reported with the absolute path they resolved

@@ -1107,7 +1107,17 @@ function Get-BotConfig {
         if (-not $node) { Write-DaemonLog 'node.exe not found - cannot read bot.yaml' -Bot $Bot; return $null }
         $yaml = Join-Path (Join-Path $script:BotsDir $Bot) 'bot.yaml'
         $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $PSScriptRoot 'botyaml.mjs'), $yaml) -TimeoutSec 30 -Label 'botyaml' -Capture -Bot $Bot -WorkingDirectory $script:BotCorp
-        if ($r.ExitCode -ne 0) { Write-DaemonLog "bot.yaml unreadable: $(($r.Output -split "`n" | Select-Object -First 1))" -Bot $Bot; return $null }
+        if ($r.ExitCode -ne 0) {
+            # A missing package is not a bad bot.yaml: node's first line is then a
+            # node:internal frame, so name the cause and the fix instead.
+            $why = ($r.Output -split "`n" | Select-Object -First 1)
+            $mnf = [regex]::Match("$($r.Output)", "Cannot find (?:package|module) '([^']+)'")
+            if ($mnf.Success -or "$($r.Output)" -match 'MODULE_NOT_FOUND') {
+                $pkg = if ($mnf.Success) { " '$($mnf.Groups[1].Value)'" } else { '' }
+                $why = "MODULE_NOT_FOUND$pkg - node_modules in $script:BotCorp is missing or incomplete (botcorp doctor: node_modules). Fix: npm ci in $script:BotCorp"
+            }
+            Write-DaemonLog "bot.yaml unreadable: $why" -Bot $Bot; return $null
+        }
         $cfg = $r.Output | ConvertFrom-Json
         if ($cfg._errors -and @($cfg._errors).Count -gt 0) { Write-DaemonLog "bot.yaml invalid: $(@($cfg._errors) -join '; ')" -Bot $Bot; return $null }
         return $cfg
