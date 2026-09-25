@@ -349,9 +349,17 @@ Write-State @{
     started_at = (Get-Date).ToString('o'); started_by = $StartedBy; updated_at = (Get-Date).ToString('o')
     poller = $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'NONE' }); status = 'starting'
     in_pty = [bool]$InPty; resume = $resume; service = $(if ($Bg) { 'bg' } else { 'fg' })
+    env_launcher_pid = $PID; session_env = $null   # not launcher_pid: the tick's hung-launcher tracking owns that key
 }
 if ($Bg -and -not $resumeId) { Write-State @{ session_id = $null; bg_id = $null } }
 Write-LaunchLog "launch shell_pid=$PID started_by=$StartedBy mode=$modeText channels=$canOwn"
+# What this launch puts in the session's env, last 4 only: the session's
+# BOT_LAUNCHER_PID points back here (Add-LaunchEnvRecord, Get-SessionEnvCheck).
+$oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { 'vault' } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
+$oauthVal = $(if ($oauthSrc -eq 'vault') { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
+[void](Add-LaunchEnvRecord -ConfigDir $ConfigDir -LauncherPid $PID -OauthLast4 ((Mask $oauthVal) -replace '^\*+') -OauthSource $oauthSrc `
+                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')))
+$launchT0 = (Get-Date).AddSeconds(-2)
 
 # Inherited from a parent Claude Code session these make the child run with
 # transcript saving OFF (CC 2.1.281 "inherited CLAUDE_CODE_CHILD_SESSION marker").
@@ -433,6 +441,20 @@ if ($Bg) {
             if ($tp.Up) { Write-LaunchLog "telegram: poller up (bot.pid $($tp.BotPid) under claude $cpid)" }
             else { Write-LaunchLog "telegram: poller NOT up after 30 s (bot.pid $(if ($tp.BotPid) { "$($tp.BotPid), not under claude $cpid" } else { 'absent' })) - the plugin log is under %LOCALAPPDATA%\claude-cli-nodejs\Cache\<bot home slug>\mcp-logs-plugin-telegram-telegram" }
             Write-State @{ poller = $(if ($tp.Up) { 'OWNED' } else { 'DEAD' }); updated_at = (Get-Date).ToString('o') }
+        }
+        # Which launch's env the session actually got (its SessionStart hook
+        # records BOT_LAUNCHER_PID): anything but OK means the config home's
+        # daemon predates this launch, so the vault tokens did not reach it.
+        if ($code -eq 0) {
+            $until = (Get-Date).AddSeconds(20)
+            while ($true) {
+                $se = Get-SessionEnvRecord -ConfigDir $ConfigDir -SessionId $sid -Since $launchT0
+                if ($se -or (Get-Date) -ge $until) { break }
+                Start-Sleep -Milliseconds 1000
+            }
+            $chk = Get-SessionEnvCheck -Record $se -LauncherPid $PID
+            Write-LaunchLog "env: $($chk.Verdict) - $($chk.Text)$(if ($chk.Verdict -eq 'OK') { " and oauth $(if ($oauthVal) { "$(Mask $oauthVal) ($oauthSrc)" } else { 'none (the config home''s own login)' })" } elseif ($chk.Verdict -ne 'UNKNOWN') { ". Fix: botcorp stop $Bot; botcorp start $Bot" })"
+            Write-State @{ session_env = $chk.Verdict; updated_at = (Get-Date).ToString('o') }
         }
     } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Write-State @{ status = 'exited'; exit_code = 1; updated_at = (Get-Date).ToString('o') } }
     finally {

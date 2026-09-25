@@ -116,6 +116,47 @@ export function pollerVerdict({ alive, telegram, recorded = null, botPid = 0, bo
   return underClaude ? 'OWNED' : 'DEAD';
 }
 
+// The session-env row (<config>/botcorp/session-env.json `sessions`) of the
+// bot's current session: of the rows written since the launch, the one of
+// sessionId, else the newest (a `--resume` that started a copy has an id the
+// launcher never saw). null when there is none.
+export function pickSessionEnvRecord(sessions, sessionId, sinceIso) {
+  const since = sinceIso ? Date.parse(sinceIso) - 2000 : -Infinity;
+  const rows = Object.values(sessions || {}).filter((r) => r && Date.parse(r.at) >= since).sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  return rows.find((r) => sessionId && r.session_id === sessionId) || rows[0] || null;
+}
+
+// Which env the running session actually got. Claude Code strips
+// CLAUDE_CODE_OAUTH_TOKEN from its hooks' env, so the session reports its
+// BOT_LAUNCHER_PID and Telegram token (hooks/session-env.sh) and every launch
+// records what it injected (<config>/botcorp/launch-env.json):
+// launch-env[session.launcher_pid] is the OAuth token the session runs on.
+//   rec     the session's session-env row (null: none yet)
+//   launch  the launch-env row of rec.launcher_pid (null: not listed)
+//   lastLauncherPid  the bot's latest launch (state env_launcher_pid)
+//   vault   { oauth, telegram } last 4 now ('' no entry; undefined not read)
+//   machineOauth  the machine-wide (HKCU) token's last 4, if read
+//   expectTg      the launch passed --channels (so it injected the token)
+// -> { level: PASS|WARN|FAIL|INFO, env: OK|MISMATCH|FOREIGN|UNKNOWN|null, oauth, detail }
+export function sessionEnvVerdict({ running, rec = null, launch = null, lastLauncherPid = null, vault = {}, machineOauth = '', expectTg = false }) {
+  if (!running) return { level: 'INFO', env: null, oauth: null, detail: 'bot not running' };
+  if (!rec) return { level: 'WARN', env: 'UNKNOWN', oauth: null, detail: 'no session-env record for this session (the session-env hook has not run, is disabled, or the harness predates v0.1.7)' };
+  const m = (v) => (v ? `****${v}` : 'none');
+  const tg = `telegram ${m(rec.telegram_last4)}`;
+  if (!rec.launcher_pid) return { level: 'FAIL', env: 'FOREIGN', oauth: null, detail: `the session's env is not from a BotCorp launch (no BOT_LAUNCHER_PID: the config home's daemon was started by another claude client), ${tg}; its OAuth account is not known${machineOauth ? `, likely the machine-wide ****${machineOauth}` : ''}` };
+  if (!launch) return { level: 'WARN', env: 'UNKNOWN', oauth: null, detail: `the session carries launch ${rec.launcher_pid}'s env, which launch-env.json does not list (a launcher older than v0.1.7), ${tg}` };
+  const oauth = launch.oauth_last4 || null;
+  const from = rec.launcher_pid === lastLauncherPid ? 'the latest launch' : `an earlier launch (pid ${rec.launcher_pid} at ${launch.at}, which started the daemon)`;
+  const bad = [];
+  if (launch.oauth_source === 'inherited') bad.push(`oauth ${m(oauth)} came from the environment (a machine-wide token is another bot's account), not the vault`);
+  else if (vault.oauth && oauth !== vault.oauth) bad.push(`oauth ${m(oauth)} is not the vault's ****${vault.oauth}`);
+  if (expectTg && !rec.telegram_last4) bad.push('no telegram token');
+  else if (expectTg && vault.telegram && rec.telegram_last4 !== vault.telegram) bad.push(`telegram ${m(rec.telegram_last4)} is not the vault's ****${vault.telegram}`);
+  const detail = `env of ${from}: oauth ${launch.oauth_source === 'none' ? "none (the config home's own login)" : `${m(oauth)} (${launch.oauth_source})`}, ${tg}`;
+  if (bad.length) return { level: 'FAIL', env: 'MISMATCH', oauth, detail: `${bad.join('; ')} - ${detail}` };
+  return { level: 'PASS', env: 'OK', oauth, detail };
+}
+
 // Same token shapes the cockpit scrubs (cockpit/cli.mjs): belt and braces on
 // top of the children's own masking.
 const TOKEN_SHAPES = [

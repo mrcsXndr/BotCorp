@@ -3,6 +3,16 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.5
+
+v0.2.4 plus the v0.1.7 release below: `botcorp status` / `doctor` show which
+env the running session got (OAuth last 4 + source, Telegram last 4, and
+whether it came from a BotCorp launch at all), and `botcorp stop` stops every
+session in the bot's config home. On this line an UNATTESTED launch injects no
+vault secrets, so its session shows `oauth ... (inherited)` or `none` and
+doctor's `session env` FAILs the inherited case. Upgrading: check out
+`v0.2.5`, then per bot `botcorp stop <bot>` and `botcorp start <bot>`.
+
 ## v0.2.4
 
 v0.2.3 plus the v0.1.6 release below: `botcorp start|restart <bot> --debug`
@@ -125,6 +135,29 @@ secrets: [oauth_token, telegram_token, aws_access_key_id, aws_secret_access_key,
 missing. `secrets.ps1 -Action get -IAmTheLauncher` is replaced by `-Nonce
 <launch nonce>`. Existing v1 vaults keep working unchanged until you run
 `botcorp secrets migrate <bot>`.
+
+## v0.1.7
+
+- **`status` / `doctor` show which env the running session got.** Claude Code
+  strips `CLAUDE_CODE_OAUTH_TOKEN` from its hooks, so a new `session-env`
+  SessionStart hook records the session's `BOT_LAUNCHER_PID` and Telegram
+  token (last 4) in `<config home>/botcorp/session-env.json`, and every launch
+  records what it injected (OAuth last 4 + source, Telegram last 4) in
+  `<config home>/botcorp/launch-env.json`; the launcher pid ties the two, so
+  the OAuth token a session runs on is known without it ever being read back.
+  `launch.ps1 -Bg` logs `env: OK | STALE | FOREIGN | UNKNOWN`, `status` prints
+  `env: OK  env of the latest launch: oauth ****xxxx (vault), telegram
+  ****yyyy`, and doctor's new `<bot>: session env` FAILs a session whose OAuth
+  came from the environment (a machine-wide token) or is not the vault's,
+  whose Telegram token is missing or wrong although it launched with
+  `--channels`, or whose env did not come from a BotCorp launch at all.
+- **`botcorp stop` stops every session in the bot's config home**, not only
+  those whose cwd is the bot folder: the roster is per config home, and any
+  live session there keeps the daemon (and its env) alive for the next start.
+
+Upgrade: check out `v0.1.7`, then per bot `botcorp stop <bot>` and `botcorp
+start <bot>` (the session-env hook runs from the next session on; until then
+doctor's `session env` is WARN `UNKNOWN`).
 
 ## v0.1.6
 
