@@ -1,7 +1,7 @@
 /* Cockpit theme: light by default, dark when the OS asks for it, or the
    viewer's own pick ('light' | 'dark' | 'auto'), remembered in localStorage,
    which may be unavailable. Loaded in <head> so the first paint is already in
-   the right theme. The tokens themselves live in index.html (see DESIGN.md). */
+   the right theme. The tokens themselves live in tokens.css (see DESIGN.md). */
 (function () {
   'use strict';
   var KEY = 'cockpit.theme';
