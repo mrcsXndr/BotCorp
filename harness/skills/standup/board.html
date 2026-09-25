@@ -1,0 +1,354 @@
+<title>Standup board</title>
+<meta name="description" content="Everything the bot has ongoing: owner, status, next step. Answer decisions in place; the bot reads them at its next /standup.">
+<style>
+/* Page template for the standup skill. Published as-is by every bot: identity
+   (bot, operator, brand name, accent, header colours, font) comes from the db
+   doc meta/board, the logo from the published file logo.png.
+   Publish with capabilities {db: {}, user: {}}. */
+:root{
+  color-scheme:light;
+  --ground:#F3F4F6; --surface:#FFFFFF; --ink:#1F2933; --muted:#5B6573; --faint:#8A93A0; --line:#E0E3E8;
+  --accent:#1F6F78; --accent-ink:#185A62; --accent-soft:#DDEFF0;
+  --p1:#C2362E; --p1-soft:#FBE3E1;
+  --warn:#A8620B; --warn-soft:#FBEBD2;
+  --ok:#17804F; --ok-soft:#DDF2E6;
+  --block:#4B5563; --block-soft:#E5E7EB;
+  --hdr-a:#1C2229; --hdr-b:#1C2229; --hdr-ink:#E8EAED; --hdr-muted:#A7AEB8;
+  --sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+  --mono:ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#101317; --surface:#181C22; --ink:#E4E7EB; --muted:#A3AAB5; --faint:#6F7885; --line:#29303A;
+    --accent:#5FB8C2; --accent-ink:#7CCAD3; --accent-soft:#16323A;
+    --p1:#F2837B; --p1-soft:#3A1D1C;
+    --warn:#E9B25C; --warn-soft:#352812;
+    --ok:#62CF96; --ok-soft:#14301F;
+    --block:#AEB6C2; --block-soft:#262C36;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#101317; --surface:#181C22; --ink:#E4E7EB; --muted:#A3AAB5; --faint:#6F7885; --line:#29303A;
+  --accent:#5FB8C2; --accent-ink:#7CCAD3; --accent-soft:#16323A;
+  --p1:#F2837B; --p1-soft:#3A1D1C;
+  --warn:#E9B25C; --warn-soft:#352812;
+  --ok:#62CF96; --ok-soft:#14301F;
+  --block:#AEB6C2; --block-soft:#262C36;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.45}
+h1,h2,h3{margin:0;text-wrap:balance;font-weight:600}
+p{margin:0}
+button,select,textarea{font:inherit;color:inherit}
+.mono{font-family:var(--mono);font-size:12px;font-variant-numeric:tabular-nums}
+
+/* brand bar */
+.bar{background:linear-gradient(135deg,var(--hdr-a),var(--hdr-b));color:var(--hdr-ink);border-bottom:1px solid rgba(255,255,255,.08)}
+.bar-in{max-width:1080px;margin:0 auto;padding-block:14px;padding-inline:20px;display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px}
+.bar img{height:30px;width:auto;display:block}
+.bar img[hidden]{display:none}
+.bar .name{font-size:17px;font-weight:600;letter-spacing:.01em}
+.bar img:not([hidden]) + .name{padding-left:16px;border-left:1px solid rgba(255,255,255,.18)}
+.bar .sync{margin-left:auto;color:var(--hdr-muted)}
+.bar .sync b{color:var(--hdr-ink);font-weight:500}
+
+.wrap{max-width:1080px;margin:0 auto;padding-block:22px 64px;padding-inline:20px;display:flex;flex-direction:column;gap:26px}
+
+/* summary lenses */
+.lenses{display:flex;flex-wrap:wrap;gap:8px}
+.lens{display:flex;align-items:baseline;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 14px;cursor:pointer;text-align:left}
+.lens b{font-size:24px;font-weight:600;font-variant-numeric:tabular-nums;line-height:1}
+.lens span{color:var(--muted);font-size:14px}
+.lens[aria-pressed="true"]{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+.lens.you b{color:var(--accent-ink)}
+.lens.block b{color:var(--block)}
+.lens.p1 b{color:var(--p1)}
+.lens:focus-visible,.chip:focus-visible,.seg button:focus-visible,select:focus-visible,textarea:focus-visible,.more:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid var(--line);background:transparent;border-radius:999px;padding:4px 12px;font-size:13.5px;color:var(--muted);cursor:pointer}
+.chip[aria-pressed="true"]{background:var(--ink);color:var(--ground);border-color:var(--ink)}
+
+section h2{font-size:18px;display:flex;align-items:baseline;gap:10px;margin-bottom:10px}
+section h2 .n{color:var(--faint);font-size:14px;font-weight:500}
+.hint{color:var(--muted);font-size:13.5px;margin:-4px 0 10px;max-width:70ch}
+
+/* rows */
+.list{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+.row{display:grid;grid-template-columns:44px 1fr auto;gap:4px 14px;padding:14px 16px;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.pri{font-family:var(--mono);font-size:11.5px;font-weight:500;padding:2px 0;border-radius:5px;text-align:center;align-self:start;margin-top:2px}
+.pri.P1{background:var(--p1-soft);color:var(--p1)}
+.pri.P2{background:var(--warn-soft);color:var(--warn)}
+.pri.P3{background:var(--ground);color:var(--muted)}
+.main{min-width:0;display:flex;flex-direction:column;gap:4px}
+.t{font-weight:600;font-size:15.5px}
+.meta{display:flex;flex-wrap:wrap;gap:4px 10px;color:var(--muted);font-size:13px;align-items:center}
+.own{font-weight:500;color:var(--ink)}
+.area{color:var(--faint)}
+.next{font-size:14px;max-width:80ch}
+.next::before{content:"Next: ";color:var(--faint)}
+.ctx{font-size:13.5px;color:var(--muted);max-width:80ch}
+.ctx a{color:var(--accent-ink)}
+.more{background:none;border:0;padding:0;color:var(--accent-ink);font-size:13px;cursor:pointer;align-self:flex-start}
+.side{display:flex;flex-direction:column;align-items:flex-end;gap:6px}
+select.st{border:1px solid var(--line);background:var(--surface);border-radius:7px;padding:4px 8px;font-size:13px}
+.stp{font-size:12px;font-weight:500;padding:2px 9px;border-radius:999px;white-space:nowrap}
+.stp.todo{background:var(--ground);color:var(--muted)}
+.stp.in-progress{background:var(--accent-soft);color:var(--accent-ink)}
+.stp.waiting-operator{background:var(--accent-soft);color:var(--accent-ink)}
+.stp.waiting-other{background:var(--warn-soft);color:var(--warn)}
+.stp.blocked{background:var(--block-soft);color:var(--block)}
+.stp.done{background:var(--ok-soft);color:var(--ok)}
+
+/* decision controls */
+.dec{grid-column:2 / -1;display:flex;flex-wrap:wrap;gap:8px 12px;align-items:flex-start;margin-top:6px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
+.seg button{border:0;background:var(--surface);padding:6px 14px;cursor:pointer;font-size:14px;border-left:1px solid var(--line)}
+.seg button:first-child{border-left:0}
+.seg button[aria-pressed="true"][data-a="yes"]{background:var(--ok-soft);color:var(--ok);font-weight:600}
+.seg button[aria-pressed="true"][data-a="no"]{background:var(--p1-soft);color:var(--p1);font-weight:600}
+.seg button[aria-pressed="true"][data-a="unsure"]{background:var(--warn-soft);color:var(--warn);font-weight:600}
+textarea.note{flex:1 1 260px;min-height:38px;resize:vertical;border:1px solid var(--line);border-radius:8px;background:var(--ground);padding:7px 10px;font-size:14px}
+.saved{font-size:12px;color:var(--ok);align-self:center}
+.row.answered{background:linear-gradient(90deg,var(--ok-soft),transparent 40%)}
+
+.empty{padding:18px 16px;color:var(--muted)}
+details.closed{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 16px}
+details.closed summary{cursor:pointer;font-weight:600}
+details.closed ul{margin:10px 0 0;padding-left:18px;color:var(--muted);font-size:14px;display:flex;flex-direction:column;gap:4px}
+.note-banner{border:1px solid var(--line);background:var(--surface);border-radius:12px;padding:12px 16px;color:var(--muted);font-size:14px}
+.foot{color:var(--faint);font-size:12.5px;max-width:80ch}
+
+@media (max-width:640px){
+  .row{grid-template-columns:40px 1fr}
+  .side{grid-column:2;flex-direction:row;align-items:center;justify-content:flex-start}
+  .bar .sync{margin-left:0;width:100%}
+}
+@media (prefers-reduced-motion: no-preference){
+  .lens,.chip,.seg button{transition:background-color .12s,border-color .12s,color .12s}
+}
+</style>
+
+<header class="bar">
+  <div class="bar-in">
+    <img src="logo.png" alt="" id="logo">
+    <span class="name">Standup</span>
+    <span class="sync mono" id="sync">loading board…</span>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="note-banner" id="nodb" hidden>This view can't load the live board. Open it on claude.ai while signed in to your organization.</div>
+
+  <div class="lenses" role="group" aria-label="Filter by who acts">
+    <button type="button" class="lens you" data-lens="you" aria-pressed="false"><b id="c-you">0</b><span>need you</span></button>
+    <button type="button" class="lens" data-lens="bot" aria-pressed="false"><b id="c-bot">0</b><span id="bot-lens">bot on it</span></button>
+    <button type="button" class="lens" data-lens="other" aria-pressed="false"><b id="c-other">0</b><span>waiting on others</span></button>
+    <button type="button" class="lens block" data-lens="blocked" aria-pressed="false"><b id="c-blocked">0</b><span>blocked</span></button>
+    <button type="button" class="lens p1" data-lens="p1" aria-pressed="false"><b id="c-p1">0</b><span>P1 open</span></button>
+  </div>
+
+  <div class="chips" id="areas" role="group" aria-label="Filter by area"></div>
+
+  <section id="s-dec">
+    <h2>Your call <span class="n" id="n-dec"></span></h2>
+    <p class="hint" id="dec-hint">Pick Yes, No or Don't know and add a note if it helps. Answers save as you go; the bot reads them at its next /standup, or straight away if you send /standup.</p>
+    <div class="list" id="l-dec"></div>
+  </section>
+
+  <section id="s-all">
+    <h2>Everything ongoing <span class="n" id="n-all"></span></h2>
+    <div class="list" id="l-all"></div>
+  </section>
+
+  <details class="closed" id="closed" hidden>
+    <summary>Closed recently <span class="n" id="n-closed"></span></summary>
+    <ul id="l-closed"></ul>
+  </details>
+
+  <p class="foot" id="foot">Kept by the bot from its TDL. Status changes you make here are read at the next /standup; notes stay with the item.</p>
+</main>
+
+<script>
+(function(){
+  var ORDER={P1:0,P2:1,P3:2};
+  var STATUSES=[["todo","To do"],["in-progress","In progress"],["waiting-operator","Needs you"],["waiting-other","Waiting on others"],["blocked","Blocked"],["done","Done"]];
+  var STLABEL={}; STATUSES.forEach(function(s){STLABEL[s[0]]=s[1];});
+  var items=[], meta=null, db=null, canWrite=true, lens=null, area=null, open={}, branded=false;
+  try{ lens=localStorage.getItem("standup-board-lens")||null; area=localStorage.getItem("standup-board-area")||null; }catch(e){}
+
+  var logo=document.getElementById("logo");
+  function noLogo(){logo.hidden=true;}
+  logo.addEventListener("error",noLogo);
+  if(logo.complete&&!logo.naturalWidth) noLogo();
+
+  function el(tag,cls,text){var e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=text; return e;}
+  function botName(){return (meta&&typeof meta.bot==="string"&&meta.bot.trim())||"";}
+  function has(o,name){return !!name && String(o||"").toLowerCase().indexOf(name.toLowerCase())>=0;}
+  function isBot(o){return has(o,botName()) || /^bot$/i.test(String(o||"").trim());}
+  function isOperator(o){var n=meta&&typeof meta.operator==="string"?meta.operator.trim():""; return has(o,n) || /^(operator|you)$/i.test(String(o||"").trim());}
+  function needsYou(it){return it.status!=="done" && (it.decision || it.status==="waiting-operator" || (isOperator(it.owner) && it.status!=="waiting-other"));}
+  function inLens(it){
+    if(!lens) return true;
+    if(lens==="you") return needsYou(it);
+    if(lens==="bot") return it.status!=="done" && isBot(it.owner) && it.status!=="blocked";
+    if(lens==="other") return it.status==="waiting-other";
+    if(lens==="blocked") return it.status==="blocked";
+    if(lens==="p1") return it.status!=="done" && it.priority==="P1";
+    return true;
+  }
+  function sortIt(a,b){return (ORDER[a.priority]??3)-(ORDER[b.priority]??3) || String(a.since||"").localeCompare(String(b.since||""));}
+
+  // Brand comes from db data, so every value is checked before it touches the page.
+  var COLOR=/^#[0-9a-fA-F]{3,8}$/, FONT=/^[A-Za-z0-9 ]{1,40}$/;
+  function applyBrand(){
+    if(branded||!meta) return;
+    branded=true;
+    var b=meta.brand||{}, rs=document.documentElement.style;
+    if(COLOR.test(b.accent||"")) rs.setProperty("--accent",b.accent);
+    if(COLOR.test(b.header_from||"")) rs.setProperty("--hdr-a",b.header_from);
+    if(COLOR.test(b.header_to||b.header_from||"")) rs.setProperty("--hdr-b",b.header_to||b.header_from);
+    if(FONT.test(b.font||"")){
+      var l=document.getElementById("brand-font")||document.head.appendChild(Object.assign(document.createElement("link"),{id:"brand-font",rel:"stylesheet"}));
+      l.href="https://fonts.googleapis.com/css2?family="+encodeURIComponent(b.font).replace(/%20/g,"+")+":wght@400;500;600;700&display=swap";
+      rs.setProperty("--sans",'"'+b.font+'",system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif');
+    }
+    if(typeof b.name==="string") logo.alt=b.name;
+    var bot=botName();
+    if(bot){
+      document.getElementById("bot-lens").textContent=bot+" on it";
+      document.getElementById("dec-hint").textContent="Pick Yes, No or Don't know and add a note if it helps. Answers save as you go; "+bot+" reads them at its next /standup, or straight away if you send /standup.";
+      document.getElementById("foot").textContent="Kept by "+bot+" from its TDL. Status changes you make here are read at the next /standup; notes stay with the item.";
+    }
+  }
+
+  async function write(id,patch){
+    if(!db||!canWrite) return false;
+    patch.updated_at=new Date().toISOString(); patch.updated_by="page";
+    try{ await db.doc("items/"+id).update(patch); return true; }
+    catch(e){ if(e&&e.code==="invalid_argument"){canWrite=false; render();} return false; }
+  }
+
+  function decisionRow(it,row){
+    var d=el("div","dec");
+    var seg=el("div","seg"); seg.setAttribute("role","group"); seg.setAttribute("aria-label","Answer");
+    [["yes","Yes"],["no","No"],["unsure","Don't know"]].forEach(function(a){
+      var b=el("button",null,a[1]); b.type="button"; b.dataset.a=a[0];
+      b.setAttribute("aria-pressed",String(it.answer===a[0])); b.disabled=!canWrite;
+      b.addEventListener("click",async function(){
+        var v=it.answer===a[0]?null:a[0];
+        await write(it.id,{answer:v,answered_at:v?new Date().toISOString():null});
+      });
+      seg.appendChild(b);
+    });
+    var ta=el("textarea","note"); ta.id="note-"+it.id; ta.placeholder="Note for "+(botName()||"the bot")+" (optional)"; ta.value=it.note||""; ta.disabled=!canWrite;
+    var saved=el("span","saved"); saved.hidden=true;
+    var t=null;
+    ta.addEventListener("input",function(){ clearTimeout(t); t=setTimeout(async function(){ if(ta.value!==(it.note||"")){ if(await write(it.id,{note:ta.value})){saved.textContent="Saved"; saved.hidden=false;} } },900); });
+    d.append(seg,ta,saved);
+    row.appendChild(d);
+    if(it.answer) row.classList.add("answered");
+  }
+
+  function makeRow(it,withDecision){
+    var row=el("div","row");
+    row.appendChild(el("span","pri "+(it.priority||"P3"),it.priority||"P3"));
+    var m=el("div","main");
+    m.appendChild(el("div","t",it.title));
+    var meta=el("div","meta");
+    meta.appendChild(el("span","own",it.owner||""));
+    meta.appendChild(el("span","area",it.area||""));
+    if(it.since) meta.appendChild(el("span","mono","since "+it.since));
+    if(it.verified) meta.appendChild(el("span","mono","checked "+it.verified));
+    m.appendChild(meta);
+    if(it.next) m.appendChild(el("p","next",it.next));
+    var ctx=el("div","ctx"); ctx.hidden=!open[it.id];
+    var link=/^https?:\/\//i.test(it.link||"")?it.link:null;
+    if(it.context) ctx.appendChild(el("p",null,it.context));
+    if(link){ var a=el("a",null,"Open link"); a.href=link; a.target="_blank"; a.rel="noopener"; var p=el("p"); p.appendChild(a); ctx.appendChild(p); }
+    if(it.context||link){
+      var mb=el("button","more",open[it.id]?"Less":"Details"); mb.type="button";
+      mb.addEventListener("click",function(){open[it.id]=!open[it.id]; ctx.hidden=!open[it.id]; mb.textContent=open[it.id]?"Less":"Details";});
+      m.append(ctx,mb);
+    }
+    row.appendChild(m);
+    var side=el("div","side");
+    if(canWrite && db){
+      var s=el("select","st"); s.id="st-"+it.id; s.setAttribute("aria-label","Status");
+      STATUSES.forEach(function(o){var op=el("option",null,o[1]); op.value=o[0]; if(o[0]===it.status)op.selected=true; s.appendChild(op);});
+      s.addEventListener("change",function(){ write(it.id,{status:s.value}); });
+      side.appendChild(s);
+    } else side.appendChild(el("span","stp "+it.status,STLABEL[it.status]||it.status));
+    row.appendChild(side);
+    if(withDecision) decisionRow(it,row);
+    return row;
+  }
+
+  var pending=false;
+  document.addEventListener("focusout",function(e){ if(pending&&e.target&&e.target.classList&&e.target.classList.contains("note")){ setTimeout(function(){ if(pending){pending=false; render();} },1000); } });
+  function render(){
+    var ae=document.activeElement;
+    if(ae&&ae.classList&&ae.classList.contains("note")){ pending=true; return; }
+    applyBrand();
+    var openItems=items.filter(function(i){return i.status!=="done";});
+    document.getElementById("c-you").textContent=openItems.filter(needsYou).length;
+    document.getElementById("c-bot").textContent=openItems.filter(function(i){return isBot(i.owner)&&i.status!=="blocked";}).length;
+    document.getElementById("c-other").textContent=openItems.filter(function(i){return i.status==="waiting-other";}).length;
+    document.getElementById("c-blocked").textContent=openItems.filter(function(i){return i.status==="blocked";}).length;
+    document.getElementById("c-p1").textContent=openItems.filter(function(i){return i.priority==="P1";}).length;
+    document.querySelectorAll(".lens").forEach(function(b){b.setAttribute("aria-pressed",String(b.dataset.lens===lens));});
+
+    var areas=[]; openItems.forEach(function(i){ if(i.area&&areas.indexOf(i.area)<0) areas.push(i.area); }); areas.sort();
+    var ac=document.getElementById("areas"); ac.textContent="";
+    [null].concat(areas).forEach(function(a){
+      var b=el("button","chip",a||"All areas"); b.type="button"; b.setAttribute("aria-pressed",String(a===area));
+      b.addEventListener("click",function(){area=a; try{localStorage.setItem("standup-board-area",a||"");}catch(e){} render();});
+      ac.appendChild(b);
+    });
+
+    var vis=openItems.filter(function(i){return inLens(i)&&(!area||i.area===area);}).sort(sortIt);
+    var dec=vis.filter(function(i){return i.decision;});
+    var rest=vis.filter(function(i){return !i.decision;});
+    var ld=document.getElementById("l-dec"), la=document.getElementById("l-all");
+    ld.textContent=""; la.textContent="";
+    dec.forEach(function(i){ld.appendChild(makeRow(i,true));});
+    rest.forEach(function(i){la.appendChild(makeRow(i,false));});
+    if(!dec.length) ld.appendChild(el("p","empty","Nothing waiting on a yes or no."));
+    if(!rest.length) la.appendChild(el("p","empty","Nothing matches this filter."));
+    var answered=dec.filter(function(i){return i.answer;}).length;
+    document.getElementById("n-dec").textContent=dec.length+(answered?" · "+answered+" answered":"");
+    document.getElementById("n-all").textContent=rest.length;
+
+    var closed=(meta&&Array.isArray(meta.closed)&&meta.closed)||[];
+    var cd=document.getElementById("closed"); cd.hidden=!closed.length;
+    document.getElementById("n-closed").textContent="("+closed.length+")";
+    var lc=document.getElementById("l-closed"); lc.textContent="";
+    closed.forEach(function(c){ lc.appendChild(el("li",null,(c.when?c.when+" · ":"")+c.title)); });
+
+    var sy=document.getElementById("sync");
+    sy.textContent="";
+    if(meta&&meta.synced_at){ sy.append("synced "); var b=el("b",null,String(meta.synced_at).replace("T"," ").slice(0,16)+" UTC"); sy.appendChild(b); }
+    else sy.textContent=db?"not synced yet":"offline";
+  }
+
+  document.querySelectorAll(".lens").forEach(function(b){
+    b.addEventListener("click",function(){ lens=(lens===b.dataset.lens)?null:b.dataset.lens; try{localStorage.setItem("standup-board-lens",lens||"");}catch(e){} render(); });
+  });
+
+  render();
+  (async function(){
+    var c=window.claude;
+    db=c&&c.use?await c.use("db"):null;
+    if(!db){ document.getElementById("nodb").hidden=false; render(); return; }
+    try{ var u=await c.use("user"); var w=u&&u.can?await u.can("data.write"):null; if(w===false) canWrite=false; }catch(e){}
+    db.collection("items").onSnapshot(function(snap){
+      items=snap.docs.map(function(d){var x=Object.assign({},d.data()); x.id=d.id; return x;});
+      render();
+    },function(){ document.getElementById("nodb").hidden=false; });
+    db.doc("meta/board").onSnapshot(function(s){ meta=s.exists?s.data():null; branded=false; render(); },function(){});
+  })();
+})();
+</script>
