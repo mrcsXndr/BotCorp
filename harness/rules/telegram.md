@@ -60,10 +60,27 @@ fix it and report once).
   fixed or carded, never pushed.
 
 ## Slash commands (auto-intercepted)
-Inbound TG messages starting with `/` are handled by `tools/v2/tg_commands.py`
-via the user-prompt-submit hook — they never reach the main thread. See
-`.claude/rules/memory-loop.md` for the tiered-agent picture. Add new commands
-in the HANDLERS dict.
+A prompt starting with `/` goes to `tools/v2/tg_commands.py` via the
+user-prompt-submit hook first. A name in its HANDLERS dict (`/status`,
+`/journal`, `/timeline`, `/compact`, `/board`, `/costs`, `/update`, `/help`,
+plus the bot's own `tools/tg_commands_local.py` HANDLERS) is answered there
+and never reaches the main thread; any other `/name` exits 1 and passes
+through to the main thread unchanged. The hook tests the prompt's first
+character, so a Telegram message, which arrives wrapped in its `<channel>`
+tag, is not intercepted today and reaches the main thread as is. See `.claude/rules/memory-loop.md` for
+the tiered-agent picture. Add new commands in the HANDLERS dict.
+
+## Slash commands that run a skill
+A TG message whose text is exactly `/<name>`, or starts with `/<name> `, runs
+the installed skill of that name: the bot's own `.claude/skills/<name>` first,
+else the harness skill `botcorp:<name>`. Whatever follows the name is the
+skill's argument. So `/standup` on Telegram does what `/standup` does in the
+console.
+- The HANDLERS names above are reserved: never run a skill for them, even if
+  one reaches you.
+- No installed skill of that name: it is an ordinary message; answer it as
+  one.
+- Ack on TG first as for any message; the skill's own steps say what goes back.
 
 ## Single-poller invariant
 The TG Bot API allows only ONE `getUpdates` long-poller per bot token. A second
