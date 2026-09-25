@@ -22,7 +22,55 @@ automations:
     command: "python tools/incidents.py tick --alert"
     timeout_min: 5
     critical: true
+  - name: morning-standup
+    kind: prompt                       # typed into the bot's live session instead of running a command
+    prompt: "/standup"
+    trigger: {cron: "37 8 * * 1-5"}
 ```
+
+`kind` is `command` (the default, so an entry without `kind` is a command) or
+`prompt`. A `prompt` entry needs `prompt:` and must not have `command:`; a
+`command` entry must not have `prompt:`. `bot.yaml` validation rejects both
+mixes.
+
+## Prompt automations (`kind: prompt`)
+
+A prompt automation puts one prompt into the bot's running Claude Code session
+on a schedule, as if the operator had typed it in the cockpit. It uses the
+cockpit chat's own path: `daemon/inject.mjs` dials the bot's pty-host (the
+endpoint in `<rt>/state/<bot>.pty.json`) and sends a bracketed paste plus
+Enter.
+
+- `session: pty`: the pty-host is the session.
+- `session: bg`: the pty-host is only the attach transport. When none is up,
+  the run starts one (`pty-host --attach`), types the prompt, and stops it
+  again. Stopping an attach host kills only the `claude attach` client; the
+  session keeps running.
+
+The run counts as **sent** when the prompt shows up as a user turn in the
+session transcript within 30 s. Otherwise it is **failed**.
+
+A due fire is **skipped**, with the reason recorded, when:
+
+1. the session is down: no live pty-host and no live claude pid (what
+   `botcorp status` reads);
+2. the bg session is blocked on a dialog (`session_blocked` in the bot state),
+   because typed text plus Enter could answer it;
+3. the session is busy (`Test-SessionBusy`, the same gate every restart
+   uses: the transcript was written in the last 5 min and no breakpoint is
+   declared);
+4. the account is usage-blocked and the entry is not `critical`;
+5. `max_per_day` has been reached.
+
+A skipped or failed fire is **dropped, never held**. It is not queued, not
+retried each tick, and gets no backoff. The next scheduled fire is the next
+chance, because a morning prompt typed at noon would land out of context. An
+`event:` trigger's queue file is consumed by the skip too. `idle_gated` makes
+no difference here: gate 3 always applies.
+
+The prompt is operator config and treated as trusted. It reaches `inject.mjs`
+in the environment (`BOT_PROMPT`), never on a command line. Logs show only its
+first 60 characters.
 
 ## Triggers
 
@@ -46,6 +94,9 @@ streak and the interval/cron schedule resumes from the end of that run.
    `critical` -> skipped.
 5. `max_per_day` reached (counter resets at local midnight) -> skipped.
 6. `idle_gated` and the session is busy -> skipped (retried next tick).
+
+A `kind: prompt` entry has its own gates (see above), and a prompt that is
+gated there is dropped until the next fire instead of being retried.
 
 `-RunNow <name>` (the cockpit's "Run now") ignores the schedule and
 `max_per_day`, and still respects `timeout_min`. `-DryRun` logs what would run.
@@ -87,12 +138,19 @@ what the cockpit and the hub show), else the last non-empty line, 200 chars.
 `exit` is the command's exit code, `124` on timeout, `127` when it could not be
 launched.
 
+A prompt automation's record also carries `result`: `sent`,
+`failed: <why>`, or `skipped: <reason>`. A skip writes a record with
+`exit: null` and `log: null`. The daily rollup and the hub leave skips out,
+because nothing ran. `botcorp status` and `botcorp automations <bot> list`
+show each entry's `last_result`. The cockpit's runs drawer shows the outcome
+in place of the exit code.
+
 Per-automation state lives in `<rt>/state/<bot>/automations.json`:
 `failure_streak`, `next_due`, `backoff_min`, `backoff_history` (last 10
 `{at, streak, gap_min, next_due}`), `runs_today` / `runs_today_date`,
 `last_ok`, `last_start`, `last_end`, `last_exit`, `last_run_id`,
 `last_summary`, `running_run_id` / `running_pid` while a run is in progress,
-`last_skip` (why it was last skipped). Health for the cockpit and `hub_push`
+`last_skip` (why it was last skipped), `last_result` (prompt automations). Health for the cockpit and `hub_push`
 (`name, last_ok_age_s, failure_streak, runs_today`) is read from here.
 
 Retention: per-automation logs are kept 14 days or 50 MB (oldest deleted

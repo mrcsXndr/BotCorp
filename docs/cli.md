@@ -508,12 +508,17 @@ and the running CC version (written by the statusline on every render), the
 pending approvals count, and a `vault: <mode> v<version>[ LOCKED - botcorp
 secrets unlock <bot>]` line (`{mode, version, locked, detail}` under
 `vault` in `--json`) — the same lock state the cockpit reads for its vault
-drawer.
+drawer. A bot with declared automations gets an `automations:` line: each
+name, `(prompt)` for a `kind: prompt` entry, and its last result (`sent` /
+`skipped: <reason>` / `failed: ...` for a prompt, `exit N` otherwise);
+`{name, kind, last_result, next_due}` under `automations` in `--json`.
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 
 `list` joins `bot.yaml` `automations[]` with the daemon's
-`<BOTCORP_HOME>/state/<bot>/automations.json` when present. `pause` /
+`<BOTCORP_HOME>/state/<bot>/automations.json` when present; each row carries
+its `kind`, and a `kind: prompt` row shows the prompt's first 60 characters
+and `last_result` (docs/automations.md). `pause` /
 `resume` = `config set automations.<name>.enabled false|true` (non-widening,
 applied at once; the next daemon tick honours it). `run` appends
 `{"automation": "<name>", "ts": "<iso>"}` to
