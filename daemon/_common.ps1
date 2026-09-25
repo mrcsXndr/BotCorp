@@ -16,11 +16,14 @@
 # Test seam: BOTCORP_FAKE_NOW=<ISO timestamp> overrides "now" for SCHEDULING
 # decisions only (Get-DaemonNow). Log stamps, process ages and file mtimes
 # stay real, so the seam cannot make a live process look dead.
+# Test seam: BOTCORP_BOTS_DIR=<dir> replaces <checkout>/bots for the daemon and
+# the launcher only (the CLI and the cockpit always read <checkout>/bots), so a
+# test's real tick sees its own bots and never the checkout's.
 
 Set-StrictMode -Off
 
 $script:BotCorp   = Split-Path $PSScriptRoot -Parent
-$script:BotsDir   = Join-Path $script:BotCorp 'bots'
+$script:BotsDir   = if ($env:BOTCORP_BOTS_DIR) { $env:BOTCORP_BOTS_DIR } else { Join-Path $script:BotCorp 'bots' }
 $script:Harness   = Join-Path $script:BotCorp 'harness'
 $script:RtHome    = if ($env:BOTCORP_HOME) { $env:BOTCORP_HOME } else { Join-Path $env:USERPROFILE '.botcorp' }
 $script:StateDir  = Join-Path $script:RtHome 'state'
