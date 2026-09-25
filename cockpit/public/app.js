@@ -28,6 +28,16 @@ let settings = { copyOnSelect: false };
 try { settings = { ...settings, ...JSON.parse(localStorage.getItem('cockpit.settings') || '{}') }; } catch {}
 function saveSettings() { try { localStorage.setItem('cockpit.settings', JSON.stringify(settings)); } catch {} }
 
+// Theme (theme.js applied it before first paint): auto -> light -> dark.
+const THEMES = ['auto', 'light', 'dark'];
+function renderThemeBtn() { el('themeBtn').textContent = 'theme: ' + (window.CockpitTheme ? window.CockpitTheme.get() : 'auto'); }
+el('themeBtn').onclick = () => {
+  if (!window.CockpitTheme) return;
+  window.CockpitTheme.set(THEMES[(THEMES.indexOf(window.CockpitTheme.get()) + 1) % THEMES.length]);
+  renderThemeBtn();
+};
+renderThemeBtn();
+
 async function api(method, url, body) {
   const res = await fetch(url, { method, headers: body ? { 'Content-Type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({}));
@@ -704,6 +714,6 @@ el('histClose').onclick = () => el('historyBg').classList.remove('show');
 el('historyBg').onclick = (e) => { if (e.target === el('historyBg')) el('historyBg').classList.remove('show'); };
 
 /* ---- boot ---- */
-api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via Access' : 'loopback only'].filter(Boolean).join(' · '); }).catch(() => {});
+api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via\xa0Access' : 'loopback\xa0only'].filter(Boolean).join('\xa0· '); }).catch(() => {});
 refresh();
 setInterval(refresh, 5000);
