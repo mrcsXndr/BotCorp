@@ -515,9 +515,10 @@ logins, `--no-tg-probe` the Telegram slot probe.
 
 - `claude --version` >= `botcorp.json.minClaudeCode`, node >= 20, python
   >= 3.11, pwsh >= 7, git present;
-- `node_modules`: FAIL when the checkout's `node_modules` is missing or empty,
-  or a `package.json` dependency does not resolve (fix: `npm ci` in the
-  checkout). The CLI checks this before loading anything that needs it, so
+- `node_modules`: FAIL when the checkout's `node_modules` is missing, empty,
+  or a junction whose target is gone, or a `package.json` dependency does not
+  resolve (fix: `npm ci` in the checkout, after `cmd /c rmdir` of a dangling
+  junction, which removes only the link). The CLI checks this before loading anything that needs it, so
   with a wiped `node_modules` every command answers with that fix and
   `doctor` prints this one check; the daemon's log then reads
   `bot.yaml unreadable: MODULE_NOT_FOUND '<package>'`;

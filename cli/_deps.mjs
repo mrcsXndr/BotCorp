@@ -15,16 +15,20 @@ export const CLI_DEPS = ['js-yaml'];
 // root = the checkout (the folder with package.json). Every `dependencies` entry
 // must resolve the way the runtime resolves it (require.resolve from the root).
 export function depsVerdict(root) {
-  const fix = `Fix: npm ci in ${root}`;
+  let fix = `Fix: npm ci in ${root}`;
   let deps;
   try { deps = Object.keys(JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf-8')).dependencies || {}); }
   catch (e) { return { level: 'FAIL', missing: [], detail: `cannot read ${path.join(root, 'package.json')} (${e.code || e.message})` }; }
   const nm = path.join(root, 'node_modules');
   let entries = null;
   try { entries = fs.readdirSync(nm).filter((n) => !n.startsWith('.')); } catch {}
+  // a junction/symlink whose target is gone: remove only the link, then install
+  let link = null;
+  if (entries === null) { try { if (fs.lstatSync(nm).isSymbolicLink()) link = fs.readlinkSync(nm); } catch {} }
+  if (link) fix = `Fix: cmd /c rmdir "${nm}" (removes only the link), then npm ci in ${root}`;
   const req = createRequire(path.join(root, 'package.json'));
   const missing = deps.filter((d) => { try { req.resolve(d); return false; } catch { return true; } });
-  const what = entries === null ? `${nm} is missing` : !entries.length ? `${nm} is empty` : missing.length ? `${nm} is incomplete` : null;
+  const what = link ? `${nm} is a link to ${link}, which is missing` : entries === null ? `${nm} is missing` : !entries.length ? `${nm} is empty` : missing.length ? `${nm} is incomplete` : null;
   if (!what) return { level: 'PASS', missing, detail: `${deps.length} runtime dependencies resolve from ${nm}` };
   const cant = missing.length ? ` (cannot resolve: ${missing.join(', ')})` : '';
   const effect = missing.some((d) => CLI_DEPS.includes(d)) ? '; bot.yaml cannot be parsed, so the daemon skips every bot' : '';
