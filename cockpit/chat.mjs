@@ -89,6 +89,44 @@ export function parseChannelText(text) {
   const body = [rest, ...blocks.map((b) => b.body)].filter(Boolean).join('\n\n');
   return { text: body, meta: { source: first.source, user: first.user, ts: first.ts, media: blocks.flatMap((b) => b.media) } };
 }
+// Background agents and commands report back as a synthetic user entry:
+//   <task-notification><task-id>..</task-id><output-file>..</output-file>
+//   <status>completed</status><summary>..</summary><result>..</result>
+//   <usage><total_tokens>N</total_tokens><tool_uses>N</tool_uses><duration_ms>N</duration_ms></usage>
+// A system event, not something anyone typed: one card per block, carrying only
+// summary, status, usage and result (never the output-file path or ids).
+const TASK_RE = /<task-notification>([\s\S]*?)<\/task-notification>/g;
+const RESULT_MAX = 20000;
+function tagText(block, name) {
+  const open = block.indexOf(`<${name}>`);
+  if (open < 0) return '';
+  const from = open + name.length + 2;
+  // the result is free text that may quote a closing tag: take the last one
+  const close = name === 'result' ? block.lastIndexOf(`</${name}>`) : block.indexOf(`</${name}>`, from);
+  return close < from ? '' : block.slice(from, close).trim();
+}
+export function parseTaskNotifications(text) {
+  const cards = [];
+  for (const m of String(text || '').matchAll(TASK_RE)) {
+    const block = m[1];
+    const usage = {};
+    // <usage> is child tags or `key: value` lines, depending on the Claude Code version
+    for (const u of tagText(block, 'usage').matchAll(/<(\w+)>\s*(\d+)\s*<\/\1>|^\s*(\w+)\s*:\s*(\d+)\s*$/gm)) usage[u[1] || u[3]] = Number(u[2] || u[4]);
+    let result = tagText(block, 'result');
+    if (result.length > RESULT_MAX) result = result.slice(0, RESULT_MAX) + '\n\n(truncated)';
+    const status = tagText(block, 'status').toLowerCase();
+    cards.push({
+      summary: tagText(block, 'summary').slice(0, 500) || 'Background task',
+      status: /^[a-z_-]{1,20}$/.test(status) ? status : 'unknown',
+      durationMs: usage.duration_ms ?? null,
+      tokens: usage.total_tokens ?? usage.subagent_tokens ?? null,
+      toolUses: usage.tool_uses ?? null,
+      result,
+    });
+  }
+  return cards.length ? cards : null;
+}
+
 function isMetaUserText(text) {
   const t = (text || '').trim();
   return !t || META_USER_PREFIXES.some((p) => t.startsWith(p));
@@ -116,6 +154,8 @@ function parseLine(line) {
     const text = textFromContent(content).trim();
     const channel = parseChannelText(text);
     if (channel) return { role: 'user', text: channel.text, ts: channel.meta.ts || ts, meta: channel.meta };
+    const tasks = text.startsWith('<task-notification>') ? parseTaskNotifications(text) : null;
+    if (tasks) return tasks.map((task) => ({ role: 'task', ts, task }));
     // isMeta = injected, not typed (skill bodies, image companions); channel
     // messages carry it too, which is why they are handled first.
     if (obj.isMeta || !text || isMetaUserText(text)) return null;
@@ -155,7 +195,8 @@ async function readTurns(file, after = 0) {
   const turns = [];
   for (const line of consumable.split('\n')) {
     const t = parseLine(line);
-    if (t) turns.push(t);
+    if (Array.isArray(t)) turns.push(...t);
+    else if (t) turns.push(t);
   }
   const out = (start === 0 && turns.length > INITIAL_TAIL) ? turns.slice(-INITIAL_TAIL) : turns;
   return { turns: out, cursor };

@@ -6,8 +6,10 @@ cockpit/tests/chat-render.test.mjs locks:
   rel="noopener noreferrer" target="_blank"; the same check FAILS on naive
   renderers, so it can fail;
 - Telegram <channel> messages render as user turns with a source/user/time
-  meta and media markers (never a path); task-notification, system-reminder
-  and isMeta wrappers do not render;
+  meta and media markers (never a path); a <task-notification> becomes a task
+  card (summary, status, usage, result; never the output-file path or ids)
+  whose result renders through md.js; system-reminder and isMeta wrappers do
+  not render;
 - the header chips (cockpit/chatstatus.mjs) read status.json, bot.yaml,
   session-env/launch-env and .claude.json, and say why when a value is missing;
 - statusline.js records the session's effort in status.json.
@@ -34,5 +36,5 @@ def test_cockpit_chat_render_suite():
     passed = re.search(r"^# pass (\d+)$", out, re.M)
     failed = re.search(r"^# fail (\d+)$", out, re.M)
     # zero collected is a suite error, not a pass
-    assert passed and int(passed.group(1)) >= 17, out
+    assert passed and int(passed.group(1)) >= 19, out
     assert failed and int(failed.group(1)) == 0, out

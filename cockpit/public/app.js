@@ -437,6 +437,51 @@ function bubble(turn) {
   return d;
 }
 
+function fmtDuration(ms) {
+  const s = Math.round(ms / 1000);
+  return s < 60 ? `${s}s` : s < 3600 ? `${Math.floor(s / 60)}m ${s % 60}s` : `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+}
+
+// A background agent/command reporting back (<task-notification>, parsed on the
+// server): a system event in the assistant lane, not a user turn. Every field
+// is untrusted: textContent, except the result, which goes through md.js.
+const TASK_STATES = ['completed', 'failed', 'running', 'killed', 'stopped'];
+function taskCard(turn) {
+  const t = turn.task || {};
+  const d = document.createElement('div');
+  d.className = 'bubble assistant task';
+  const head = document.createElement('div');
+  head.className = 'task-head';
+  const st = document.createElement('span');
+  st.className = 'task-st ' + (TASK_STATES.includes(t.status) ? t.status : 'other');
+  st.textContent = String(t.status || 'unknown');
+  const title = document.createElement('span');
+  title.className = 'task-title';
+  title.textContent = String(t.summary || 'Background task');
+  head.append(st, title);
+  d.appendChild(head);
+  const bits = [fmtWhen(turn.ts)];
+  if (Number.isFinite(t.durationMs)) bits.push(fmtDuration(t.durationMs));
+  if (Number.isFinite(t.tokens)) bits.push(`${fmtTok(t.tokens)} tokens`);
+  if (Number.isFinite(t.toolUses)) bits.push(`${t.toolUses} tool uses`);
+  const meta = document.createElement('div');
+  meta.className = 'task-meta';
+  meta.textContent = bits.filter(Boolean).join(' · ');
+  d.appendChild(meta);
+  if (t.result) {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = 'Result';
+    const body = document.createElement('div');
+    body.className = 'md';
+    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(String(t.result));
+    else body.textContent = String(t.result);
+    det.append(sum, body);
+    d.appendChild(det);
+  }
+  return d;
+}
+
 function onChatPush(msg) {
   const box = el('msgs');
   if (msg.available === false) { box.innerHTML = `<div class="cempty">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
@@ -448,7 +493,7 @@ function onChatPush(msg) {
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   for (const turn of msg.turns) {
     if (turn.role === 'user' && state.pendingUser && turn.text.trim() === state.pendingUser) { state.pendingUser = null; continue; }
-    box.appendChild(bubble(turn));
+    box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
   if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
 }

@@ -23,7 +23,7 @@ const ROOT = path.resolve(COCKPIT, '..');
 // Runtime dir for modules that read BOTCORP_HOME at import time: never ~/.botcorp.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-chat-test-'));
 process.env.BOTCORP_HOME = path.join(TMP, 'rt');
-const { parseChannelText, chatState } = await import('../chat.mjs');
+const { parseChannelText, parseTaskNotifications, chatState } = await import('../chat.mjs');
 const { summarizeStatus, chatStatus } = await import('../chatstatus.mjs');
 const { ccProjectSlug } = await import('../bots.mjs');
 
@@ -196,10 +196,41 @@ test('parseChannelText: body + meta, media as markers, never paths', () => {
   assert.equal(parseChannelText('no wrapper here'), null);
 });
 
-test('chatState: Telegram turn renders as a user turn; injected wrappers do not', async () => {
+// The shape Claude Code writes (a background agent finishing), path included.
+const TASK_AGENT = '<task-notification>\n<task-id>a4d687b213db068bb</task-id>\n<tool-use-id>toolu_01Tu</tool-use-id>\n<output-file>D:\\bot\\tmp\\tasks\\a4d687b213db068bb.output</output-file>\n<status>completed</status>\n<summary>Agent "cockpit audit" finished</summary>\n<note>A task-notification fires each time this agent stops.</note>\n<result>**Short answer:** it works.\n\n| a | b |\n|---|---|\n| 1 | 2 |</result>\n<usage><subagent_tokens>128115</subagent_tokens><tool_uses>55</tool_uses><duration_ms>294606</duration_ms></usage>\n</task-notification>';
+
+test('parseTaskNotifications: summary, status, usage, result; never the path or ids', () => {
+  const [c] = parseTaskNotifications(TASK_AGENT);
+  assert.deepEqual(c, { summary: 'Agent "cockpit audit" finished', status: 'completed', durationMs: 294606, tokens: 128115, toolUses: 55, result: '**Short answer:** it works.\n\n| a | b |\n|---|---|\n| 1 | 2 |' });
+  assert.doesNotMatch(JSON.stringify(c), /bot\\\\tmp|output|a4d687b2|toolu_|fires each time/);
+  // a background command: no result, no usage
+  const [cmd] = parseTaskNotifications('<task-notification>\n<task-id>b1</task-id>\n<status>failed</status>\n<summary>Background command "poll" failed (exit code 1)</summary>\n</task-notification>');
+  assert.deepEqual(cmd, { summary: 'Background command "poll" failed (exit code 1)', status: 'failed', durationMs: null, tokens: null, toolUses: null, result: '' });
+  // `key: value` usage (older Claude Code), two blocks in one entry
+  const two = parseTaskNotifications('<task-notification><status>completed</status><summary>one</summary><usage>total_tokens: 900\ntool_uses: 3\nduration_ms: 61000</usage></task-notification>\n<task-notification><status>running</status><summary>two</summary></task-notification>');
+  assert.deepEqual(two.map((x) => [x.summary, x.status, x.tokens, x.toolUses, x.durationMs]), [['one', 'completed', 900, 3, 61000], ['two', 'running', null, null, null]]);
+  // a status is a word or it is "unknown"; a result may quote the closing tag
+  const [odd] = parseTaskNotifications('<task-notification><status>done" onclick="x</status><result>the tag is </result> literally</result></task-notification>');
+  assert.equal(odd.status, 'unknown');
+  assert.equal(odd.summary, 'Background task');
+  assert.equal(odd.result, 'the tag is </result> literally');
+  assert.equal(parseTaskNotifications('no notification'), null);
+});
+
+test('task card result: renders through md.js and stays safe', () => {
+  for (const p of PAYLOADS) {
+    const [c] = parseTaskNotifications(`<task-notification><status>completed</status><summary>${p}</summary><result>${p}\n\n**ok** [x](javascript:alert(1))</result></task-notification>`);
+    assertSafe(renderMarkdown(c.result));
+    assert.equal(typeof c.summary, 'string');
+  }
+  const big = parseTaskNotifications(`<task-notification><result>${'x'.repeat(50000)}</result></task-notification>`)[0];
+  assert.ok(big.result.length < 20100 && big.result.endsWith('(truncated)'));
+});
+
+test('chatState: Telegram turn renders as a user turn; a task-notification as a card; injected wrappers not at all', async () => {
   const bot = transcriptBot([
     userLine('<channel source="plugin:telegram:telegram" chat_id="1" message_id="5" user="operator" user_id="1" ts="2026-09-25T14:34:00.000Z">**hi** from the phone</channel>', { isMeta: true }),
-    userLine('<task-notification>agent finished</task-notification>'),
+    userLine(TASK_AGENT, { origin: { kind: 'task-notification' } }),
     userLine('<system-reminder>be nice</system-reminder>'),
     userLine('skill body injected', { isMeta: true }),
     userLine([{ type: 'text', text: 'typed at the box' }]),
@@ -207,14 +238,16 @@ test('chatState: Telegram turn renders as a user turn; injected wrappers do not'
   ]);
   const st = await chatState(bot, 0);
   assert.equal(st.hasSession, true);
-  assert.deepEqual(st.turns.map((t) => [t.role, t.text]), [
+  assert.deepEqual(st.turns.map((t) => [t.role, t.text ?? t.task.summary]), [
     ['user', '**hi** from the phone'],
+    ['task', 'Agent "cockpit audit" finished'],
     ['user', 'typed at the box'],
     ['assistant', '## Done\n- one'],
   ]);
   assert.deepEqual(st.turns[0].meta, { source: 'Telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [] });
-  assert.doesNotMatch(JSON.stringify(st.turns), /<channel|chat_id|task-notification|system-reminder/);
-  assert.deepEqual(st.turns[2].tools, ['Bash']);
+  assert.equal(st.turns[1].ts, '2026-09-25T14:00:00.000Z');
+  assert.doesNotMatch(JSON.stringify(st.turns), /<channel|chat_id|task-notification|system-reminder|output-file/);
+  assert.deepEqual(st.turns[3].tools, ['Bash']);
 });
 
 // ---- status chips ----------------------------------------------------------------------
