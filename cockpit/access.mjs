@@ -10,9 +10,12 @@
 // request, so a stolen cookie is useless without that identity's JWT, and a
 // JWT for a different identity cannot ride an existing cookie.
 //
-// Config: <BOTCORP_HOME>/access.json  { team, aud, frame_ancestors? }
+// Config: <BOTCORP_HOME>/access.json  { team, aud, frame_ancestors?, allowed_emails? }
 //   team  -> https://<team>.cloudflareaccess.com (issuer + JWKS host)
 //   aud   -> the Access application's AUD tag
+//   allowed_emails -> when non-empty, a verified JWT whose email is not listed
+//            is refused too (defence in depth against a loose Access policy);
+//            empty or absent = any identity Access admits, as before
 // Test seam: COCKPIT_ACCESS_JWKS_FILE=<path> reads the JWKS from a file instead
 // of fetching it. Verification still runs in full; it only changes where the
 // public keys come from, so tests can sign with a throwaway RSA key.
@@ -31,7 +34,9 @@ export async function loadAccessConfig(file) {
   let fa = cfg.frame_ancestors;
   if (Array.isArray(fa)) fa = fa.join(' ');
   if (fa !== undefined && typeof fa !== 'string') throw new Error(`${file}: "frame_ancestors" must be a string or array`);
-  return { team: cfg.team, aud: cfg.aud, frameAncestors: (fa || '').trim() || "'none'" };
+  const ae = cfg.allowed_emails ?? [];
+  if (!Array.isArray(ae) || ae.some((e) => typeof e !== 'string' || !e.includes('@'))) throw new Error(`${file}: "allowed_emails" must be an array of email addresses`);
+  return { team: cfg.team, aud: cfg.aud, frameAncestors: (fa || '').trim() || "'none'", allowedEmails: ae.map((e) => e.trim().toLowerCase()) };
 }
 
 function b64url(s) { return Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64'); }
@@ -98,7 +103,9 @@ export class AccessVerifier {
     if (!Number.isFinite(payload.exp) || payload.exp <= now) throw new Error('expired');
     if (Number.isFinite(payload.nbf) && payload.nbf > now + 60) throw new Error('not yet valid');
     if (typeof payload.email !== 'string' || !payload.email) throw new Error('no email claim');
-    return { email: payload.email.toLowerCase() };
+    const email = payload.email.toLowerCase();
+    if (this.cfg.allowedEmails?.length && !this.cfg.allowedEmails.includes(email)) throw new Error('email not allowed');
+    return { email };
   }
 }
 

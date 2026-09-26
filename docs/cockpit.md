@@ -55,7 +55,8 @@ and WS upgrade. Threat model: another process or web page on the same box.
 `<BOTCORP_HOME>/access.json`:
 
 ```json
-{ "team": "<team slug>", "aud": "<application AUD tag>", "frame_ancestors": "https://hub.example.com" }
+{ "team": "<team slug>", "aud": "<application AUD tag>", "frame_ancestors": "https://hub.example.com",
+  "allowed_emails": ["ops@example.com"] }
 ```
 
 Then:
@@ -68,16 +69,21 @@ Then:
   `https://<team>.cloudflareaccess.com/cdn-cgi/access/certs` (JWKS cached 1 h,
   refetched once on an unknown `kid`), `iss` must equal
   `https://<team>.cloudflareaccess.com`, `aud` must contain the configured tag,
-  `exp` must be in the future, `email` must be present. Any failure is a 401
-  with no `Set-Cookie`.
+  `exp` must be in the future, `email` must be present and, when
+  `allowed_emails` is non-empty, listed there (case-insensitive; defence in
+  depth against a loose Access policy; empty or absent admits any identity
+  Access admits). Any failure is a 401 with no `Set-Cookie`.
 - The session cookie is minted only from a verified JWT and bound to its
   `email`: `sha256(email)[:32] . HMAC(secret, email)`. On every request the
   cookie is recomputed from the CURRENT JWT's email and compared in constant
   time, so a cookie for one identity is rejected under another identity's JWT.
   `Secure` is always set in this mode.
-- `Content-Security-Policy: frame-ancestors <frame_ancestors or 'none'>` on
-  every response (instead of `X-Frame-Options`), so a hub may embed the page
-  only when the config says so.
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; object-src
+  'none'; base-uri 'none'; connect-src 'self'; style-src 'self'
+  'unsafe-inline'; frame-ancestors <frame_ancestors or 'none'>` on every
+  response in both modes (instead of `X-Frame-Options`), so a hub may embed the
+  page only when the config says so, and no inline script runs: the pages load
+  every script from a file and carry no `on*` attributes.
 - `/healthz` is the only unauthenticated route and answers `{"ok":true}` only.
 - `GET /api/access/selftest` returns `{verified: true, email, access}` for the
   identity of the calling request. `tunnel-up` and `doctor` call it THROUGH the
@@ -87,6 +93,15 @@ There is no env var, flag or setting that disables Access on a non-loopback
 listener; `grep -rnE "ACCESS_DISABLE|allowInsecure|--no-access|INSECURE"
 cockpit daemon/pty-host.mjs` is 0 by construction and CI keeps it so. A
 LAN-only operator uses loopback plus SSH/RDP.
+
+Audit: every `POST`/`PUT`/`PATCH`/`DELETE` under `/api` from an identified
+caller (either mode) appends one line to
+`<BOTCORP_HOME>/state/cockpit-audit.jsonl`: `{ts, identity, method, path,
+bot, result}`, where `path` has no query string, `bot` is the `/api/bots/<name>`
+segment or `null`, and `result` is the HTTP status (`aborted` if the client
+hung up). Bodies are never recorded, so a vault value or a passphrase cannot
+reach it. A request refused before identification (a bad Host or Origin, no
+valid JWT) is not logged.
 
 Caps: `express.json` 8 MB (413 above), paste files 8 MB decoded and 10 per
 minute per session, WS input frames 1 MB (dropped with `{t:'err'}`, both in the

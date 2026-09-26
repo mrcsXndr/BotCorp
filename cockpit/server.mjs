@@ -17,8 +17,12 @@
 //     EVERY request must carry a verified Cf-Access-Jwt-Assertion (RS256 vs the
 //     team JWKS, iss, aud, exp). The cookie is minted only from a verified JWT
 //     and bound to its email; Secure + HttpOnly + SameSite=Strict.
+//     A non-empty access.json allowed_emails also refuses any other email.
 //   * A non-loopback bind without access.json refuses to start (exit 2).
 //   * /healthz is the only unauthenticated route and says {ok:true} only.
+//   * Strict CSP on every response (script-src 'self': no inline script).
+//   * Every mutating /api call from an identified caller appends one line to
+//     <BOTCORP_HOME>/state/cockpit-audit.jsonl (never a body or a secret).
 
 import http from 'node:http';
 import os from 'node:os';
@@ -59,7 +63,24 @@ if (!LOOPBACK_BIND && !accessCfg) {
 }
 const ACCESS = accessCfg ? new AccessVerifier(accessCfg) : null;
 const cookie = new SessionCookie({ secure: !!ACCESS });
-const CSP = `frame-ancestors ${accessCfg ? accessCfg.frameAncestors : "'none'"}`;
+const CSP = [
+  "default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'", "connect-src 'self'",
+  "style-src 'self' 'unsafe-inline'", `frame-ancestors ${accessCfg ? accessCfg.frameAncestors : "'none'"}`,
+].join('; ');
+
+// Append-only audit of mutating API calls: who, what, which bot, the outcome.
+const AUDIT_LOG = path.join(bots.BOTCORP_HOME, 'state', 'cockpit-audit.jsonl');
+const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+function auditOnClose(req, res) {
+  const p = req.path.slice(0, 200);
+  const bot = /^\/api\/bots\/([^/]+)/.exec(p)?.[1] || null;
+  res.on('close', () => {
+    const line = JSON.stringify({ ts: new Date().toISOString(), identity: req.identity, method: req.method, path: p, bot, result: res.writableFinished ? res.statusCode : 'aborted' });
+    fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true })
+      .then(() => fsp.appendFile(AUDIT_LOG, line + '\n'))
+      .catch((e) => console.error(`[cockpit] audit write failed: ${e.message}`));
+  });
+}
 
 // ---- gates ------------------------------------------------------------------
 // Loopback: exact Host allowlist (kills DNS rebinding) + exact Origin allowlist.
@@ -107,6 +128,7 @@ app.use(async (req, res, next) => {
   const identity = await identityOf(req);
   if (!identity) return res.status(401).json({ error: 'unauthorized (Access identity required)' });   // no Set-Cookie
   req.identity = identity;
+  if (MUTATING.has(req.method) && req.path.startsWith('/api')) auditOnClose(req, res);
   const hasCookie = cookie.check(req, identity);
   if (req.path.startsWith('/api')) {
     if (!hasCookie) return res.status(403).json({ error: 'forbidden (no session: load the cockpit first)' });
