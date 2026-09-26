@@ -528,10 +528,15 @@ name, `(prompt)` for a `kind: prompt` entry, and its last result (`sent` /
 What each bot's session is doing right now, measured from the processes and
 Claude Code's own files (`core/observe.mjs`), never read back from the state
 file. Read-only. One record per bot: `{bot, alive, activity, phase, poller,
-bg_id, blocked, at, kind, claude_pid, session_id, quiet_s}`. `activity` is
-`down`, `blocked`, `idle`, `working` or `unknown`; `phase` adds the launch
-and the operator's intent (`starting`, `stopped`, `down`); both are defined
-in docs/daemon.md "State file". `--all` = every bot under the bots dir;
+bg_id, blocked, awaiting_prompt, at, kind, claude_pid, session_id, quiet_s}`.
+`activity` is `down`, `blocked`, `idle`, `working` or `unknown`; `phase` adds
+the launch and the operator's intent (`starting`, `stopped`, `down`); both are
+defined in docs/daemon.md "State file". `awaiting_prompt` (bg) is true when
+the job record says the session waits for its next prompt: tempo `blocked` on
+"send a prompt to start", or a WARN block (its last turn ended asking
+something); never on a hard block. It leaves `activity` and `phase` alone, so
+the restart and update gates keep the quiet rule; the inbox delivers on it at
+once. `--all` = every bot under the bots dir;
 `--json` prints one object for a named bot, an array for `--all`. The text
 form is one line per bot: name, phase, `alive=`, `poller=`, `bg=`, and
 `blocked=` / `quiet=` when they apply.
@@ -546,7 +551,7 @@ Queues a message for the bot's session (`core/inbox.mjs`); the text is the
 words after `<bot>`, else stdin (the cockpit and automations always use
 stdin), at most 64 KB. One drainer per bot, detached, types each message in
 order (bracketed paste, then Enter), and only while `observe` says the phase
-is `idle`. A bg session is typed into through an attach host (`pty-host
+is `idle` or `awaiting_prompt` is true. A bg session is typed into through an attach host (`pty-host
 --attach`), started when none is up and shared with the cockpit terminal; it
 exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no
 client. A pty session goes through its own pty-host. Each message ends:

@@ -4,8 +4,8 @@
 // state/<bot>.json; every reader derives its phase from it (core/state.mjs).
 //
 // One record per bot: { bot, alive, activity, phase, poller, bg_id, blocked,
-// at, kind, claude_pid, session_id, quiet_s } (`phase`: core/state.mjs, from
-// this measurement and the state file). `activity` is one of ACTIVITIES:
+// awaiting_prompt, at, kind, claude_pid, session_id, quiet_s } (`phase`:
+// core/state.mjs, from this measurement and the state file). `activity` is one of ACTIVITIES:
 //   down     no live claude (bg) or pty-host process
 //   blocked  the session waits on something nothing unattended answers
 //            (bgBlockVerdict FAIL: a login, a usage limit, trust). A WARN (its
@@ -19,6 +19,10 @@
 //            treats it as busy
 // These are daemon/_common.ps1 Test-SessionBusy's semantics: working and
 // unknown are busy, idle is idle.
+// `awaiting_prompt` (bg only) is the job record saying the session waits for
+// its next prompt right now: tempo 'blocked' on "send a prompt to start", or a
+// bgBlockVerdict WARN; never a FAIL. The inbox delivers on it at once; it does
+// not touch activity, so the restart and update gates keep the quiet rule.
 //
 // Read-only. The roster (`claude agents --json`) is opt-in ({ roster: true },
 // `--roster`): the call writes the config home's .claude.json, and only a
@@ -128,11 +132,13 @@ export function observeBot(name, { roster = false, parents = processParents } = 
   const live = botLiveness({ pty, state: measured, telegram, botPid, parents });
   const alive = live.alive;
   let blocked = null;
+  let awaitingPrompt = false;
   if (alive && kind === 'bg') {
     const jobFile = bgJobFile(cfgDir, bgId);
     const job = jobFile ? readJson(jobFile) : null;
     const v = bgBlockVerdict({ running: true, bgId, job });
     if (v.level === 'FAIL' || v.level === 'WARN') blocked = { level: v.level, needs: String(job.needs).trim() };
+    awaitingPrompt = v.level === 'WARN' || (v.level === 'PASS' && job.tempo === 'blocked' && String(job.needs || '').includes('send a prompt to start'));
   }
   const now = Date.now();
   const quietMs = alive ? transcriptQuietMs(name, now) : null;
@@ -145,6 +151,7 @@ export function observeBot(name, { roster = false, parents = processParents } = 
     poller: live.poller,
     bg_id: kind === 'bg' && bgId ? bgId : null,
     blocked,
+    awaiting_prompt: awaitingPrompt,
     at: new Date(now).toISOString(),
     kind,
     claude_pid: live.claudeAlive ? claudePid : null,

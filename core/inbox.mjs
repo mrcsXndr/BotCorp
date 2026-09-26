@@ -1,7 +1,8 @@
 // inbox.mjs - one queue per bot: the one way text reaches a bot's session.
 // Producers (`botcorp send`, the cockpit composer, `kind: prompt` automations)
 // append; one drainer per bot types the items into the session in order, each
-// only while observe (core/observe.mjs) says the phase is idle.
+// only while observe (core/observe.mjs) says the phase is idle or the session
+// awaits its next prompt.
 //
 //   <BOTCORP_HOME>/state/<bot>/inbox.jsonl          {id, text, source, ttl_s, at}
 //   <BOTCORP_HOME>/state/<bot>/inbox.results.jsonl  {id, status, at, detail}
@@ -142,8 +143,9 @@ export async function drain(bot) {
           continue;
         }
         if (item.status === 'held') record(bot, item.id, 'queued', 'block cleared');
-        // down (the daemon restarts it), starting, working, unknown: wait for idle
-        if (o.phase !== 'idle') { await sleep(pollMs()); continue; }
+        // down (the daemon restarts it), starting, working, unknown: wait for
+        // idle, or for the job record to say it waits for its next prompt
+        if (o.phase !== 'idle' && !o.awaiting_prompt) { await sleep(pollMs()); continue; }
         const r = await deliver(bot, o.kind, item.text);
         record(bot, item.id, r.ok ? 'delivered' : 'failed', r.detail);
         if (r.ok) delivered++;

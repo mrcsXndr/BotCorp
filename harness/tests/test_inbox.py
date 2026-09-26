@@ -2,7 +2,8 @@
 
 Locked behaviour:
 - `botcorp send <bot> [text | stdin]` queues; one detached drainer per bot types
-  each item in order, and only while observe says the phase is `idle`;
+  each item in order, and only while observe says the phase is `idle` or the job
+  record says the session awaits its next prompt (`awaiting_prompt`);
 - a bg session gets an attach host (`pty-host --attach`) that the drainer starts
   and nobody stops: it exits on its own after BOTCORP_ATTACH_IDLE_MIN with no
   client, and the session keeps running; a pty session is typed into through its
@@ -241,6 +242,31 @@ def test_a_warn_block_does_not_hold(box, fake_claude_exe):
     r = _cli(box, "send", box["name"], "--wait", "use main")
     assert r.returncode == 0, r.stdout + r.stderr
     assert _typed(box) == ["use main"]
+
+
+# The job record's own shapes (test_bg_pin_boot_poller.py). The transcript was
+# written just now and there is no breakpoint: the quiet rule reads `working`,
+# and only `awaiting_prompt` lets the item go out before the ttl.
+@pytest.mark.parametrize("job, activity, awaiting", [
+    ({"state": "working", "tempo": "blocked", "needs": "send a prompt to start"}, "working", True),
+    ({"tempo": "blocked", "needs": "confirm tg_send.py executed with 'back online after reboot'"}, "working", True),   # WARN
+    ({"tempo": "active", "state": "working"}, "working", False),
+    (LOGIN_BLOCK, "blocked", False),                                                                                   # FAIL
+])
+def test_a_session_awaiting_its_next_prompt_takes_it_at_once(box, fake_claude_exe, job, activity, awaiting):
+    _bg_session(box, fake_claude_exe)
+    _job(box, job)
+    os.utime(box["transcript"], None)
+    o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)
+    assert (o["activity"], o["phase"], o["awaiting_prompt"]) == (activity, activity, awaiting), o
+    r = _cli(box, "send", box["name"], "--wait", "--json", "--ttl", "10s", "right away")
+    out = json.loads(r.stdout)
+    if awaiting:
+        assert r.returncode == 0 and out["status"] == "delivered", out
+        assert _typed(box) == ["right away"]
+    else:
+        assert r.returncode == 1 and out["status"] == "expired", out
+        assert _typed(box) == [] and _endpoint(box) is None
 
 
 def test_expires_while_the_session_is_working(box, fake_claude_exe):

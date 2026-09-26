@@ -88,7 +88,7 @@ back as a claim:
 |---|---|---|
 | `desired` | launch.ps1 (running), stop.ps1 and `botcorp stop` (stopped) | `{state: running\|stopped, by, at}`: what the operator or the daemon asked for |
 | `launch` | vault.ps1 (attestation), launch.ps1 / restart.ps1 / tick (`Set-BotLaunchPhase`) | the attestation plus `{phase, phase_at, exit_code}`; `phase` is `starting`, `cold-starting`, `restarting`, `up`, `exited` or `locked` (the vault is operator-locked, see below) |
-| `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, at, kind, claude_pid, session_id, quiet_s}` |
+| `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, awaiting_prompt, at, kind, claude_pid, session_id, quiet_s}` |
 
 `activity` is what the session does: `down` (no live claude or pty-host),
 `blocked` (it waits on something nothing unattended answers: a login, a
