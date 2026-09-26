@@ -12,4 +12,5 @@ harness:
   service: manual
   modules:
     telegram: false
+    auto_commit: false   # its folder sits inside the BotCorp checkout
 secrets: [oauth_token]

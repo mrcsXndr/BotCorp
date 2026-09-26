@@ -12,7 +12,8 @@ Locked behaviour (daemon/launch.ps1):
 - no vault oauth_token and no /login in the bot's own config home
   (.credentials.json) = exit 5, a launches.log line "refusing to launch",
   state launch.exit_code 5, and no claude is started;
-- with a config-home /login the launch proceeds, still without the inherited token.
+- with a config-home /login the launch proceeds, still without the inherited token;
+- an inherited TELEGRAM_BOT_TOKEN (another bot's) is removed the same way.
 
 Only fake values (`value-for-tests-...`) are used.
 """
@@ -31,6 +32,7 @@ import pytest
 ASSEMBLY = Path(__file__).resolve().parents[2]
 VAULT = ASSEMBLY / "daemon" / "vault.ps1"
 HKCU_TOKEN = "value-for-tests-hkcu-Z1k9"
+HKCU_TG = "value-for-tests-tg-Q7w2"
 
 pytestmark = pytest.mark.skipif(
     sys.platform != "win32" or shutil.which("pwsh") is None or shutil.which("node") is None,
@@ -52,7 +54,7 @@ def bot(tmp_path):
     for d in (profile, fake_bin):
         d.mkdir()
     seen = tmp_path / "seen.txt"
-    (fake_bin / "claude.cmd").write_text(f'@echo off\r\n>>"{seen}" echo [%CLAUDE_CODE_OAUTH_TOKEN%] %*\r\nexit /b 0\r\n', encoding="utf-8")
+    (fake_bin / "claude.cmd").write_text(f'@echo off\r\n>>"{seen}" echo [%CLAUDE_CODE_OAUTH_TOKEN%] %* tg[%TELEGRAM_BOT_TOKEN%]\r\nexit /b 0\r\n', encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
     env.update({"BOTCORP_HOME": str(rt), "USERPROFILE": str(profile), "PATH": f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
                 "CLAUDE_CODE_OAUTH_TOKEN": HKCU_TOKEN, "BOT_TG_MUTE": "1"})
@@ -108,3 +110,19 @@ def test_a_config_home_login_launches_without_the_inherited_token(bot):
     calls = seen.read_text(encoding="utf-8", errors="replace")
     launched = [ln for ln in calls.splitlines() if "--plugin-dir" in ln]
     assert launched and all(ln.startswith("[] ") for ln in launched), calls   # the claude ran, with no token at all
+
+
+def test_an_inherited_telegram_token_never_reaches_the_session(bot):
+    # a start run from another bot's session carries that bot's TELEGRAM_BOT_TOKEN;
+    # the only one a session may get is its own vault's (none here)
+    name, home, rt, env, seen = bot
+    cfg = home / f".claude-{name}"
+    cfg.mkdir()
+    (cfg / ".credentials.json").write_text("{}", encoding="utf-8")
+    r = _launch(name, {**env, "TELEGRAM_BOT_TOKEN": HKCU_TG}, "-StartedBy", "manual")
+    out = r.stdout + r.stderr
+    assert r.returncode == 0, out
+    calls = seen.read_text(encoding="utf-8", errors="replace")
+    launched = [ln for ln in calls.splitlines() if "--plugin-dir" in ln]
+    assert launched and all(ln.rstrip().endswith("tg[]") for ln in launched), calls
+    assert HKCU_TG not in calls and HKCU_TG not in out

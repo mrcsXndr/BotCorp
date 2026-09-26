@@ -82,6 +82,9 @@ Remove-Item Env:BOTCORP_LAUNCH_NONCE -ErrorAction SilentlyContinue
 # bot's own from the vault (step 7); without one the launch refuses (step 7b).
 $inheritedOauth = "$env:CLAUDE_CODE_OAUTH_TOKEN"
 Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue
+# Same for a Telegram token inherited from the caller (a start run from another
+# bot's session carries that bot's): the only one is the vault's (step 7).
+Remove-Item Env:TELEGRAM_BOT_TOKEN -ErrorAction SilentlyContinue
 
 $BotHome   = Join-Path $BotsDir $Bot
 $ConfigDir = Join-Path $BotHome ".claude-$Bot"
