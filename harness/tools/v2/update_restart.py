@@ -125,8 +125,12 @@ RESTART_SCRIPT = botcorp_root() / "daemon" / "restart.ps1"
 
 
 def _claude_exe() -> str:
-    """Resolve the claude binary path. CLAUDE_CODE_EXECPATH is set by the harness
-    in our environment; fall back to the known native-install location."""
+    """Resolve the claude binary path. BOTCORP_CLAUDE_EXE (the pinned copy a
+    BotCorp launch names), then CLAUDE_CODE_EXECPATH, set by the harness in our
+    environment; fall back to the known native-install location."""
+    pinned = os.environ.get("BOTCORP_CLAUDE_EXE")
+    if pinned and Path(pinned).is_file():
+        return pinned
     env_path = os.environ.get("CLAUDE_CODE_EXECPATH")
     if env_path and Path(env_path).exists():
         return env_path

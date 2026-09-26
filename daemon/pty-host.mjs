@@ -150,9 +150,15 @@ async function stop(bot) {
 }
 
 // ---- host -------------------------------------------------------------------
-// Same order as daemon/_common.ps1 Resolve-ClaudeExe: the native installer
-// first (a stale npm shim can shadow it), then PATH.
+// Same order as daemon/_common.ps1 Resolve-ClaudeExe: BOTCORP_CLAUDE_EXE, the
+// pin in <BOTCORP_HOME>/state/cc.json, the native installer (a stale npm shim
+// can shadow it), then PATH.
 function resolveClaude() {
+  const isFile = (p) => { try { return fs.statSync(p).isFile(); } catch { return false; } };
+  if (process.env.BOTCORP_CLAUDE_EXE && isFile(process.env.BOTCORP_CLAUDE_EXE)) return process.env.BOTCORP_CLAUDE_EXE;
+  let pin = null;
+  try { pin = JSON.parse(fs.readFileSync(path.join(STATE_DIR, 'cc.json'), 'utf-8'))?.pinned?.exe; } catch {}
+  if (pin && isFile(pin)) return pin;
   const native = path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude');
   if (fs.existsSync(native)) return native;
   const names = process.platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude'] : ['claude'];

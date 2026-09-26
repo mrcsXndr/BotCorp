@@ -538,9 +538,18 @@ export function runPwshCommand(command, opts = {}) {
   return run(resolvePwsh(), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', command], opts);
 }
 
-// Same order as daemon/_common.ps1 Resolve-ClaudeExe: the native installer first (a stale
-// npm shim can shadow it), then whatever `claude` is on PATH.
+// <BOTCORP_HOME>/state/cc.json: the Claude Code pin (daemon/cc.ps1 writes it). null when absent.
+export function readCcState() { return readJson(path.join(STATE_DIR, 'cc.json')); }
+
+function isFile(p) { try { return fs.statSync(p).isFile(); } catch { return false; } }
+
+// Same order as daemon/_common.ps1 Resolve-ClaudeExe: BOTCORP_CLAUDE_EXE (set in a
+// bot's env and by the gate for the canary), the pinned BotCorp-owned copy, the
+// native installer (a stale npm shim can shadow it), then whatever `claude` is on PATH.
 export function resolveClaude() {
+  if (process.env.BOTCORP_CLAUDE_EXE && isFile(process.env.BOTCORP_CLAUDE_EXE)) return process.env.BOTCORP_CLAUDE_EXE;
+  const pin = readCcState()?.pinned?.exe;
+  if (pin && isFile(pin)) return pin;
   const native = path.join(os.homedir(), '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude');
   if (fs.existsSync(native)) return native;
   const names = process.platform === 'win32' ? ['claude.exe', 'claude.cmd', 'claude'] : ['claude'];

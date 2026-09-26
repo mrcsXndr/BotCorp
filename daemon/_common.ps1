@@ -299,9 +299,35 @@ function Resolve-Node {
 }
 
 # --- Claude Code specifics (the only CLI; no driver seam) -----------------------------
+function Get-CcStatePath { return (Join-Path $script:StateDir 'cc.json') }
+
+function Read-CcState {
+    # <rt>/state/cc.json (docs/daemon.md "Claude Code pin"), $null when absent or unreadable.
+    return (Read-JsonFile -Path (Get-CcStatePath))
+}
+
+function Get-CcPin {
+    # The pinned exe path, '' when there is no pin record.
+    try { $j = Read-CcState; if ($j -and $j.pinned -and $j.pinned.exe) { return "$($j.pinned.exe)" } } catch {}
+    return ''
+}
+
 function Resolve-ClaudeExe {
-    # Native installer first: a stale npm shim in %APPDATA%\npm can shadow it and
-    # break; PATH `claude` is the fallback for npm-only installs.
+    # 1. BOTCORP_CLAUDE_EXE when that file exists: the gate sets it for the
+    #    canary, and a launch sets it in the bot's env so every subprocess of the
+    #    session uses the file its daemon runs.
+    # 2. The pin (<rt>/state/cc.json pinned.exe): a BotCorp-owned copy, so Claude
+    #    Code's supervisor, which watches the exe it was started from, never
+    #    follows a global update onto a bot (docs/cc-compat.md).
+    # 3. Native installer: a stale npm shim in %APPDATA%\npm can shadow it and
+    #    break. 4. PATH `claude`, the fallback for npm-only installs.
+    # A recorded pin whose exe is missing falls back to 3 (doctor FAILs it).
+    if ($env:BOTCORP_CLAUDE_EXE -and (Test-Path -LiteralPath $env:BOTCORP_CLAUDE_EXE -PathType Leaf)) { return $env:BOTCORP_CLAUDE_EXE }
+    $pin = Get-CcPin
+    if ($pin) {
+        if (Test-Path -LiteralPath $pin -PathType Leaf) { return $pin }
+        if (-not $script:CcPinMissingLogged) { $script:CcPinMissingLogged = $true; Write-DaemonLog "cc: pinned exe missing ($pin) - using the native install (botcorp doctor: cc pin)" -Quiet }
+    }
     $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
     if (Test-Path $native) { return $native }
     $onPath = (Get-Command claude -ErrorAction SilentlyContinue).Source
@@ -315,8 +341,11 @@ function Get-ClaudeEnv {
     # them when it prints and never puts them on a command line.
     # Env names: the two Claude Code / plugin names, else the key upper-cased
     # (hub_token -> HUB_TOKEN, the same rule automations.ps1 applies).
+    # DISABLE_AUTOUPDATER stops only the session's background download;
+    # DISABLE_UPDATES would also block `claude update` / `claude install` for
+    # every other Claude Code user of the box, so it is never set.
     param([string]$ConfigDir, [hashtable]$Secrets = @{})
-    $e = @{ CLAUDE_CONFIG_DIR = $ConfigDir }
+    $e = @{ CLAUDE_CONFIG_DIR = $ConfigDir; BOTCORP_CLAUDE_EXE = (Resolve-ClaudeExe); DISABLE_AUTOUPDATER = '1' }
     foreach ($k in $Secrets.Keys) { $e[(Get-SecretEnvName $k)] = $Secrets[$k] }
     return $e
 }
@@ -1316,6 +1345,7 @@ function Get-BotEnv {
         BOT_NAME          = $Bot
         BOTCORP_HOME      = $script:RtHome
         BOTCORP_ROOT      = $script:BotCorp
+        BOTCORP_CLAUDE_EXE = (Resolve-ClaudeExe)
         CLAUDE_CONFIG_DIR = $Paths.ConfigDir
         CLAUDE_PLUGIN_ROOT = $script:Harness
         PYTHONIOENCODING  = 'utf-8'

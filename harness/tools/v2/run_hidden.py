@@ -36,8 +36,13 @@ def main(argv: list[str]) -> int:
             return 0
         cmd = [prompt if a == "@PROMPT@" else a for a in args]
 
-        # Resolve the executable explicitly — hook PATH can be clobbered.
-        exe = shutil.which(cmd[0])
+        # Resolve the executable explicitly — hook PATH can be clobbered. A bot's
+        # claude is the pinned one its launch named (BOTCORP_CLAUDE_EXE).
+        pinned = os.environ.get("BOTCORP_CLAUDE_EXE", "")
+        if cmd[0] in ("claude", "claude.exe") and pinned and os.path.isfile(pinned):
+            exe = pinned
+        else:
+            exe = shutil.which(cmd[0])
         if not exe and cmd[0] in ("claude", "claude.exe"):
             fallback = os.path.join(os.environ.get("USERPROFILE", ""), ".local", "bin", "claude.exe")
             exe = fallback if os.path.isfile(fallback) else None

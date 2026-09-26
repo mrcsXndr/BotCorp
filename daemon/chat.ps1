@@ -45,6 +45,13 @@ $workDir = if ($Generic) { $accHome } else { [System.IO.Path]::GetFullPath($Cwd)
 if (-not (Test-Path $workDir -PathType Container)) { Write-Error "chat: workspace folder not found: $workDir"; exit 1 }
 
 function Resolve-ClaudeExe {
+    # Kept in sync with _common.ps1's Resolve-ClaudeExe: BOTCORP_CLAUDE_EXE,
+    # the pin in <rt>/state/cc.json, the native install, PATH.
+    if ($env:BOTCORP_CLAUDE_EXE -and (Test-Path -LiteralPath $env:BOTCORP_CLAUDE_EXE -PathType Leaf)) { return $env:BOTCORP_CLAUDE_EXE }
+    try {
+        $cc = Get-Content (Join-Path $stateDir 'cc.json') -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($cc.pinned.exe -and (Test-Path -LiteralPath "$($cc.pinned.exe)" -PathType Leaf)) { return "$($cc.pinned.exe)" }
+    } catch {}
     $native = Join-Path $env:USERPROFILE '.local\bin\claude.exe'
     if (Test-Path $native) { return $native }
     $onPath = (Get-Command claude -ErrorAction SilentlyContinue).Source

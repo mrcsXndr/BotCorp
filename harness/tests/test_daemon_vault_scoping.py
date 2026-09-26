@@ -59,7 +59,8 @@ $envKeys = @($e.Keys | Sort-Object)
     assert payload["names"] == [
         "CLAUDE_CODE_OAUTH_TOKEN", "TELEGRAM_BOT_TOKEN", "HUB_TOKEN", "AWS_SECRET_ACCESS_KEY",
     ]
-    assert sorted(payload["envKeys"]) == ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "HUB_TOKEN"]
+    # + the pinned Claude Code exe and the autoupdater off (R3, test_cc_pin.py)
+    assert sorted(payload["envKeys"]) == ["BOTCORP_CLAUDE_EXE", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "HUB_TOKEN"]
 
 
 def test_vault_list_never_decrypts_and_audit_log_records_exactly_one_line(tmp_path):

@@ -56,7 +56,8 @@ $e = Get-ClaudeEnv -ConfigDir 'x' -Secrets @{{oauth_token='v1'; hub_token='v2'}}
     assert r.returncode == 0, r.stderr
     got = json.loads(r.stdout.strip().splitlines()[-1])
     assert got["names"] == ["CLAUDE_CODE_OAUTH_TOKEN", "TELEGRAM_BOT_TOKEN", "HUB_TOKEN", "AWS_SECRET_ACCESS_KEY"]
-    assert got["keys"] == ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "HUB_TOKEN"]
+    # + the pinned Claude Code exe and the autoupdater off (R3, test_cc_pin.py)
+    assert got["keys"] == ["BOTCORP_CLAUDE_EXE", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CONFIG_DIR", "DISABLE_AUTOUPDATER", "HUB_TOKEN"]
 
 
 def test_bot_yaml_secrets_default_shape_and_automation_subset(tmp_path):

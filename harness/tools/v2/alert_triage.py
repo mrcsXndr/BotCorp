@@ -414,8 +414,12 @@ def scan(now: datetime | None = None, dry_run: bool = False, verbose: bool = Fal
 # ---------------------------------------------------------------- spawn + run
 
 def _claude_exe() -> str:
-    """Native install first: a stale npm shim on PATH can shadow it (mirrors
+    """BOTCORP_CLAUDE_EXE (the bot's pinned Claude Code), then the native
+    install: a stale npm shim on PATH can shadow it (mirrors
     daemon/_common.ps1 Resolve-ClaudeExe)."""
+    pinned = os.environ.get("BOTCORP_CLAUDE_EXE")
+    if pinned and os.path.isfile(pinned):
+        return pinned
     name = "claude.exe" if os.name == "nt" else "claude"
     native = os.path.join(os.environ.get("USERPROFILE", ""), ".local", "bin", name)
     if os.path.isfile(native):
