@@ -24,6 +24,8 @@ export const BOTCORP_HOME = process.env.BOTCORP_HOME || path.join(os.homedir(), 
 export const STATE_DIR = path.join(BOTCORP_HOME, 'state');
 
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+// NAME_RE or a shipped '_' fixture (bots/_canary): addressed by name, never listed.
+const HAND_NAME_RE = /^_?[a-z0-9][a-z0-9-]{0,31}$/;
 
 export function botHome(name) { return path.join(BOTS_DIR, name); }
 export function configDir(name) { return path.join(BOTS_DIR, name, `.claude-${name}`); }
@@ -96,7 +98,7 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
 }
 
 export async function getBot(name) {
-  if (!NAME_RE.test(name || '')) return null;
+  if (!HAND_NAME_RE.test(name || '')) return null;
   const home = botHome(name);
   let raw;
   try { raw = await fsp.readFile(path.join(home, 'bot.yaml'), 'utf-8'); } catch { return null; }

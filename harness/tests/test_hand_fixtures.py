@@ -6,7 +6,8 @@ Locked behaviour:
 - `sync _canary` passes: its bot.yaml `name:` is the folder name;
 - every other verb keeps NAME_RE (`status _canary` is a usage error), and a name
   that is only underscores or has two is still refused;
-- `status` / `observe --all` never list a '_' folder;
+- `status` / `observe --all` never list a '_' folder, nor does the cockpit's
+  /api/bots; the cockpit's bot, send and inbox routes take it by name;
 - pty-host accepts the name (an attach host can serve the canary);
 - a -ProbeOnly tick logs the real bot next to it and never the fixture, even with
   a state file that says it runs.
@@ -103,6 +104,57 @@ def test_pty_host_takes_the_fixture_name(box):
     r = subprocess.run(["node", str(ASSEMBLY / "daemon" / "pty-host.mjs"), "--stop", "_canary"],
                        capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY), env=env)
     assert r.returncode == 0 and "not running" in r.stdout, r.stderr + r.stdout
+
+
+def test_the_cockpit_addresses_the_fixture_by_name_only(box):
+    # never listed, but its page, send and inbox routes take the name
+    import socket
+    import time
+    import urllib.error
+    import urllib.request
+    rt, _, env = box
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = subprocess.Popen(["node", str(ASSEMBLY / "cockpit" / "server.mjs"), "--port", str(port)], cwd=str(ASSEMBLY), env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 60
+        while True:
+            try:
+                urllib.request.urlopen(base + "/healthz", timeout=5).read()
+                break
+            except OSError:
+                assert time.time() < deadline and srv.poll() is None, "cockpit did not come up"
+                time.sleep(0.5)
+        cookie = urllib.request.urlopen(base + "/", timeout=30).headers["Set-Cookie"].split(";")[0]
+
+        def call(method, path, body=None):
+            req = urllib.request.Request(base + path, method=method, headers={"Cookie": cookie, "Content-Type": "application/json"},
+                                         data=json.dumps(body).encode() if body is not None else None)
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                return e.code, json.loads(e.read())
+
+        assert [b["name"] for b in call("GET", "/api/bots")[1]] == ["zz-real"]
+        code, bot = call("GET", "/api/bots/_canary")
+        assert code == 200 and bot["name"] == "_canary" and bot["running"] is False, bot
+        # stopped (no state file): queued, then failed at once, never typed
+        code, item = call("POST", "/api/bots/_canary/send", {"text": "canary ping"})
+        assert code == 200 and item["status"] == "queued", item
+        end = time.time() + 60
+        while (rows := call("GET", "/api/bots/_canary/inbox")[1])[-1]["status"] != "failed":
+            assert time.time() < end, rows
+            time.sleep(0.3)
+        assert rows[-1]["id"] == item["id"] and "session stopped" in rows[-1]["detail"], rows
+        for bad in ("_", "__canary", "_Canary"):
+            assert call("GET", f"/api/bots/{bad}")[0] == 404, bad
+        assert call("POST", "/api/bots/__canary/send", {"text": "hi"})[0] == 404
+    finally:
+        srv.kill()
 
 
 def test_a_probe_tick_never_touches_the_fixture(box):

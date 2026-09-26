@@ -303,7 +303,7 @@ server.on('upgrade', async (req, socket, head) => {
   const identity = await identityOf(req);
   if (!identity) return reject(401, 'Unauthorized');
   if (!cookie.check(req, identity)) return reject(403, 'Forbidden');
-  const m = /^\/term\/([a-z0-9-]{1,32})(?:\?.*)?$/.exec(req.url || '');
+  const m = /^\/term\/(_?[a-z0-9-]{1,32})(?:\?.*)?$/.exec(req.url || '');
   if (!m) return reject(404, 'Not Found');
   const bot = await bots.getBot(m[1]).catch(() => null);
   if (!bot) return reject(404, 'Not Found');

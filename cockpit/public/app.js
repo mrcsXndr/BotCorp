@@ -62,11 +62,18 @@ async function refresh() {
     if (!lastSnapshot) el('list').innerHTML = `<p class="errbox">Could not load the bots: ${esc(e.message)}. Retrying.</p>`;
     return;
   }
+  // a '_' fixture (bots/_canary) is never listed: the page opens it by name (#_canary)
+  const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
+  const fixture = hash.startsWith('_');
+  if (fixture) {
+    const b = await api('GET', `/api/bots/${encodeURIComponent(hash)}`).catch(() => null);
+    if (b) state.bots.push(b);
+  }
   const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.phase, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
-    const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
-    const pick = state.bots.find((b) => b.name === hash) || (state.bots.length === 1 ? state.bots[0] : null);
+    // a fixture that did not load never falls back to the only real bot
+    const pick = state.bots.find((b) => b.name === hash) || (state.bots.length === 1 && !fixture ? state.bots[0] : null);
     if (pick) select(pick.name);
   }
 }
