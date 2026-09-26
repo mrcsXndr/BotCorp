@@ -42,6 +42,7 @@ import os
 import re
 import sqlite3
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -75,6 +76,12 @@ CODE_SPAN_RE = re.compile(r"```.*?```|`+[^`\n]*`+", re.S)
 # files); an uncapped 1-hop expansion on a hub node would flood the Director's
 # context with the very re-reading recall exists to avoid.
 MEMORY_NEIGHBOUR_CAP = 6
+# A file whose mtime is this close to the moment it was read can be rewritten
+# again inside the same filesystem timestamp tick (NTFS ~16 ms, FAT 2 s) and
+# keep the SAME mtime; the mtime gate would then skip that edit forever. Such
+# a file is recorded as unseen so the next index re-reads it (git's "racy
+# clean" rule). Only just-written files pay the extra read.
+RACY_MTIME_SECONDS = 2.0
 
 
 def _sanitize_snippet(text: str) -> str:
@@ -502,6 +509,7 @@ def cmd_index(force: bool = False) -> int:
 
     for path, ftype in targets:
         try:
+            now = time.time()   # before the stat: an earlier "now" can only flag more files racy
             mtime = path.stat().st_mtime
             if not force and known.get(str(path)) == mtime:
                 skipped += 1
@@ -520,7 +528,7 @@ def cmd_index(force: bool = False) -> int:
             con.execute(
                 "INSERT INTO files(source_path, mtime) VALUES(?,?) "
                 "ON CONFLICT(source_path) DO UPDATE SET mtime=excluded.mtime",
-                (str(path), mtime),
+                (str(path), mtime if now - mtime > RACY_MTIME_SECONDS else -1.0),
             )
             con.commit()
             indexed_files += 1

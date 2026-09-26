@@ -8,6 +8,8 @@ ran at all.
 """
 from __future__ import annotations
 
+import json
+import os
 import sqlite3
 
 import pytest
@@ -184,14 +186,27 @@ def test_search_finds_fixture_memories_by_body_text(graph):
 
 def test_renaming_the_name_field_replaces_the_node_with_no_ghost(graph):
     recall.cmd_index()
-    (graph["mem_dir"] / "leaf-b.md").write_text(
-        mem("leaf-b-renamed", "leaf b fact", "No links."), encoding="utf-8"
-    )
+    leaf_b = graph["mem_dir"] / "leaf-b.md"
+    before = leaf_b.stat().st_mtime_ns
+    leaf_b.write_text(mem("leaf-b-renamed", "leaf b fact", "No links."), encoding="utf-8")
+    # the rewrite lands in the same timestamp tick as the first write (what a
+    # fast rewrite does on a coarse filesystem clock, forced here every run)
+    os.utime(leaf_b, ns=(before, before))
     recall.cmd_index()
     con = recall._connect()
     names = {r[0] for r in con.execute("SELECT name FROM memory_files")}
     assert "leaf-b" not in names
     assert "leaf-b-renamed" in names
+
+
+def test_a_file_untouched_since_long_before_the_index_is_still_skipped(graph, capsys):
+    # the racy-mtime re-read must not turn the mtime gate off for settled files
+    for p in graph["mem_dir"].glob("*.md"):
+        os.utime(p, (1_000_000_000, 1_000_000_000))
+    recall.cmd_index()
+    recall.cmd_index()
+    last = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert last["files_indexed"] == 0 and last["files_skipped_unchanged"] == 3, last
 
 
 def test_deleting_a_memory_prunes_entries_node_edges_and_fts(graph):
