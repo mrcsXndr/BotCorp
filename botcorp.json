@@ -1,6 +1,6 @@
 {
   "name": "botcorp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "channelDefault": "stable",
   "botYamlSchema": 1,
   "minClaudeCode": "2.1.280",
