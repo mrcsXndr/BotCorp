@@ -430,3 +430,33 @@ def test_rollback_moves_pin_and_rejects(tmp_path):
     (rt / "cc" / "2.1.283" / "claude.exe").unlink()
     assert _cc(b, "-Rollback").returncode == 1
     assert _state(b) == start
+
+
+# --- observe ----------------------------------------------------------------------------------
+@needs_pwsh
+def test_observe_reads_cc_version_from_roster_file(tmp_path):
+    """cc_version: the worker's roster FILE row; cc_exe: the exe the daemon.lock pid runs (here: this python)."""
+    rt, bots = tmp_path / "rt", tmp_path / "bots"
+    (rt / "state").mkdir(parents=True)
+    home = bots / "alpha"
+    cfg = home / ".claude-alpha"
+    (cfg / "daemon").mkdir(parents=True)
+    (home / "bot.yaml").write_text("name: alpha\nharness:\n  service: manual\n  modules:\n    telegram: false\n", encoding="utf-8")
+    (rt / "state" / "alpha.json").write_text(json.dumps({"claude_pid": os.getpid(), "bg_id": "abcd1234"}), encoding="utf-8")
+    (cfg / "daemon" / "roster.json").write_text(json.dumps({"proto": 1, "workers": {"abcd1234": {"pid": os.getpid(), "cliVersion": "2.1.283"}}}), encoding="utf-8")
+    (cfg / "daemon.lock").write_text(json.dumps({"pid": os.getpid()}), encoding="utf-8")
+    env = {**os.environ, "BOTCORP_HOME": str(rt), "BOTCORP_BOTS_DIR": str(bots), "BOT_TG_MUTE": "1"}
+    r = subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "observe", "alpha", "--json"],
+                       capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    rec = json.loads(r.stdout)
+    rec = rec[0] if isinstance(rec, list) else rec
+    assert rec["alive"] is True and rec["cc_version"] == "2.1.283"
+    assert _same(rec["cc_exe"], Path(sys.executable).resolve()) or _same(rec["cc_exe"], Path(sys.executable))
+
+    (cfg / "daemon.lock").unlink()
+    (cfg / "daemon" / "roster.json").write_text(json.dumps({"proto": 1, "workers": {}}), encoding="utf-8")
+    rec = json.loads(subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "observe", "alpha", "--json"],
+                                    capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env).stdout)
+    rec = rec[0] if isinstance(rec, list) else rec
+    assert rec["cc_version"] is None and rec["cc_exe"] is None

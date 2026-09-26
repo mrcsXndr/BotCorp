@@ -4,8 +4,13 @@
 // state/<bot>.json; every reader derives its phase from it (core/state.mjs).
 //
 // One record per bot: { bot, alive, activity, phase, poller, bg_id, blocked,
-// awaiting_prompt, at, kind, claude_pid, session_id, quiet_s } (`phase`:
-// core/state.mjs, from this measurement and the state file). `activity` is one of ACTIVITIES:
+// awaiting_prompt, at, kind, claude_pid, session_id, quiet_s, cc_version, cc_exe }
+// (`phase`: core/state.mjs, from this measurement and the state file).
+// `cc_version` / `cc_exe` (a live bg session, else null): the Claude Code the
+// worker runs, from its row in <config>/daemon/roster.json (cliVersion), and
+// the exe the config home's daemon runs (daemon.lock pid -> ExecutablePath);
+// the tick rolls a bot whose pair is not the pin (daemon/cc.ps1).
+// `activity` is one of ACTIVITIES:
 //   down     no live claude (bg) or pty-host process
 //   blocked  the session waits on something nothing unattended answers
 //            (bgBlockVerdict FAIL: a login, a usage limit, trust). A WARN (its
@@ -33,7 +38,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { STATE_DIR, configDir, readJson, pidAlive, firstInt, botLiveness, processParents, bgJobFile, bgBlockVerdict, runClaude } from '../cli/_lib.mjs';
+import { STATE_DIR, configDir, readJson, pidAlive, firstInt, botLiveness, processParents, bgJobFile, bgBlockVerdict, runClaude, runPwshCommand } from '../cli/_lib.mjs';
 import { botHome } from './paths.mjs';
 import { phase } from './state.mjs';
 import { loadBotYaml } from '../daemon/botyaml.mjs';
@@ -108,6 +113,22 @@ export function turnEnded(job, quietMs, now = Date.now()) {
   return quietMs === null || now - quietMs <= at + TURN_SETTLE_MS;
 }
 
+// The worker's Claude Code version from the roster FILE (no `claude agents` call).
+export function ccVersionOf(cfgDir, bgId) {
+  const workers = bgId ? (readJson(path.join(cfgDir, 'daemon', 'roster.json')) || {}).workers : null;
+  const row = workers && typeof workers === 'object' ? workers[bgId] : null;
+  return row && row.cliVersion ? String(row.cliVersion) : null;
+}
+
+// The exe the config home's daemon runs, or null (no live daemon, unreadable).
+export function ccExeOf(cfgDir) {
+  const pid = Number((readJson(path.join(cfgDir, 'daemon.lock')) || {}).pid) || 0;
+  if (!pidAlive(pid)) return null;
+  if (process.platform !== 'win32') { try { return fs.readlinkSync(`/proc/${pid}/exe`); } catch { return null; } }
+  const r = runPwshCommand(`(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").ExecutablePath`, { timeoutMs: 30_000 });
+  return r.code === 0 && r.out.trim() ? r.out.trim() : null;
+}
+
 export function ptyOf(name) {
   const rec = readJson(path.join(STATE_DIR, `${name}.pty.json`));
   if (!rec || !Number.isInteger(rec.port) || typeof rec.token !== 'string' || !pidAlive(rec.pid)) return null;
@@ -172,6 +193,8 @@ export function observeBot(name, { roster = false, parents = processParents } = 
     claude_pid: live.claudeAlive ? claudePid : null,
     session_id: sessionId || null,
     quiet_s: quietMs === null ? null : Math.round(quietMs / 1000),
+    cc_version: alive && kind === 'bg' ? ccVersionOf(cfgDir, bgId) : null,
+    cc_exe: alive && kind === 'bg' ? ccExeOf(cfgDir) : null,
   };
 }
 
