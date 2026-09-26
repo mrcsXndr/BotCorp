@@ -3,6 +3,44 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.15
+
+Hygiene and merges: three feature branches plus the launch, hook and cockpit
+holes found in the architecture review. v0.2.x only; there is no v0.1.x
+counterpart.
+
+- **Prompt automations**: `kind: prompt` automations type a prompt into the
+  bot's session when it is idle, gated and recorded like command runs
+  (`result: sent|skipped|failed`). `botcorp automations <bot> run <name>`
+  now works: the daemon consumes `events/run-now.queue` on its next pass.
+- **/standup skill**: a de-branded standup skill, a board page template, and a
+  Telegram `/<skill>` rule. The schedule is per bot and opt-in.
+- **Cockpit design**: every surface is restyled from one token file
+  (`cockpit/public/tokens.css`), in light and dark. Voice notes, photos and
+  files show as labelled bubbles with the bot's own transcript and no paths
+  or file ids.
+- **Cockpit hardening**: a strict Content-Security-Policy (`script-src
+  'self'`); `allowed_emails` on top of Cloudflare Access (empty keeps today's
+  behaviour); `state/cockpit-audit.jsonl` gets one line per mutating API call,
+  never a request body.
+- **Telegram slash commands**: a Telegram `/status`, `/journal`, `/timeline`,
+  `/costs`, `/help` or read-only `/board` now reaches `tg_commands.py`. Before,
+  the `<channel>` wrapper hid the leading slash. Anything that mutates or
+  restarts still goes to the model.
+- **Launch**: a bot with neither a vault `oauth_token` nor its own login
+  refuses to launch (exit 5) instead of inheriting the Windows-wide token.
+  An unattended background start whose flags changed resumes the same
+  conversation with the new flags (reflag) instead of starting fresh. A CLI
+  or cockpit start of a background bot gets the resume prompt.
+- **Doctor**: FAIL when a worktree's `node_modules` is a link into the live
+  install's (removing that worktree empties the live one).
+- **Fixes**: `recall.py` re-reads a file indexed within its own mtime tick, so a
+  fast rewrite is never skipped. Tests that run a real tick use their own
+  daemon mutex (`BOTCORP_DAEMON_MUTEX`) and never collide with a live daemon.
+
+Upgrading: check out `v0.2.15`, then `botcorp sync <bot>` and restart the
+cockpit. A running bot picks up the launch changes at its next launch.
+
 ## v0.2.14
 
 v0.2.13 plus the v0.1.16 release below: a cron-triggered automation no longer
