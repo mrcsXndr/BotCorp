@@ -3,6 +3,17 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.16
+
+- **Doctor `<bot>: session not blocked`**: Claude Code keeps `tempo: blocked`
+  plus a `needs` summary after a turn that ends with a question, and the idle
+  bg session still takes its next prompt. That is now a WARN (the cockpit still
+  shows it as waiting on you). Only a login, auth, usage/rate-limit or trust
+  blocker FAILs. It had FAILed a healthy bot for 8 hours.
+
+Upgrading: check out `v0.2.16`; no sync or restart needed (doctor and cockpit
+read the code at run time; restart the cockpit to pick it up there).
+
 ## v0.2.15
 
 Hygiene and merges: three feature branches plus the launch, hook and cockpit
