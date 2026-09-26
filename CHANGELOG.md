@@ -10,8 +10,10 @@ The inbox (R2): one queue per bot, the one way text reaches a session.
 - **`botcorp send <bot> [--wait] [--ttl 30m] [--source ...] [--json] [text]`**
   (text on stdin when none is given) queues a message in
   `state/<bot>/inbox.jsonl`. A detached drainer, one per bot, types the
-  messages in order, each only while observe says the session is `idle`,
-  and confirms each by its user turn reaching the transcript within 30 s
+  messages in order, each only while observe says the session is `idle` or
+  `awaiting_prompt` (new observe field: the job record says the session
+  waits for its next prompt; `activity` and `phase` are unchanged, so the
+  restart and update gates keep the quiet rule), and confirms each by its user turn reaching the transcript within 30 s
   (a typed `/name` also matches Claude Code's namespaced
   `<command-name>/plugin:name</command-name>`). Each message ends
   `delivered`, `expired` (its ttl, 30 min by default, ran out while it
@@ -19,7 +21,12 @@ The inbox (R2): one queue per bot, the one way text reaches a session.
   up, the turn never showed up; never retyped). While the session is
   `blocked` it is `held`. `botcorp inbox <bot> [list|kick|drain]` shows the
   queue without the text. The daemon tick restarts a drainer for a queue
-  nobody drains.
+  nobody drains. `inbox.jsonl` keeps the newest 500 messages (plus any
+  that still wait) and `inbox.results.jsonl` one line per kept message.
+- **Detached children hold no caller's pipe**: the drainer, the attach host
+  and `botcorp start`'s pty-host are started through Start-Process on
+  Windows, so a script that captures `botcorp send` or an automation's
+  output returns at once instead of waiting out the child.
 - **Attach hosts stay up**: for a bg session the drainer starts one
   `pty-host --attach` and leaves it up for the next message and the cockpit
   terminal. It exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) with no
@@ -33,13 +40,15 @@ The inbox (R2): one queue per bot, the one way text reaches a session.
 - **Prompt automations deliver through the inbox** (`send --wait`, ttl half
   the run's timeout, 15 s to 5 min); `sent` means delivered. `daemon/inject.mjs`
   is removed.
-- **`_` fixtures by hand**: `botcorp start|stop|restart|send|observe` accept
-  a `_`-prefixed folder such as `bots/_canary`, and `start --dry-run` prints
-  the launch without running it. The daemon still never supervises them.
+- **`_` fixtures by hand**: `botcorp start|stop|restart|sync|send|inbox|observe`
+  accept a `_`-prefixed folder such as `bots/_canary` (whose `name:` is now
+  `_canary`, matching the folder), and `start --dry-run` prints the launch
+  without running it. The cockpit opens one by name (`#_canary`) and never
+  lists it. The daemon still never supervises them.
 
 Upgrading: nothing to migrate. A chat message now waits for the session to
-be idle (quiet for 5 min, or a declared breakpoint) instead of being typed
-at once.
+be idle (quiet for 5 min, or a declared breakpoint) or to await its next
+prompt, instead of being typed at once.
 
 ## v0.3.0
 
