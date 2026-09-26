@@ -20,7 +20,8 @@ defaults, `--modules a,b` / `--no-modules c` set them without a terminal.
 Then it asks for ONE thing: the Claude Code OAuth token. Get it by running
 `claude setup-token` on any machine with a browser and pasting the printed
 token into the hidden prompt (`--oauth-stdin` pipes it instead; blank skips
-it and the session will need `/login`). Everything else defaults: name
+it, and the bot refuses to launch until it has one or a `/login` in its
+config home). Everything else defaults: name
 `bot-1` (`--name` to choose), a generic persona (`--persona`), Telegram off.
 
 What you get: `bots/<name>/` with `bot.yaml`, a generated

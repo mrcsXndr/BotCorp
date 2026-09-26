@@ -509,15 +509,17 @@ function Get-BgResumePlan {
     # refuse  the roster holds it but the flags changed (channels, settings) or
     #         this start asked for -DebugLog, and a person asked for this
     #         start: `botcorp start --fresh`
-    # An unattended start (daemon, restart) with changed flags goes fresh
-    # instead of refusing: the bot must come up. Unknown saved flags (a launcher
-    # older than v0.1.8) count as unchanged.
+    # reflag  the same, for an unattended start (daemon, restart): the bot must
+    #         come up and keep its conversation, so the launcher `claude rm`s
+    #         the roster row (the transcript stays on disk) and resumes the id
+    #         from its transcript with the new flags.
+    # Unknown saved flags (a launcher older than v0.1.8) count as unchanged.
     param([string]$ResumeId, [bool]$InRoster, [string]$SavedFlags, [string]$Flags, [bool]$Interactive, [bool]$DebugRequested)
     if (-not $ResumeId) { return 'fresh' }
     if (-not $InRoster) { return 'flags' }
     if (-not $DebugRequested -and (-not $SavedFlags -or $SavedFlags -eq $Flags)) { return 'bare' }
     if ($Interactive) { return 'refuse' }
-    return 'fresh'
+    return 'reflag'
 }
 
 function Get-BgBareResumeArgv {

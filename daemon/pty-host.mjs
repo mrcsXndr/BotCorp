@@ -228,6 +228,8 @@ function host(a) {
   // markers; the bot then runs with "Transcript saving is off" (CC 2.1.281),
   // which kills the transcript-mtime idle signal. See docs/cc-compat.md.
   for (const k of ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SSE_PORT']) delete env[k];
+  // A machine-wide token is another account's; the session's own comes from the vault (launch.ps1).
+  delete env.CLAUDE_CODE_OAUTH_TOKEN;
   const p = pty.spawn(cmd.file, cmd.args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: botHome, env });
 
   let buf = '';

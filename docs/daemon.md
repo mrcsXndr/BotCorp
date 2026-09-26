@@ -143,7 +143,11 @@ other key -> its UPPERCASE name (`hcloud_token` -> `HCLOUD_TOKEN`,
 `undeclared vault key(s) NOT injected: <names>` for entries the list leaves
 out (never a value), and the bg `env: OK ...; N vault key(s) in the session
 env: <NAMES>` line. Leaving `oauth_token` / `telegram_token` out means no
-OAuth token / no `--channels`. `automations[].secrets` must be a subset. A
+OAuth token / no `--channels`. The launcher removes an inherited
+`CLAUDE_CODE_OAUTH_TOKEN` (a machine-wide HKCU one is another account's) before
+it spawns anything, and a launch with no vault `oauth_token` and no `/login` in
+the bot's own config home (`.credentials.json`) refuses: exit 5, `oauth: FAIL
+... refusing to launch` in `launches.log`. `automations[].secrets` must be a subset. A
 new key reaches a running bot only through a launch that starts the config
 home's Claude Code daemon fresh (below): `botcorp stop <bot>; botcorp start
 <bot>`, then check the `env: OK` line. Doctor: `<bot>: secrets scope` and
@@ -196,8 +200,10 @@ session WITHOUT flags when its saved flags (`state/<bot>.json` `bg_flags`)
 match this launch's (`--debug-file` is not compared: a session started with
 `--debug` keeps logging when resumed); a session the roster does not hold
 resumes from its transcript WITH flags; changed flags or an explicit
-`--debug` refuse a CLI start (exit 4, "botcorp start <bot> --fresh") and turn
-an unattended start fresh. Afterwards a launch
+`--debug` refuse a CLI start (exit 4, "botcorp start <bot> --fresh"); an
+unattended start reflags instead: it `claude rm`s the row and resumes the
+same id from its transcript WITH the new flags, so the conversation is kept
+(fresh only when that `rm` fails). Afterwards a launch
 with no live claude process running the session is `bg: FAIL` and exit 3
 (`Get-BgLaunchResult`); doctor's `<bot>: session alive` FAILs a bot whose
 state says running, or whose last launch failed, with no claude process.

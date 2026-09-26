@@ -18,7 +18,9 @@
 #               state file (`--bg --continue` would start a COPY), and NO other
 #               flag while the roster holds that session (its saved options
 #               apply; flags would start a copy - Get-BgResumePlan). Changed
-#               flags (-DebugLog, channels) need -Fresh. No session id yet
+#               flags (-DebugLog, channels) need -Fresh from a person; an
+#               unattended start `claude rm`s the row and resumes the id from
+#               its transcript with the new flags (reflag). No session id yet
 #               (first launch, or -Fresh) = a fresh session; its id is taken
 #               from what `claude --bg` prints / `claude agents --json`. No live
 #               claude process after the launch = exit 3 (Get-BgLaunchResult).
@@ -74,6 +76,11 @@ if ($Bot -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { Write-Host "launch: bad bot na
 # environment at once so nothing we spawn inherits it.
 if (-not $LaunchNonce -and $env:BOTCORP_LAUNCH_NONCE) { $LaunchNonce = $env:BOTCORP_LAUNCH_NONCE }
 Remove-Item Env:BOTCORP_LAUNCH_NONCE -ErrorAction SilentlyContinue
+# A machine-wide CLAUDE_CODE_OAUTH_TOKEN (HKCU user env) is another account's:
+# nothing this launch spawns may inherit it. The session's only token is the
+# bot's own from the vault (step 7); without one the launch refuses (step 7b).
+$inheritedOauth = "$env:CLAUDE_CODE_OAUTH_TOKEN"
+Remove-Item Env:CLAUDE_CODE_OAUTH_TOKEN -ErrorAction SilentlyContinue
 
 $BotHome   = Join-Path $BotsDir $Bot
 $ConfigDir = Join-Path $BotHome ".claude-$Bot"
@@ -269,15 +276,12 @@ $tokenFile = ''
 $declared = @(); try { $declared = @($cfg.secrets | Where-Object { $_ }) } catch {}
 if (-not $attested) { $vaultNote += 'vault: skipped (unattested launch)' }
 else { try {
-    # Vault FIRST. A machine-wide CLAUDE_CODE_OAUTH_TOKEN (HKCU user env) is
-    # some other bot's account; inheriting it would bill this bot there. The
-    # env is only a fallback for a bot with no vault entry.
+    # The vault only: the machine-wide token was scrubbed at the top.
     $t = $null
     if ($declared -contains 'oauth_token') { $t = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'oauth_token' -Reason 'launch' -Nonce $LaunchNonce }
     else { $vaultNote += 'oauth: oauth_token not in bot.yaml secrets: -> not injected' }
     if ($t) { $secrets['oauth_token'] = $t; $vaultNote += "oauth: vault ok ($(Mask $t))" }
-    elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { $vaultNote += "oauth: no vault entry -> inheriting the environment token ($(Mask $env:CLAUDE_CODE_OAUTH_TOKEN)); set this bot's own with: botcorp secrets set $Bot oauth" }
-    else { $vaultNote += 'oauth: no vault entry -> the session will need /login' }
+    else { $vaultNote += 'oauth: no vault entry' }
     if ($hasTgMod -and $canOwn) {
         $tt = $null
         if ($declared -contains 'telegram_token') { $tt = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'telegram_token' -Reason 'launch' -Nonce $LaunchNonce }
@@ -318,6 +322,23 @@ else { try {
     else { $vaultNote += "vault unreadable ($m) - re-enter tokens with: botcorp secrets set $Bot oauth" }
 } }
 foreach ($n in $vaultNote) { Write-LaunchLog $n }
+
+# --- 7b. no oauth token = no launch ------------------------------------------------
+# Only a /login in the bot's OWN config home (.credentials.json) stands in for
+# the vault token; the machine-wide one is never inherited.
+if (-not $secrets.ContainsKey('oauth_token')) {
+    $credFile = Join-Path $ConfigDir '.credentials.json'
+    if (Test-Path -LiteralPath $credFile) { Write-LaunchLog "oauth: no vault token -> the config home's own /login ($credFile)" }
+    else {
+        Write-LaunchLog "oauth: FAIL - no vault oauth_token$(if (-not $attested) { ' (unattested launch)' }) and no /login in $ConfigDir -> refusing to launch$(if ($inheritedOauth) { "; the machine-wide CLAUDE_CODE_OAUTH_TOKEN ($(Mask $inheritedOauth)) is another account's and is never inherited" }). Fix: botcorp secrets set $Bot oauth, then botcorp start $Bot"
+        if (-not $DryRun) {
+            if ($tokenFile -and (Test-Path $tokenFile)) { Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue }
+            if ($attested) { Confirm-LaunchNonce -Bot $Bot }
+            Write-State @{ status = 'exited'; exit_code = 5; updated_at = (Get-Date).ToString('o') }
+            exit 5
+        }
+    }
+}
 
 # --- 8. env + argv + state, then exec / background ---------------------------------
 $childEnv = Get-ClaudeEnv -ConfigDir $ConfigDir -Secrets $secrets
@@ -473,10 +494,21 @@ if ($Bg) {
             Write-State @{ status = 'exited'; exit_code = 4; updated_at = (Get-Date).ToString('o') }
             $code = 4
             exit 4
-        } elseif ($plan -eq 'fresh' -and $resumeId) {
-            Write-LaunchLog "bg: session $resumeId is in the roster and $why -> FRESH session for this unattended start (the old conversation stays on disk)"
-            $resumeId = ''; $argv = & $argvOf ''
-            Write-State @{ session_id = $null; bg_id = $null }
+        } elseif ($plan -eq 'reflag') {
+            # The row keeps its saved options: a bare resume would come back without
+            # the new flags, a flagged one would start a copy. Without the row, the
+            # id resumes from its transcript with this launch's flags.
+            $envCd = @{ CLAUDE_CONFIG_DIR = $ConfigDir }
+            if ("$($row.state)" -ne 'stopped') { [void](Invoke-Bounded -Exe $exe -Arguments @('stop', "$($row.id)") -TimeoutSec 30 -Label 'claude stop' -Capture -Env $envCd -WorkingDirectory $BotHome -Bot $Bot) }
+            $rr = Invoke-Bounded -Exe $exe -Arguments @('rm', "$($row.id)") -TimeoutSec 30 -Label 'claude rm' -Capture -Env $envCd -WorkingDirectory $BotHome -Bot $Bot
+            if ($rr.ExitCode -eq 0) {
+                Write-LaunchLog "bg: session $resumeId is in the roster and $why -> reflag: claude rm $($row.id), resuming $resumeId from its transcript with this launch's flags (the conversation is kept)"
+            } else {
+                # a flagged resume of a row still in the roster would start a copy that never comes up
+                Write-LaunchLog "bg: reflag: claude rm $($row.id) failed (exit $($rr.ExitCode)) -> FRESH session for this unattended start (the old conversation stays on disk)"
+                $resumeId = ''; $argv = & $argvOf ''
+                Write-State @{ session_id = $null; bg_id = $null }
+            }
         } elseif ($plan -eq 'bare') {
             if ("$($row.state)" -ne 'stopped' -and -not (Test-BgAgentPidAlive $row)) {
                 [void](Invoke-Bounded -Exe $exe -Arguments @('stop', "$($row.id)") -TimeoutSec 30 -Label 'claude stop' -Capture -Env @{ CLAUDE_CONFIG_DIR = $ConfigDir } -WorkingDirectory $BotHome -Bot $Bot)

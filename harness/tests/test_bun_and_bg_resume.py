@@ -11,7 +11,7 @@ Locked behaviour (daemon/_common.ps1 under pwsh, cli/_lib.mjs under node):
 - resolvePluginCommand / pluginCommandVerdict (doctor): nothing resolves =
   FAIL, this shell's PATH only = WARN, override / install folder = PASS;
 - Get-BgResumePlan: roster + same flags = bare, roster + changed flags or an
-  explicit --debug = refuse (a person's start) / fresh (unattended), not in
+  explicit --debug = refuse (a person's start) / reflag (unattended), not in
   the roster = flags, no id = fresh; the bare argv carries no flag;
   Get-BgFlagsKey ignores --bg, the resume id and --debug-file <path>;
 - Get-BgLaunchResult: exit 0 with claude_pid 0 (or a dead pid) is exit 3;
@@ -161,9 +161,11 @@ def test_resume_plan_and_the_bare_argv_has_no_flags():
               " (Get-BgResumePlan -ResumeId 's' -InRoster $true -SavedFlags 'a' -Flags 'b' -Interactive $true),"
               " (Get-BgResumePlan -ResumeId 's' -InRoster $true -SavedFlags 'a' -Flags 'b' -Interactive $false),"
               " (Get-BgResumePlan -ResumeId 's' -InRoster $true -SavedFlags 'a' -Flags 'a' -Interactive $true -DebugRequested $true),"
-              " (Get-BgResumePlan -ResumeId 's' -InRoster $false -SavedFlags 'a' -Flags 'a' -Interactive $true -DebugRequested $true)) -join ','")
-    # `start --debug` of a roster session cannot add the flag without a copy: refuse; not in the roster, flags apply
-    assert got == "fresh,flags,bare,bare,refuse,fresh,refuse,flags"
+              " (Get-BgResumePlan -ResumeId 's' -InRoster $false -SavedFlags 'a' -Flags 'a' -Interactive $true -DebugRequested $true),"
+              " (Get-BgResumePlan -ResumeId 's' -InRoster $true -SavedFlags 'a' -Flags 'a' -Interactive $false -DebugRequested $true)) -join ','")
+    # `start --debug` of a roster session cannot add the flag without a copy: refuse; not in the roster, flags apply;
+    # unattended with changed flags (or --debug): reflag (rm the row, resume the id with the new flags), never fresh
+    assert got == "fresh,flags,bare,bare,refuse,reflag,refuse,flags,reflag"
     argv = json.loads(_ps("ConvertTo-Json -Compress @(Get-BgBareResumeArgv -ResumeId 'sid-1' -Seed @('continue from the TDL'))"))
     assert argv == ["--bg", "--resume", "sid-1", "continue from the TDL"]
     assert not [a for a in argv if a.startswith("--") and a not in ("--bg", "--resume")]

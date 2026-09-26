@@ -1312,7 +1312,7 @@ async function cmdNew({ flags }) {
   if (oauth) {
     const c = secretsSet(name, 'oauth', oauth);
     if (c !== 0) { rc = c; out(`oauth: vault write failed (exit ${c}); re-enter with: botcorp secrets set ${name} oauth`); }
-  } else out(`oauth: none given; the session will need /login until: botcorp secrets set ${name} oauth`);
+  } else out(`oauth: none given; the bot refuses to launch until: botcorp secrets set ${name} oauth (or a /login in its config home)`);
 
   // 4. optional Telegram
   if (telegram) {
@@ -2051,8 +2051,9 @@ async function googleTokenEmail(tokenFile) {
 
 // A machine-wide CLAUDE_CODE_OAUTH_TOKEN (HKCU user env, or the daemon's own
 // env) is some other bot's account. Every bot must launch on its own vault
-// token; the launcher takes the vault first, so this asserts the vault entry
-// exists and is not that same token (last 4 characters, never more).
+// token; the launcher never inherits the machine-wide one (no vault token and
+// no config-home /login = no launch), so this asserts the vault entry exists
+// and is not that same token (last 4 characters, never more).
 // A machine-wide (HKCU) env var, else this shell's; '' when neither has it.
 function userEnvVar(name) {
   const pv = process.platform === 'win32' ? runPwshCommand(`[Environment]::GetEnvironmentVariable('${name}','User')`, { timeoutMs: 30_000 }) : { out: '' };
@@ -2068,8 +2069,8 @@ function userEnvTokenLast4() {
 function oauthInheritanceCheck(bot, vaultRows, envLast4, add) {
   const row = vaultRows.find((r) => r.key === 'oauth_token');
   const vaultLast4 = row && /^\*+(.{4})$/.test(row.masked) ? row.masked.slice(-4) : '';
-  if (!envLast4) { add('PASS', `${bot}: oauth token`, `no machine-wide CLAUDE_CODE_OAUTH_TOKEN; ${row ? `vault ****${vaultLast4}` : 'no vault entry (session needs /login)'}`); return; }
-  if (!row) { add('FAIL', `${bot}: oauth token`, `no vault oauth_token: the launcher would inherit the machine-wide token ****${envLast4} (another bot's account) - botcorp secrets set ${bot} oauth`); return; }
+  if (!envLast4) { add('PASS', `${bot}: oauth token`, `no machine-wide CLAUDE_CODE_OAUTH_TOKEN; ${row ? `vault ****${vaultLast4}` : 'no vault entry (the launch refuses without a /login in the config home)'}`); return; }
+  if (!row) { add('FAIL', `${bot}: oauth token`, `no vault oauth_token: the launcher never inherits the machine-wide token ****${envLast4} (another bot's account), so it refuses to launch without a /login in the config home - botcorp secrets set ${bot} oauth`); return; }
   if (vaultLast4 && vaultLast4 === envLast4) add('FAIL', `${bot}: oauth token`, `vault oauth_token ****${vaultLast4} IS the machine-wide CLAUDE_CODE_OAUTH_TOKEN (same account as whoever set it) - give this bot its own token`);
   else add('PASS', `${bot}: oauth token`, `vault ****${vaultLast4 || '????'} overrides the machine-wide ****${envLast4}`);
 }
@@ -2178,7 +2179,7 @@ async function cmdDoctor({ flags }) {
       if (!vault.ok) add('FAIL', `${bot}: vault`, `secrets list failed: ${vault.err.slice(0, 160)}`, 'bots');
       else if (vault.rows.some((r) => r.masked === 'unreadable') || (vd && vd.probe && vd.probe.ok === false && !(vd.lock && vd.lock.locked))) add('FAIL', `${bot}: vault`, `vault unreadable (${vd && vd.probe ? vd.probe.detail : 'unreadable entry'}) - re-enter tokens (botcorp secrets set)`, 'bots');
       else {
-        add(vault.rows.some((r) => r.key === 'oauth_token') ? 'PASS' : 'WARN', `${bot}: vault`, vault.rows.length ? `${vault.rows.map((r) => r.key).join(', ')}` : 'no entries (no oauth_token: the session will need /login)', 'bots');
+        add(vault.rows.some((r) => r.key === 'oauth_token') ? 'PASS' : 'WARN', `${bot}: vault`, vault.rows.length ? `${vault.rows.map((r) => r.key).join(', ')}` : 'no entries (no oauth_token: the launch refuses without a /login in the config home)', 'bots');
         oauthInheritanceCheck(bot, vault.rows, envLast4, (l, n, d) => add(l, n, d, 'bots'));
       }
       if (vd && vd.acl) add(vd.acl.ok ? 'PASS' : 'WARN', `${bot}: vault acl`, vd.acl.ok ? vd.acl.detail : `${vd.acl.detail} (botcorp secrets acl ${bot})`, 'bots');

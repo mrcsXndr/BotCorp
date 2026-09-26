@@ -53,8 +53,9 @@ keeps out of the repo; `new` runs no `git init` (see `export` / `import` /
    `docs/cc-compat.md`);
 4. asks for the ONE token a bot needs, the OAuth token from `claude
    setup-token` (hidden prompt; `--oauth-stdin` reads it from stdin instead)
-   and stores it as vault key `oauth_token`; blank = skip, the session then
-   needs `/login` until `secrets set <name> oauth`;
+   and stores it as vault key `oauth_token`; blank = skip, the bot then
+   refuses to launch until `secrets set <name> oauth` (or a `/login` in its
+   config home);
 5. with telegram on: prompts for the BotFather token (vault key
    `telegram_token`; exit 3 if another bot already holds it), then installs
    the official Telegram plugin INTO THIS BOT'S CONFIG HOME and leaves it
@@ -455,7 +456,8 @@ session saved (channels / settings changed), refuses (exit 4) and says
 `start <bot> --fresh`; `--fresh` starts a new session with the new flags (the
 old conversation stays on disk). A session started with `--debug` keeps its
 debug log on every resume until the next `--fresh`. An unattended start (the daemon, `restart.ps1`)
-with changed flags starts fresh instead of refusing. A bg launch after which
+with changed flags reflags instead of refusing: it `claude rm`s the roster row
+and resumes the same conversation with the new flags. A bg launch after which
 no live claude process runs the session exits 3, never 0.
 
 - `start` is a trusted launch path: it mints the launch nonce (attestation,
@@ -653,7 +655,7 @@ logins, `--no-tg-probe` the Telegram slot probe.
   fine); `<bot>: oauth token` — the vault `oauth_token` must
   exist and must not be the machine-wide `CLAUDE_CODE_OAUTH_TOKEN` (compared
   on the last 4 characters only); FAIL means the bot would run on another
-  bot's account; `<bot>: secrets scope` - the keys `bot.yaml` `secrets:`
+  bot's account, or (no vault entry) refuses to launch; `<bot>: secrets scope` - the keys `bot.yaml` `secrets:`
   injects into the session, WARN for a declared key with no vault entry, and
   the vault entries it leaves out (named, never injected); `<bot>: session
   secrets env` - the same names-only list as `status`'s `secrets env:` line,
