@@ -24,7 +24,9 @@
 //                  <bot>.json, CLAUDE_CONFIG_DIR = the bot's config home). Closing
 //                  the pty detaches; the session keeps running. `--stop` on an
 //                  attach host kills only the attach client, never the session
-//                  (the daemon stops a bg session with `claude stop <id>`). The
+//                  (the daemon stops a bg session with `claude stop <id>`). With
+//                  no client for BOTCORP_ATTACH_IDLE_MIN (15) minutes it exits
+//                  on its own, so whoever started it never stops it. The
 //                  supervisor pipe answers only callers with the daemon's
 //                  elevation: a host spawned non-elevated against a RunLevel
 //                  Highest daemon shows an empty/failed attach (docs/daemon.md).
@@ -275,8 +277,21 @@ function host(a) {
         try { p.resize(msg.cols, msg.rows); } catch {}
       }
     });
-    ws.on('close', () => clients.delete(ws));
+    ws.on('close', () => { clients.delete(ws); lastUse = Date.now(); });
   });
+
+  // An attach host is only a transport (the inbox's, the cockpit terminal's):
+  // with no client for ATTACH_IDLE_MIN it closes its `claude attach` client and
+  // exits. The session runs on; the next inbox item or terminal open starts one.
+  let lastUse = Date.now();
+  if (a.mode === 'attach') {
+    const idleMs = (Number(process.env.BOTCORP_ATTACH_IDLE_MIN) || 15) * 60_000;
+    setInterval(() => {
+      if (clients.size || Date.now() - lastUse < idleMs) return;
+      console.log(`pty-host: ${a.bot} attach host idle ${Math.round(idleMs / 1000)}s with no client - closing`);
+      cleanup(); treeKill(p.pid); setTimeout(() => process.exit(0), 500);
+    }, Math.min(30_000, Math.max(500, idleMs / 4))).unref();
+  }
 
   const file = ptyJsonPath(a.bot);
   const cleanup = () => { try { fs.unlinkSync(file); } catch {} };

@@ -1,0 +1,326 @@
+"""The inbox (core/inbox.mjs) and `botcorp send`: the one way text reaches a session.
+
+Locked behaviour:
+- `botcorp send <bot> [text | stdin]` queues; one detached drainer per bot types
+  each item in order, and only while observe says the phase is `idle`;
+- a bg session gets an attach host (`pty-host --attach`) that the drainer starts
+  and nobody stops: it exits on its own after BOTCORP_ATTACH_IDLE_MIN with no
+  client, and the session keeps running; a pty session is typed into through its
+  running pty-host;
+- a delivery is `delivered` only once its user turn reaches the transcript. A
+  typed `/standup` is recorded namespaced (`<command-name>/botcorp:standup`,
+  reference host 2026-09-26) and still confirms (the v0.2.17 regression);
+- a message is `held` while the session is hard-blocked (a login), then goes out
+  once the block clears; `expired` once its ttl runs out while it waits;
+  `failed` at once when the session is stopped;
+- the daemon tick kicks a drainer for a queue nobody drains.
+
+The session is a stub hosted by the real pty-host (BOTCORP_PTY_COMMAND). It
+writes each line typed into it to a transcript in Claude Code's own user-entry
+shape. Every run uses a temp BOTCORP_HOME / BOTCORP_BOTS_DIR.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import secrets
+import shutil
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+ASSEMBLY = Path(__file__).resolve().parents[2]
+CLI = ASSEMBLY / "cli" / "botcorp.mjs"
+PTY_HOST = ASSEMBLY / "daemon" / "pty-host.mjs"
+
+pytestmark = pytest.mark.skipif(sys.platform != "win32" or shutil.which("pwsh") is None or shutil.which("node") is None,
+                                reason="Windows with pwsh and node on PATH")
+
+# One typed line -> one user entry, with the fields Claude Code 2.1 writes
+# (a typed prompt is a string `content`; a plugin skill is the wrapper below).
+STUB = r"""
+const fs = require('fs');
+const crypto = require('crypto');
+const [out, cwd] = process.argv.slice(2);
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+process.stdout.write('stub session> ');
+let buf = '', parent = null;
+const sessionId = crypto.randomUUID();
+process.stdin.on('data', (b) => {
+  buf += b.toString('utf8');
+  let i;
+  while ((i = buf.indexOf('\r')) >= 0) {
+    const text = buf.slice(0, i).replace(/\x1b\[20[01]~/g, '');
+    buf = buf.slice(i + 1);
+    const m = /^\/([\w.-]+)\s*([\s\S]*)$/.exec(text);
+    const content = m ? `<command-message>botcorp:${m[1]}</command-message>\n<command-name>/botcorp:${m[1]}</command-name>\n<command-args>${m[2]}</command-args>` : text;
+    const uuid = crypto.randomUUID();
+    fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, promptId: crypto.randomUUID(), type: 'user',
+      message: { role: 'user', content }, uuid, timestamp: new Date().toISOString(), userType: 'external', entrypoint: 'cli',
+      cwd, sessionId, version: '2.1.282', gitBranch: '' }) + '\n');
+    parent = uuid;
+    process.stdout.write('\r\nok\r\nstub session> ');
+  }
+});
+setTimeout(() => process.exit(0), 180000);
+"""
+LOGIN_BLOCK = {"state": "blocked", "tempo": "blocked", "needs": "login required - run /login"}
+
+
+@pytest.fixture(scope="module")
+def fake_claude_exe(tmp_path_factory):
+    # A process NAMED claude (a copy of node) stands in for a bg session's worker.
+    exe = tmp_path_factory.mktemp("fakeclaude") / "claude.exe"
+    shutil.copyfile(shutil.which("node"), exe)
+    return exe
+
+
+@pytest.fixture
+def box(tmp_path):
+    name = f"zz-i{secrets.token_hex(3)}"
+    bots = tmp_path / "bots"
+    home = bots / name
+    home.mkdir(parents=True)
+    rt = tmp_path / "rt"
+    (rt / "state").mkdir(parents=True)
+    slug = re.sub(r"[^A-Za-z0-9]", "-", str(home))
+    transcript = home / f".claude-{name}" / "projects" / slug / "stub-session.jsonl"
+    transcript.parent.mkdir(parents=True)
+    transcript.write_text("", encoding="utf-8")
+    stub = tmp_path / "stub.js"
+    stub.write_text(STUB, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
+    env.update({"BOTCORP_HOME": str(rt), "BOTCORP_BOTS_DIR": str(bots), "BOT_TG_MUTE": "1",
+                "BOTCORP_PTY_COMMAND": f'node "{stub}" "{transcript}" "{home}"', "BOTCORP_INBOX_POLL_MS": "300"})
+    procs: list[subprocess.Popen] = []
+    b = {"name": name, "home": home, "rt": rt, "env": env, "transcript": transcript, "procs": procs}
+    try:
+        yield b
+    finally:
+        subprocess.run(["node", str(PTY_HOST), "--stop", name], capture_output=True, timeout=60, env=env)
+        lock = rt / "state" / name / "inbox.drainer"
+        if lock.exists():
+            pid = lock.read_text(encoding="utf-8").strip()
+            if pid.isdigit():
+                subprocess.run(["taskkill", "/PID", pid, "/T", "/F"], capture_output=True)
+        for p in procs:
+            if p.poll() is None:
+                p.kill()
+
+
+def _yaml(b, session: str):
+    (b["home"] / "bot.yaml").write_text(f"name: {b['name']}\nharness:\n  service: manual\n  session: {session}\n  modules:\n    telegram: false\n",
+                                        encoding="utf-8")
+
+
+def _idle(b):
+    # a fresh declared breakpoint reads idle whatever the transcript did
+    bp = b["home"] / ".claude" / ".botcorp_breakpoint"
+    bp.parent.mkdir(exist_ok=True)
+    bp.write_text("", encoding="utf-8")
+
+
+def _bg_session(b, exe) -> subprocess.Popen:
+    _yaml(b, "bg")
+    s = subprocess.Popen([str(exe), "-e", "setTimeout(() => {}, 180000)"])
+    b["procs"].append(s)
+    (b["rt"] / "state" / f"{b['name']}.json").write_text(json.dumps({"bot": b["name"], "status": "running", "claude_pid": s.pid, "bg_id": "abc123"}),
+                                                          encoding="utf-8")
+    return s
+
+
+def _job(b, rec):
+    f = b["home"] / f".claude-{b['name']}" / "jobs" / "abc123" / "state.json"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(json.dumps(rec), encoding="utf-8")
+
+
+def _cli(b, *args, stdin: str = "", timeout: int = 180):
+    return subprocess.run(["node", str(CLI), *args], input=stdin, capture_output=True, text=True, timeout=timeout,
+                          cwd=str(ASSEMBLY), env=b["env"])
+
+
+def _typed(b) -> list[str]:
+    return [json.loads(ln)["message"]["content"] for ln in b["transcript"].read_text(encoding="utf-8").splitlines() if ln.strip()]
+
+
+def _items(b) -> list[dict]:
+    r = _cli(b, "inbox", b["name"], "--json")
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
+def _wait_for(pred, timeout=90.0):
+    end = time.time() + timeout
+    while time.time() < end:
+        v = pred()
+        if v:
+            return v
+        time.sleep(0.3)
+    raise AssertionError("timed out")
+
+
+def _endpoint(b):
+    f = b["rt"] / "state" / f"{b['name']}.pty.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+
+def test_delivered_to_a_bg_session_through_a_new_attach_host(box, fake_claude_exe):
+    session = _bg_session(box, fake_claude_exe)
+    _idle(box)
+    nonce = f"inbox-{secrets.token_hex(6)}"
+    r = _cli(box, "send", box["name"], "--wait", "--json", stdin=f"hello {nonce}\n")
+    assert r.returncode == 0, r.stdout + r.stderr
+    out = json.loads(r.stdout)
+    assert out["status"] == "delivered" and "via a new attach host" in out["detail"] and "confirmed in the transcript" in out["detail"], out
+    assert _typed(box) == [f"hello {nonce}"]
+    assert box["transcript"].read_text(encoding="utf-8").count(nonce) == 1, "typed exactly once"
+    assert _endpoint(box)["mode"] == "attach", "the attach host stays up for the next message"
+    assert session.poll() is None
+    # the namespaced skill shape confirms a typed /standup, through the running host
+    r = _cli(box, "send", box["name"], "--wait", "--json", "/standup")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "via the running attach host" in json.loads(r.stdout)["detail"]
+    assert _typed(box)[-1] == "<command-message>botcorp:standup</command-message>\n<command-name>/botcorp:standup</command-name>\n<command-args></command-args>"
+
+
+def test_delivered_through_a_running_pty_host(box):
+    _yaml(box, "pty")
+    h = subprocess.Popen(["node", str(PTY_HOST), "--bot", box["name"], "--botcorp", str(ASSEMBLY), "--continue"],
+                         env=box["env"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    box["procs"].append(h)
+    rec = _wait_for(lambda: _endpoint(box), 20)
+    _idle(box)
+    r = _cli(box, "send", box["name"], "--wait", "a line for the pty session")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.startswith("delivered ") and "via the running pty-host (continue)" in r.stdout, r.stdout
+    assert _typed(box) == ["a line for the pty session"]
+    assert _endpoint(box)["pid"] == rec["pid"]
+
+
+def test_in_order(box, fake_claude_exe):
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    ids = []
+    for n in ("one", "two", "three"):
+        r = _cli(box, "send", box["name"], f"message {n}")
+        assert r.returncode == 0 and r.stdout.startswith("queued "), r.stdout + r.stderr
+        ids.append(r.stdout.split()[1])
+    _wait_for(lambda: all(i["status"] == "delivered" for i in _items(box)), 120)
+    assert [i["id"] for i in _items(box)] == ids
+    assert _typed(box) == ["message one", "message two", "message three"]
+
+
+def test_held_while_blocked_then_delivered(box, fake_claude_exe):
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    _job(box, LOGIN_BLOCK)
+    r = _cli(box, "send", box["name"], "after the login")
+    assert r.returncode == 0, r.stderr
+    item = _wait_for(lambda: next((i for i in _items(box) if i["status"] == "held"), None), 30)
+    assert "login required" in item["detail"]
+    time.sleep(1.5)
+    assert _typed(box) == [], "a blocked session must not be typed into"
+    assert item["preview"] == "after the login" and "text" not in item
+    _job(box, {"state": "working", "tempo": "blocked", "needs": "send a prompt to start"})
+    _wait_for(lambda: _items(box)[0]["status"] == "delivered", 60)
+    assert _typed(box) == ["after the login"]
+    results = [json.loads(ln) for ln in (box["rt"] / "state" / box["name"] / "inbox.results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert [x["status"] for x in results] == ["held", "queued", "delivered"], results
+
+
+def test_a_warn_block_does_not_hold(box, fake_claude_exe):
+    # its last turn ended asking something: it still takes its next prompt
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    _job(box, {"state": "blocked", "tempo": "blocked", "needs": "which branch should I use?"})
+    r = _cli(box, "send", box["name"], "--wait", "use main")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _typed(box) == ["use main"]
+
+
+def test_expires_while_the_session_is_working(box, fake_claude_exe):
+    _bg_session(box, fake_claude_exe)
+    os.utime(box["transcript"], None)            # written just now, no breakpoint: a turn is in flight
+    r = _cli(box, "send", box["name"], "--wait", "--ttl", "2s", "not now")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.stdout.startswith("expired ") and "waited past its ttl (2s)" in r.stdout, r.stdout
+    assert _typed(box) == [] and _endpoint(box) is None
+
+
+def test_expires_while_the_session_is_down(box):
+    _yaml(box, "bg")
+    p = subprocess.Popen([sys.executable, "-c", ""])
+    p.wait()
+    (box["rt"] / "state" / f"{box['name']}.json").write_text(json.dumps({"bot": box["name"], "status": "running", "claude_pid": p.pid, "bg_id": "abc123"}),
+                                                            encoding="utf-8")
+    r = _cli(box, "send", box["name"], "--wait", "--ttl", "2s", "while down")
+    assert r.returncode == 1 and r.stdout.startswith("expired "), r.stdout + r.stderr
+
+
+def test_fails_at_once_when_stopped(box):
+    _yaml(box, "bg")                              # no state file: never started
+    t0 = time.time()
+    r = _cli(box, "send", box["name"], "--wait", "--json", "anyone there")
+    assert r.returncode == 1, r.stdout + r.stderr
+    out = json.loads(r.stdout)
+    assert out["status"] == "failed" and f"botcorp start {box['name']}" in out["detail"], out
+    assert time.time() - t0 < 30
+
+
+def test_the_attach_host_exits_on_its_own_and_the_session_survives(box, fake_claude_exe):
+    box["env"]["BOTCORP_ATTACH_IDLE_MIN"] = "0.05"          # 3 s
+    session = _bg_session(box, fake_claude_exe)
+    _idle(box)
+    r = _cli(box, "send", box["name"], "--wait", "then go quiet")
+    assert r.returncode == 0, r.stdout + r.stderr
+    _wait_for(lambda: _endpoint(box) is None, 30)
+    assert session.poll() is None, "the attach host exiting must not touch the session"
+
+
+@pytest.mark.parametrize("args, stdin, err", [
+    ([], "", "send <bot>"),
+    ([], "  \n", "send <bot>"),
+    (["--ttl", "soon", "hi"], "", "--ttl"),
+    (["--ttl", "25h", "hi"], "", "--ttl"),
+    (["--source", "tg", "hi"], "", "--source"),
+])
+def test_send_refuses_bad_input(box, args, stdin, err):
+    _yaml(box, "bg")
+    r = _cli(box, "send", box["name"], *args, stdin=stdin)
+    assert r.returncode == 2 and err in r.stderr, r.stdout + r.stderr
+    assert not (box["rt"] / "state" / box["name"] / "inbox.jsonl").exists()
+
+
+def test_the_tick_kicks_a_queue_nobody_drains(box, tmp_path):
+    _yaml(box, "bg")
+    p = subprocess.Popen([sys.executable, "-c", ""])
+    p.wait()
+    rt = box["rt"]
+    (rt / "state" / f"{box['name']}.json").write_text(json.dumps({"bot": box["name"], "status": "running", "claude_pid": p.pid, "bg_id": ""}), encoding="utf-8")
+    # queued long ago with a 1 s ttl, and no drainer: the kicked drainer expires it
+    (rt / "state" / box["name"]).mkdir()
+    (rt / "state" / box["name"] / "inbox.jsonl").write_text(json.dumps({"id": "old-1", "text": "stale", "source": "cli", "ttl_s": 1, "at": "2026-09-01T00:00:00Z"}) + "\n",
+                                                            encoding="utf-8")
+    (rt / "cockpit.json").write_text('{"enabled": false}', encoding="utf-8")
+    (rt / "state" / "daemon.json").write_text(json.dumps({"update_check_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}), encoding="utf-8")
+    env = dict(box["env"], BOTCORP_ROOT=str(ASSEMBLY), BOTCORP_DAEMON_MUTEX=f"Global\\BotCorpDaemon-test-{secrets.token_hex(8)}")
+    node = tmp_path / "fake-node" / "node.exe"
+    node.parent.mkdir()
+    shutil.copy2(Path(os.environ["SystemRoot"]) / "System32" / "cmd.exe", node)
+    sink = subprocess.Popen([str(node), "/c", "ping -n 120 127.0.0.1 >nul"], creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        (rt / "state" / "otel.json").write_text(json.dumps({"pid": sink.pid}), encoding="utf-8")
+        r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "tick.ps1")],
+                           capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+    finally:
+        subprocess.run(["taskkill", "/PID", str(sink.pid), "/T", "/F"], capture_output=True)
+    assert r.returncode == 0, r.stderr
+    log = (rt / "daemon.log").read_text(encoding="utf-8")
+    assert re.search(rf"\[{box['name']}\].*inbox: drainer started \(pid \d+\)", log), log[-2000:]
+    item = _wait_for(lambda: next((i for i in _items(box) if i["status"] == "expired"), None), 30)
+    assert item["id"] == "old-1"

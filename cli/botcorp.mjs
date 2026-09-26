@@ -50,7 +50,7 @@ const {
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -968,6 +968,62 @@ function cmdObserve({ pos, flags }) {
   if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
   if (!all.length) out('observe: no bots under bots/ (botcorp new)');
   for (const o of all) out(`${o.bot.padEnd(16)} ${o.phase.padEnd(8)} alive=${o.alive} poller=${o.poller ?? '-'} bg=${o.bg_id ?? '-'}${o.blocked ? ` blocked="${o.blocked.needs}"` : ''}${o.quiet_s !== null ? ` quiet=${o.quiet_s}s` : ''}`);
+  return 0;
+}
+
+// ---- inbox (core/inbox.mjs) ------------------------------------------------------------------
+// Loaded on use: it pulls in the cockpit's transcript reader and ws.
+const inboxLib = () => import('../core/inbox.mjs');
+
+function printItem(bot, it, json) {
+  if (json) outJson({ bot, id: it.id, status: it.status, detail: it.detail || '' });
+  else out(`${it.status} ${it.id}${it.detail ? `: ${it.detail}` : ''}`);
+}
+
+// The text: the words after <bot>, else stdin (automations and the cockpit
+// always use stdin: a payload on argv gets substituted by shells and logged).
+async function cmdSend({ pos, flags }) {
+  const bot = requireBot(pos[1], HAND_NAME_RE);
+  const ib = await inboxLib();
+  const text = pos.length > 2 ? pos.slice(2).join(' ') : stdinIsPiped() ? readStdinAll().replace(/[\r\n]+$/, '') : '';
+  if (!text.trim()) usage('send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: read from stdin)');
+  if (Buffer.byteLength(text) > ib.MAX_TEXT_BYTES) usage(`send: text over ${ib.MAX_TEXT_BYTES / 1024} KB`);
+  const source = flags.source || 'cli';
+  if (!ib.SOURCES.includes(source)) usage(`send: --source ${ib.SOURCES.join('|')}`);
+  const ttlS = flags.ttl === undefined ? ib.DEFAULT_TTL_S : ib.parseTtl(flags.ttl);
+  if (!ttlS) usage('send: --ttl <n>[s|m|h] (max 24h)');
+  const item = ib.enqueue(bot, { text, source, ttlS });
+  ib.kick(bot);
+  if (!flags.wait) { printItem(bot, { ...item, status: 'queued' }, flags.json); return 0; }
+  // The drainer ends every item by its ttl; the margin covers the one in flight.
+  const deadline = Date.now() + ttlS * 1000 + ib.HOST_UP_MS + ib.CONFIRM_MS + 60_000;
+  let cur = ib.itemOf(bot, item.id), lastKick = Date.now();
+  while (!ib.TERMINAL.has(cur.status) && Date.now() < deadline) {
+    await sleep(500);
+    if (Date.now() - lastKick > 5_000 && !ib.drainerPid(bot)) { ib.kick(bot); lastKick = Date.now(); }
+    cur = ib.itemOf(bot, item.id) || cur;
+  }
+  printItem(bot, cur, flags.json);
+  return cur.status === 'delivered' ? 0 : 1;
+}
+
+async function cmdInbox({ pos, flags }) {
+  const bot = requireBot(pos[1], HAND_NAME_RE);
+  const ib = await inboxLib();
+  const action = pos[2] || 'list';
+  if (action === 'drain') { const n = await ib.drain(bot); out(`inbox: ${bot} drained (${n} delivered)`); return 0; }
+  if (action === 'kick') {
+    const pid = ib.kick(bot);
+    out(pid ? `inbox: ${bot} drainer started (pid ${pid})` : `inbox: ${bot} no drainer needed${ib.drainerPid(bot) ? ` (pid ${ib.drainerPid(bot)} runs)` : ''}`);
+    return 0;
+  }
+  if (action !== 'list') usage('inbox <bot> [list|kick|drain] [--json] [--tail N]');
+  const tail = flags.tail === undefined ? 20 : parseInt(flags.tail, 10);
+  if (!Number.isFinite(tail) || tail <= 0) usage('--tail needs a positive number');
+  const rows = ib.readInbox(bot).slice(-tail).map(({ text, ...r }) => ({ ...r, preview: promptPreview(text) }));
+  if (flags.json) { outJson(rows); return 0; }
+  if (!rows.length) { out(`inbox: ${bot} has no messages`); return 0; }
+  for (const r of rows) out(`${r.at}  ${r.id}  ${r.status.padEnd(9)} ${r.source.padEnd(10)} ${JSON.stringify(r.preview)}${r.detail ? `  (${r.detail})` : ''}`);
   return 0;
 }
 
@@ -2453,9 +2509,12 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   pair <bot> <senderId> | pair <bot> --list [--json] | pair <bot> --deny <senderId>
   config get <bot> [<dotted.path>] [--json] | config set <bot> <dotted.path> <value>
   approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>
-  start <bot> [--fresh] [--debug] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
+  start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
+  send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order once the session is idle)
+  inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
+  (start, stop, restart, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
@@ -2473,6 +2532,7 @@ const COMMANDS = {
   sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
+  send: cmdSend, inbox: cmdInbox,
   update: cmdUpdate, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
   help: () => { out(HELP); return 0; },
 };

@@ -416,7 +416,13 @@ when the telegram module is on; when it is off the ids sit in `bot.yaml` and
 `sync` writes them into `access.json` once the module is enabled (the command
 says so). `reject` drops the entry.
 
-### `start <bot> [--fresh] [--debug]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
+### `start <bot> [--fresh] [--debug] [--dry-run]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
+
+These three, `send`, `inbox` and `observe` also take a shipped `_` fixture
+(`bots/_canary`), which the daemon never supervises or cold-starts; an
+operator starts, sends to and stops it by hand. `start --dry-run` runs
+`launch.ps1 -DryRun` (bg) or prints the pty-host command (pty): nothing is
+launched, no nonce minted, a paused marker kept.
 
 `--debug` (bg bots) passes `launch.ps1 -DebugLog`: this one launch runs with
 `--debug-file <config home>/debug/<yyyyMMdd-HHmmss>.txt`, Claude Code's own
@@ -533,6 +539,43 @@ form is one line per bot: name, phase, `alive=`, `poller=`, `bg=`, and
 the supervisor restarted under a new pid; it writes the config home's
 `.claude.json`, so the daemon tick does not pass it. The tick runs `observe
 --all --json` every 3 min and persists each record as `observed`.
+
+### `send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]`
+
+Queues a message for the bot's session (`core/inbox.mjs`); the text is the
+words after `<bot>`, else stdin (the cockpit and automations always use
+stdin), at most 64 KB. One drainer per bot, detached, types each message in
+order (bracketed paste, then Enter), and only while `observe` says the phase
+is `idle`. A bg session is typed into through an attach host (`pty-host
+--attach`), started when none is up and shared with the cockpit terminal; it
+exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no
+client. A pty session goes through its own pty-host. Each message ends:
+
+- `delivered`: its user turn reached the transcript within 30 s (a typed
+  `/name` also matches the namespaced `/plugin:name` Claude Code records);
+- `held` (not final): the session is hard-blocked (`observe`'s `blocked`
+  with a FAIL: a login, a usage limit, trust); it goes out once that clears;
+- `expired`: its ttl (`--ttl`, default 30 min, max 24 h; `90s`, `2h`, a bare
+  number = minutes) ran out while it waited (working, down, starting,
+  blocked);
+- `failed`: the session is stopped, the transport did not come up, or the
+  typed turn never reached the transcript. Never retyped: a retry could land
+  twice.
+
+Without `--wait` it prints `queued <id>` and exits 0. `--wait` prints the
+final status and detail and exits 0 only on `delivered`, 1 otherwise; bad
+input exits 2. The attach host needs the daemon's elevation (docs/daemon.md,
+"Two session kinds"): a send from a shell that lacks it fails at the attach.
+
+### `inbox <bot> [list [--json] [--tail N] | kick | drain]`
+
+`list` (default, last 20): each message's `at`, id, status, source, a
+60-character preview (never the full text) and the status detail. `kick`
+starts a drainer when a message waits and none runs (the daemon tick does
+this every tick); `drain` is the drainer itself, run in the foreground.
+State: `<BOTCORP_HOME>/state/<bot>/inbox.jsonl` (the messages),
+`inbox.results.jsonl` (each status change, newest wins) and `inbox.drainer`
+(the live drainer's pid).
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 
@@ -786,6 +829,8 @@ Prints the command summary.
 | `BOTCORP_BOTS_DIR` | the bots dir (default `<checkout>/bots`), honoured by the CLI, cockpit, daemon and launcher alike |
 | `COCKPIT_PORT` / `PORT` | cockpit port for `doctor` and the printed URL (default 4477) |
 | `BOTCORP_PTY_COMMAND` | pty-host test seam: `start` hosts this command line instead of `launch.ps1` (tests only) |
+| `BOTCORP_ATTACH_IDLE_MIN` | minutes an attach host (`pty-host --attach`) stays up with no client (default 15) |
+| `BOTCORP_INBOX_POLL_MS` | how often the inbox drainer re-observes a session that is not idle yet (default 10000) |
 | `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; `update --apply/--skip` refuses when it is set |
 | `CLOUDFLARE_API_TOKEN` | `doctor`'s Workers Builds trigger check (`integrations.cloudflare`); env only, the daemon injects it |
 | `BOTCORP_DEBUG` | print stack traces for unexpected errors |

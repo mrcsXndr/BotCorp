@@ -90,7 +90,7 @@ export function activityOf({ alive, blocked = null, breakpoint = false, quietMs 
   return 'unknown';
 }
 
-function ptyOf(name) {
+export function ptyOf(name) {
   const rec = readJson(path.join(STATE_DIR, `${name}.pty.json`));
   if (!rec || !Number.isInteger(rec.port) || typeof rec.token !== 'string' || !pidAlive(rec.pid)) return null;
   return rec;

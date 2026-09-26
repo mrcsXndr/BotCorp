@@ -379,6 +379,20 @@ function Invoke-Automations {
     } catch { Write-DaemonLog "automations: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
+function Invoke-InboxKick {
+    # A message still waiting in the bot's inbox (core/inbox.mjs) gets a
+    # drainer when none runs: the one `botcorp send` started died, or the box
+    # rebooted under a queue. The drainer is detached; this returns at once.
+    param([string]$Bot, [hashtable]$Paths, [switch]$AsDryRun)
+    try {
+        if ($AsDryRun -or -not (Test-Path (Join-Path $Paths.BotStateDir 'inbox.jsonl'))) { return }
+        $node = Resolve-Node
+        if (-not $node) { return }
+        $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $BotCorp 'cli\botcorp.mjs'), 'inbox', $Bot, 'kick') -TimeoutSec 30 -Label 'inbox kick' -Capture -Env @{ BOTCORP_HOME = $script:RtHome; BOTCORP_BOTS_DIR = $script:BotsDir } -WorkingDirectory $BotCorp -Bot $Bot
+        if ("$($r.Output)" -match 'drainer started[^\r\n]*') { Write-DaemonLog "inbox: $($Matches[0])" -Bot $Bot }
+    } catch { Write-DaemonLog "inbox: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
 # --- the per-bot liveness tick ------------------------------------------------------
 function Start-BotCold {
     # COLD-START. Kill the bot.pid holder first (the plugin's own stale-kill
@@ -620,6 +634,7 @@ function Invoke-BotTick {
     # code (idle-gated below like any restart; a dead bot cold-starts onto it).
     if ($script:RestartAllWhy -and $action -eq 'none' -and $alive) { $action = 'restart'; $why = $script:RestartAllWhy }
     Invoke-Automations -Bot $Bot -AsDryRun:$DryRun
+    Invoke-InboxKick -Bot $Bot -Paths $P -AsDryRun:$DryRun
 
     if ($action -in @('none', 'paused', 'locked')) { Write-DaemonLog "no action (alive=$alive poller=$poller$(if ($action -ne 'none') { " $action" }))" -Bot $Bot -Quiet; return }
     if ($DryRun) { Write-DaemonLog "DRYRUN would $action $Bot (alive=$alive poller=$poller)" -Bot $Bot; return }

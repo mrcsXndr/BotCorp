@@ -49,7 +49,8 @@ never secrets:
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
 | `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
-| `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session |
+| `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session; it exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no client |
+| `state/<bot>/inbox.jsonl`, `inbox.results.jsonl`, `inbox.drainer` | `botcorp send` + the inbox drainer (core/inbox.mjs) | the bot's message queue, each message's status changes, the live drainer's pid (docs/cli.md `send`) |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
 | `state/unlock/<bot>.key` | `botcorp secrets unlock` | the operator-lock unlock cache: the vault key, DPAPI-wrapped with entropy bound to the current boot time — dies with the boot, so an operator lock (`vault.lock: operator`) needs `unlock` again after every reboot |
 | `state/<bot>/automations.json`, `runs.jsonl`, `events/`, `jobs/` | automations.ps1 | see docs/automations.md |
@@ -448,6 +449,8 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                         janitor: tools/infra/resource_monitor.ps1 -Clean once a day per bot
                                  (janitor: report -> the same scan WITHOUT -Clean; the log line names what it found)
                         automations: daemon/automations.ps1 -Bot <name> (always)
+                        inbox: a message waits in state/<bot>/inbox.jsonl and no drainer runs -> botcorp inbox <bot> kick
+                               (a detached drainer; not on -DryRun)
   act                   start cap: MaxStartsPerWindow (3) ACTION=START lines per WindowMin (30) in logs/<bot>/daemon.log
                         restart:    busy -> deferred; else spawn restart.ps1 -Bot -OldPid -OldShellPid, then
                                     bg: claude stop <id> (+ guarded kill if it lingers) / pty: Stop-Process claude (if ours)
