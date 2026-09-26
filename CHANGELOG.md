@@ -3,6 +3,37 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+One state model and one observer (R1).
+
+- **`botcorp observe <bot>|--all [--json]`**: what each session is doing right
+  now, measured from the processes and Claude Code's own files, never read
+  back from the state file: `alive`, `activity` (idle, working, blocked,
+  down, unknown), `phase`, poller, bg id, blocker. The daemon tick runs it
+  every 3 min and stores each record as `observed` in `state/<bot>.json`.
+- **State schema 2**: `state/<bot>.json` loses the `status` field. It gets
+  three blocks instead: `desired` (running or stopped, who asked, when),
+  `launch` (the launch attestation plus the launcher's phase and exit code)
+  and `observed`. Migration `002-state-schema-v2` rewrites every state file
+  during `update --apply`; every reader also reads an un-migrated file.
+- **One phase for every reader**: idle, working, blocked, unknown, starting,
+  stopped or down, from `core/state.mjs`. The cockpit (`/api/bots/<bot>`
+  `phase` and the bot list), the tray tooltip, `botcorp status`, doctor's
+  `session alive`, `restart` (waits until observe sees the session alive, up
+  to 90 s), the prompt and `idle_gated` automation gates and the update-apply
+  gate all show or gate on it. A prompt is still only typed into an idle
+  session. Doctor now FAILs a launch left `starting` or `restarting` for
+  more than 5 min (it read INFO).
+- **`BOTCORP_BOTS_DIR`** replaces `<checkout>/bots` for the CLI, cockpit,
+  daemon and launcher alike.
+- **Canary fixture** `bots/_canary/bot.yaml` (`service: manual`, no secrets)
+  for lifecycle and state-model checks. Like every `_` folder it is never
+  supervised; `botcorp doctor` validates the file.
+
+Upgrading: `botcorp update --apply <tag>`. The apply runs migration 002 and
+stamps schema 2; the daemon's next tick runs the new code. No manual step.
+
 ## v0.2.17
 
 - **Prompt automations**: a typed `/name` prompt is confirmed when Claude Code

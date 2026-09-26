@@ -50,15 +50,17 @@ Enter.
 The run counts as **sent** when the prompt shows up as a user turn in the
 session transcript within 30 s. Otherwise it is **failed**.
 
-A due fire is **skipped**, with the reason recorded, when:
+A due fire is **skipped**, with the reason recorded, when the session's phase
+(a fresh `botcorp observe <bot>`, docs/daemon.md "State file") is not `idle`:
 
-1. the session is down: no live pty-host and no live claude pid (what
-   `botcorp status` reads);
-2. the bg session is blocked on a dialog (`session_blocked` in the bot state),
-   because typed text plus Enter could answer it;
-3. the session is busy (`Test-SessionBusy`, the same gate every restart
-   uses: the transcript was written in the last 5 min and no breakpoint is
-   declared);
+1. the session is down (`down` or `stopped`): no live pty-host and no live
+   claude pid;
+2. the session is `blocked` on a dialog, because typed text plus Enter could
+   answer it;
+3. the session is busy (`working`, `starting` or `unknown`: the transcript
+   was written in the last 5 min and no breakpoint is declared, the same
+   semantics as `Test-SessionBusy`), or observe could not run (`session state
+   unknown (observe failed)`);
 4. the account is usage-blocked and the entry is not `critical`;
 5. `max_per_day` has been reached.
 
@@ -93,7 +95,9 @@ streak and the interval/cron schedule resumes from the end of that run.
    names the bot with a future `blocked_until`) and the entry is not
    `critical` -> skipped.
 5. `max_per_day` reached (counter resets at local midnight) -> skipped.
-6. `idle_gated` and the session is busy -> skipped (retried next tick).
+6. `idle_gated` and the session is busy (its observed phase is `working`,
+   `starting` or `unknown`, or observe could not run) -> skipped (retried
+   next tick).
 
 A `kind: prompt` entry has its own gates (see above), and a prompt that is
 gated there is dropped until the next fire instead of being retried.

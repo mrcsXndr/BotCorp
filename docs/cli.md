@@ -489,10 +489,12 @@ no live claude process runs the session exits 3, never 0.
 ### `status [<bot>] [--json]`
 
 Per bot: running (a live pty host pid, or the state file's `claude_pid`
-alive as a process - measured, never read back from the file), pty/host
-pids and port, the daemon's `state/<bot>.json` (`status`, `started_by`,
-`poller`, `claude_pid`; with nothing alive `status=stopped`,
-`claude_pid=-` and `poller=none`, or `poller=ORPHAN` when only the Telegram
+alive as a process - measured, never read back from the file) and its
+`phase` (`idle`, `working`, `blocked`, `unknown`, `starting`, `stopped` or
+`down`, the same record `observe` prints; `phase` and `activity` in
+`--json`), pty/host pids and port, the daemon's `state/<bot>.json` (`launch`
+= the last launch phase, `started_by`, `poller`, `claude_pid`; with nothing
+alive `claude_pid=-` and `poller=none`, or `poller=ORPHAN` when only the Telegram
 poller's `bot.pid` is alive). While the bot is alive with the telegram
 module on, `poller` is measured too: `OWNED` (plus `bot.pid=<pid>`) only when
 `<config home>/channels/telegram/bot.pid` names a live process that descends
@@ -514,6 +516,23 @@ drawer. A bot with declared automations gets an `automations:` line: each
 name, `(prompt)` for a `kind: prompt` entry, and its last result (`sent` /
 `skipped: <reason>` / `failed: ...` for a prompt, `exit N` otherwise);
 `{name, kind, last_result, next_due}` under `automations` in `--json`.
+
+### `observe <bot>|--all [--json] [--roster]`
+
+What each bot's session is doing right now, measured from the processes and
+Claude Code's own files (`core/observe.mjs`), never read back from the state
+file. Read-only. One record per bot: `{bot, alive, activity, phase, poller,
+bg_id, blocked, at, kind, claude_pid, session_id, quiet_s}`. `activity` is
+`down`, `blocked`, `idle`, `working` or `unknown`; `phase` adds the launch
+and the operator's intent (`starting`, `stopped`, `down`); both are defined
+in docs/daemon.md "State file". `--all` = every bot under the bots dir;
+`--json` prints one object for a named bot, an array for `--all`. The text
+form is one line per bot: name, phase, `alive=`, `poller=`, `bg=`, and
+`blocked=` / `quiet=` when they apply.
+`--roster` also asks `claude agents --json` (bg bots), which finds a worker
+the supervisor restarted under a new pid; it writes the config home's
+`.claude.json`, so the daemon tick does not pass it. The tick runs `observe
+--all --json` every 3 min and persists each record as `observed`.
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 
@@ -764,6 +783,7 @@ Prints the command summary.
 | Variable | Meaning |
 |---|---|
 | `BOTCORP_HOME` | machine runtime root (default `~/.botcorp`) |
+| `BOTCORP_BOTS_DIR` | the bots dir (default `<checkout>/bots`), honoured by the CLI, cockpit, daemon and launcher alike |
 | `COCKPIT_PORT` / `PORT` | cockpit port for `doctor` and the printed URL (default 4477) |
 | `BOTCORP_PTY_COMMAND` | pty-host test seam: `start` hosts this command line instead of `launch.ps1` (tests only) |
 | `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; `update --apply/--skip` refuses when it is set |

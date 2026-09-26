@@ -48,7 +48,7 @@ never secrets:
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
-| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record: `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `status` (incl. `locked` — the vault is operator-locked, see below), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `launch` (launch attestation: `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}` — only the nonce's hash, `docs/secrets.md`) |
+| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
 | `state/unlock/<bot>.key` | `botcorp secrets unlock` | the operator-lock unlock cache: the vault key, DPAPI-wrapped with entropy bound to the current boot time — dies with the boot, so an operator lock (`vault.lock: operator`) needs `unlock` again after every reboot |
@@ -72,6 +72,48 @@ launch starts FRESH: a new session id), `.botcorp_resume_prompt` (usage-limit
 resume seed). The Telegram owner-lock lives in the bot's config home:
 `bots/<name>/.claude-<name>/botcorp/tg_owner.lock` (the launcher's pid for a
 pty/fg launch, the claude worker's pid for a bg launch).
+
+`BOTCORP_BOTS_DIR=<dir>` replaces `<checkout>/bots` for every reader and
+writer alike (`core/paths.mjs`, `daemon/_paths.ps1`): the CLI, the cockpit, the
+daemon and the launcher all see the same bot folders. Tests point it at a temp
+dir together with `BOTCORP_HOME`.
+
+### State file (`state/<bot>.json`, schema 2)
+
+There is no `status` field. What a bot is doing is measured, never written
+back as a claim:
+
+| Block | Written by | Shape |
+|---|---|---|
+| `desired` | launch.ps1 (running), stop.ps1 and `botcorp stop` (stopped) | `{state: running\|stopped, by, at}`: what the operator or the daemon asked for |
+| `launch` | vault.ps1 (attestation), launch.ps1 / restart.ps1 / tick (`Set-BotLaunchPhase`) | the attestation plus `{phase, phase_at, exit_code}`; `phase` is `starting`, `cold-starting`, `restarting`, `up`, `exited` or `locked` (the vault is operator-locked, see below) |
+| `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, at, kind, claude_pid, session_id, quiet_s}` |
+
+`activity` is what the session does: `down` (no live claude or pty-host),
+`blocked` (it waits on a person: a login, a usage limit, or its last turn
+asked something), `idle` (a fresh `.botcorp_breakpoint`, or the transcript
+quiet 5 min or more), `working` (the transcript moved within 5 min) or
+`unknown` (alive, nothing tells). These are `Test-SessionBusy`'s semantics:
+working and unknown are busy.
+
+`phase` (`core/state.mjs` `phase()`) is the one status every reader shows and
+gates on: while alive it is the activity (`idle`, `working`, `blocked`,
+`unknown`); not alive it is `starting` (a launch phase `starting`,
+`cold-starting` or `restarting` set under 5 min ago), `stopped` (desired
+stopped, a clean exit 0, or never started) or `down` (it should run and does
+not: the daemon restarts it). Readers: the cockpit (`/api/bots/<bot>` `phase`
++ `activity`), the tray tooltip (the persisted `observed.phase`), `botcorp
+status` / `observe`, doctor's `session alive` (down = FAIL), restart.ps1 (polls
+observe until alive, 90 s cap), the prompt automation gate (only `idle` takes
+a prompt), the `idle_gated` gate and the update-apply gate.
+
+A v1 file (flat `status`, `exit_code`, `stopped_at`, `stopped_by`) reads the
+same way through `core/state.mjs` `stateView()`, so nothing breaks before the
+migration runs. `harness/migrations/002-state-schema-v2.ps1` rewrites every
+v1 file into the blocks (idempotent: a second run changes no byte), and every
+`Write-BotState` converts on write as well (`ConvertTo-BotStateV2`).
+`botcorp.json` `botYamlSchema: 2` is the schema `update.ps1 -Apply` stamps
+after running it.
 
 ## Two session kinds (`bot.yaml` `harness.session`)
 
@@ -206,7 +248,8 @@ same id from its transcript WITH the new flags, so the conversation is kept
 (fresh only when that `rm` fails). Afterwards a launch
 with no live claude process running the session is `bg: FAIL` and exit 3
 (`Get-BgLaunchResult`); doctor's `<bot>: session alive` FAILs a bot whose
-state says running, or whose last launch failed, with no claude process.
+phase is `down` (it should run, or its last launch failed, and no claude
+process runs it; see "State file").
 
 A bare resume keeps the conversation: the transcript, the SessionStart hook's
 session id and the roster row all stay on the resumed id. While the woken
@@ -366,12 +409,15 @@ tasks. It also sets the checkout's repo-local git identity
 ```
 mutex Global\BotCorpDaemon (another tick holds it -> exit 0)
 machine steps
+  observe               node cli/botcorp.mjs observe --all --json (120 s cap) -> `observed` in every state/<bot>.json
+                        (no --roster; fail-open: a failed run leaves the previous record and its `at`)
   cockpit keepalive     GET /healthz; down -> hidden `node cockpit/server.mjs`; capped 3 starts / 30 min;
                         LOOPBACK-ONLY unless <rt>/access.json exists (integrations.access), whatever cockpit.json's bind says
   otel-sink keepalive   if daemon/otel-sink.mjs exists and state/otel.json's pid is gone
   update check          hourly: daemon/update.ps1 -Check (records releases + What/Why/Value; never applies, never messages)
   update apply          only a release with status apply_requested (admin action via CLI/cockpit), and only when
-                        EVERY bot is at a safe point (fresh breakpoint marker or idle per Test-SessionBusy);
+                        EVERY bot's phase this tick is idle, blocked, down or stopped (working, starting,
+                        unknown or not observed defer);
                         update.ps1 -Apply -Tag <tag>; success -> every live bot restarts this tick (idle-gated)
 per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own try/catch
   config                node daemon/botyaml.mjs -> JSON; `_modules` gates every module tick; harness.session picks the kind
@@ -386,7 +432,7 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
   decision              not alive                                    -> cold-start (unless state/<bot>.paused or harness.service: manual)
                         alive + DEAD, launch older than LauncherGraceMin -> restart   (idle-gated)
                         alive + OWNED / UNKNOWN                      -> none
-                        cold-start/restart, vault operator-locked -> locked (state/<bot>.json status: locked;
+                        cold-start/restart, vault operator-locked -> locked (state/<bot>.json launch.phase: locked;
                                     waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
                                     without secrets, a restart would throw away the ones the live session holds)
   guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
@@ -504,8 +550,9 @@ their notes in the cockpit and the weekly digest and presses **Apply** or
 underneath). Not a git checkout -> `not a git checkout`, exit 0.
 
 The tick applies a release only when its status is `apply_requested` AND
-every bot is at a safe point (fresh breakpoint, or idle per `Test-SessionBusy`;
-a bot that is not running is trivially safe): `update.ps1 -Apply -Tag <tag>`,
+every bot is at a safe point (its observed phase is `idle`, `blocked`, `down`
+or `stopped`; `working`, `starting`, `unknown` or not observed this tick
+defers): `update.ps1 -Apply -Tag <tag>`,
 bounded to 3 minutes: refuse on a dirty tree (status `failed`, reason `dirty
 tree`); `git checkout --detach <tag>`; `smoke.ps1`; pass -> `state/harness.json`,
 `harness/migrations/NNN-*.ps1` newer than the recorded schema, `node

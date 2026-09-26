@@ -2450,7 +2450,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>
   start <bot> [--fresh] [--debug] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
-  observe <bot>|--all [--json] [--roster]                               (read-only: alive, activity idle|working|blocked|down|unknown, poller)
+  observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
