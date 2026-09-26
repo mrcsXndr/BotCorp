@@ -574,6 +574,93 @@ def test_tick_dryrun_logs_cc_roll(tick_box):
     assert "cc_roll_at" not in (tick_box["rt"] / "state" / "alpha.json").read_text(encoding="utf-8-sig")   # a dry run records nothing
 
 
+# --- botcorp cc / doctor ---------------------------------------------------------------------
+def _cli_box(tmp_path, pin_bytes: bytes | None = b"stand-in 2.1.283", *, sha: str | None = None) -> dict:
+    """A temp runtime whose cc.json pins 2.1.283 (the exe holds pin_bytes; None = the file is missing)."""
+    rt, bots = tmp_path / "rt", tmp_path / "bots"
+    (rt / "state").mkdir(parents=True)
+    bots.mkdir()
+    pinned = rt / "cc" / "2.1.283" / "claude.exe"
+    pinned.parent.mkdir(parents=True)
+    pinned.write_bytes(b"stand-in 2.1.283")
+    digest = sha or _sha(pinned)
+    if pin_bytes is None:
+        pinned.unlink()
+    else:
+        pinned.write_bytes(pin_bytes)
+    st = {"schema": 1, "checked_at": "2026-09-26T12:00:00Z",
+          "pinned": {"version": "2.1.283", "exe": str(pinned), "sha256": digest, "promoted_at": "2026-09-26T11:00:00Z", "by": "gate"},
+          "previous": [{"version": "2.1.282", "exe": str(rt / "cc" / "2.1.282" / "claude.exe"), "sha256": "00" * 32, "promoted_at": "2026-09-20T00:00:00Z"}],
+          "candidate": {"version": "2.1.284", "status": "failed", "attempts": 1, "detail": "check 4 (inbox delivers): no reply",
+                        "checks": [{"n": 4, "name": "inbox delivers", "result": "FAIL", "detail": "no reply"}], "tested_at": "2026-09-26T11:30:00Z"},
+          "rejected": ["2.1.280"]}
+    (rt / "state" / "cc.json").write_text(json.dumps(st), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_")) and k != "BOTCORP_CLAUDE_EXE"}
+    env.update({"BOTCORP_HOME": str(rt), "BOTCORP_BOTS_DIR": str(bots), "BOT_TG_MUTE": "1"})
+    return {"rt": rt, "bots": bots, "env": env, "pinned": pinned}
+
+
+def _cli(b: dict, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), *args], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=b["env"])
+
+
+def _cli_bot(b: dict, name: str, *, alive: bool, cli_version: str = "", autoupdater_off: bool = True) -> None:
+    home = b["bots"] / name
+    cfg = home / f".claude-{name}"
+    (cfg / "daemon").mkdir(parents=True)
+    (home / ".claude").mkdir()
+    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n", encoding="utf-8")
+    (home / ".claude" / "settings.json").write_text(json.dumps({"env": {"DISABLE_AUTOUPDATER": "1"} if autoupdater_off else {}}), encoding="utf-8")
+    if alive:
+        (b["rt"] / "state" / f"{name}.json").write_text(json.dumps({"bot": name, "status": "running", "claude_pid": os.getpid(), "bg_id": "abcd1234"}), encoding="utf-8")
+        (cfg / "daemon" / "roster.json").write_text(json.dumps({"proto": 1, "workers": {"abcd1234": {"pid": os.getpid(), "cliVersion": cli_version}}}), encoding="utf-8")
+
+
+def test_cc_status_json_shape(tmp_path):
+    b = _cli_box(tmp_path)
+    _cli_bot(b, "alpha", alive=True, cli_version="2.1.282")
+    _cli_bot(b, "beta", alive=False)
+    r = _cli(b, "cc", "status", "--json")
+    assert r.returncode == 0, r.stdout + r.stderr
+    st = json.loads(r.stdout)
+    assert st["pinned"]["version"] == "2.1.283" and st["pinned"]["by"] == "gate"
+    assert [p["version"] for p in st["previous"]] == ["2.1.282"]
+    assert st["candidate"]["version"] == "2.1.284" and st["candidate"]["status"] == "failed" and st["candidate"]["checks"][0]["n"] == 4
+    assert st["rejected"] == ["2.1.280"]
+    by = {x["bot"]: x for x in st["bots"]}
+    assert by["alpha"]["alive"] is True and by["alpha"]["cc_version"] == "2.1.282" and by["alpha"]["on_pin"] is False
+    assert by["beta"]["alive"] is False and by["beta"]["on_pin"] is None
+    txt = _cli(b, "cc", "status")
+    assert txt.returncode == 0 and "2.1.283" in txt.stdout and "roll pending" in txt.stdout, txt.stdout + txt.stderr
+
+
+def _doctor(b: dict) -> dict:
+    r = _cli(b, "doctor", "--json", "--no-accounts", "--no-tg-probe")
+    rows = json.loads(r.stdout)
+    return {c["name"]: c for c in rows}
+
+
+def test_doctor_reports_cc_pin_fail_when_exe_missing(tmp_path):
+    ok = _doctor(_cli_box(tmp_path / "ok"))
+    assert ok["cc pin"]["level"] == "PASS" and "2.1.283" in ok["cc pin"]["detail"], ok.get("cc pin")
+    assert ok["cc candidate"]["level"] == "INFO" and "2.1.284 failed" in ok["cc candidate"]["detail"]
+    assert ok["cc canary"]["level"] == "WARN" and "promotion disabled" in ok["cc canary"]["detail"]
+    gone = _doctor(_cli_box(tmp_path / "gone", pin_bytes=None))
+    assert gone["cc pin"]["level"] == "FAIL" and "missing" in gone["cc pin"]["detail"], gone["cc pin"]
+    tampered = _doctor(_cli_box(tmp_path / "tampered", pin_bytes=b"tampered"))
+    assert tampered["cc pin"]["level"] == "FAIL" and "sha256" in tampered["cc pin"]["detail"], tampered["cc pin"]
+
+
+def test_doctor_cc_autoupdater_row(tmp_path):
+    b = _cli_box(tmp_path)
+    _cli_bot(b, "alpha", alive=False)
+    _cli_bot(b, "beta", alive=False, autoupdater_off=False)
+    rows = _doctor(b)
+    assert rows["cc autoupdater"]["level"] == "WARN" and "beta" in rows["cc autoupdater"]["detail"] and "alpha" not in rows["cc autoupdater"]["detail"]
+    (b["bots"] / "beta" / ".claude" / "settings.json").write_text(json.dumps({"env": {"DISABLE_AUTOUPDATER": "1"}}), encoding="utf-8")
+    assert _doctor(b)["cc autoupdater"]["level"] == "PASS"
+
+
 def test_update_restart_refuses_when_pinned(tmp_path):
     stand_in = tmp_path / "claude.exe"
     stand_in.write_bytes(b"not a program")   # never run: the refusal comes first

@@ -38,19 +38,20 @@ const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = awa
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
+const { ccStatus, botCc, fileSha256 } = await import('../core/cc.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -1813,6 +1814,39 @@ function cmdUpdate({ flags }) {
   return 0;
 }
 
+// The Claude Code pin (daemon/cc.ps1, docs/daemon.md "Claude Code pin"). status
+// reads cc.json and observes each bot now; test runs the gate in the foreground
+// (-Check, then -Test on _canary); rollback moves the pin back, and the tick
+// rolls the bots onto it between turns (never an immediate restart).
+function cmdCc({ pos, flags }) {
+  const action = pos[1] || 'status';
+  if (action === 'status') {
+    const st = ccStatus({ observed: Object.fromEntries(observeAll(listBots()).map((o) => [o.bot, o])) });
+    if (flags.json) { outJson(st); return 0; }
+    const p = st.pinned;
+    out(`pinned     ${p ? `${p.version} (by ${p.by || '?'}, ${p.promoted_at || '?'}) ${p.exe}` : 'none (the daemon\'s hourly check pins the Claude Code that runs today)'}`);
+    out(`previous   ${st.previous.map((x) => x.version).join(', ') || '-'}`);
+    const c = st.candidate;
+    out(`candidate  ${c ? `${c.version} ${c.status}${c.attempts ? ` (attempt ${c.attempts} of 2)` : ''}${c.detail ? `: ${c.detail}` : ''}` : '-'}`);
+    for (const k of (c && Array.isArray(c.checks) ? c.checks : [])) out(`  check ${k.n} ${String(k.result).padEnd(4)} ${k.name}${k.detail ? `: ${k.detail}` : ''}`);
+    out(`rejected   ${st.rejected.join(', ') || '-'}`);
+    for (const b of st.bots) {
+      const runs = b.cc_version || b.cc_exe || '?';
+      out(`${b.bot.padEnd(16)} ${!b.alive ? 'not running' : b.on_pin === true ? `${runs} (the pin)` : b.on_pin === false ? `${runs}: roll pending (the tick rolls it between turns; phase ${b.phase})` : `${runs} (cannot tell)`}`);
+    }
+    return 0;
+  }
+  if (action === 'test') {
+    const code = shellDaemonScript('cc.ps1', ['-Check'], 'cc check');
+    return code || shellDaemonScript('cc.ps1', ['-Test'], 'cc test');
+  }
+  if (action === 'rollback') {
+    if (requestedBy(flags).startsWith('bot:')) fail('cc rollback: an operator action; a bot session cannot move the Claude Code pin');
+    return shellDaemonScript('cc.ps1', ['-Rollback', ...(flags.to ? ['-To', String(flags.to)] : [])], 'cc rollback');
+  }
+  usage('cc status [--json] | cc test | cc rollback [--to <version>]');
+}
+
 const INSTALL_PIPE_HINT = 'pipe it on stdin, never on the command line (process listings show argv):  $pw | node cli\\botcorp.mjs install   (elevated), or register without a stored password with --s4u';
 
 async function cmdInstall({ pos, flags }) {
@@ -2212,6 +2246,21 @@ async function cmdDoctor({ flags }) {
     const ccVer = semver(cv.out + cv.err);
     if (!ccVer) add('FAIL', 'claude', `not runnable (${resolveClaude()})`);
     else add(semverGte(ccVer, semver(minCc)) ? 'PASS' : 'FAIL', 'claude', `${ccVer.join('.')} (min ${minCc}) at ${resolveClaude()}`);
+    // the Claude Code pin (daemon/cc.ps1): a pinned exe is immutable, so a missing or changed one is a FAIL
+    const ccs = readCcState();
+    const pin = ccs && ccs.pinned;
+    if (!pin || !pin.exe) add('WARN', 'cc pin', 'no pin yet (the daemon\'s hourly check pins the Claude Code that runs today)');
+    else if (!fs.existsSync(pin.exe)) add('FAIL', 'cc pin', `pinned ${pin.version} exe missing (${pin.exe}); botcorp cc rollback, or the next check re-pins`);
+    else if (pin.sha256 && fileSha256(pin.exe) !== String(pin.sha256).toLowerCase()) add('FAIL', 'cc pin', `pinned ${pin.version} at ${pin.exe} does not match its recorded sha256 (changed after it was pinned)`);
+    else add('PASS', 'cc pin', `${pin.version} (${pin.by || '?'}) at ${pin.exe}`);
+    const autoOn = listBots().filter((b) => { const j = readJson(path.join(botHome(b), '.claude', 'settings.json')); return !(j && j.env && String(j.env.DISABLE_AUTOUPDATER) === '1'); });
+    add(autoOn.length ? 'WARN' : 'PASS', 'cc autoupdater', autoOn.length ? `on for ${autoOn.join(', ')}: Claude Code can update itself under the pin (botcorp sync <bot>)` : 'off in every bot\'s generated settings');
+    const cand = ccs && ccs.candidate;
+    if (!cand) add('INFO', 'cc candidate', 'none');
+    else add(cand.status === 'rejected' ? 'WARN' : 'INFO', 'cc candidate', `${cand.version} ${cand.status}${cand.detail ? `: ${cand.detail}` : ''}`);
+    const canaryProblem = !fs.existsSync(botYamlPath('_canary')) ? 'no bots/_canary/bot.yaml'
+      : !secretsListJson('_canary').rows.some((r) => r.key === 'oauth_token') ? 'no oauth_token in the _canary vault (botcorp secrets set _canary oauth)' : '';
+    add(canaryProblem ? 'WARN' : 'PASS', 'cc canary', canaryProblem ? `${canaryProblem}: new Claude Code versions stay candidates, promotion disabled` : 'provisioned (the gate starts and stops it)');
     const nv = semver(process.versions.node);
     add(nv[0] >= 20 ? 'PASS' : 'FAIL', 'node', `${process.versions.node} (min 20)`);
     const py = resolvePython();
@@ -2320,6 +2369,12 @@ async function cmdDoctor({ flags }) {
       const rawState = botState(bot);
       const alive = sessionAliveVerdict({ running: s.running, state: rawState, paused: fs.existsSync(pausedPath(bot)) });
       add(alive.level, `${bot}: session alive`, `${alive.detail}${alive.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} --fresh` : ''}`, 'bots');
+      {
+        const c = botCc(bot, rawState && rawState.observed, pin);
+        if (c.on_pin === true) add('PASS', `${bot}: cc running`, `${c.cc_version || c.cc_exe} (the pin)`, 'bots');
+        else if (c.on_pin === false) add('WARN', `${bot}: cc running`, `roll pending: runs ${c.cc_version || c.cc_exe}, pin ${pin.version} (the tick rolls it between turns; phase ${c.phase})`, 'bots');
+        else add('INFO', `${bot}: cc running`, c.alive ? 'cannot tell (no pin, or observe reported neither exe nor version)' : 'not running (as of the last tick)', 'bots');
+      }
       if (cfg.harness.session !== 'pty') {
         const bgId = String((rawState && rawState.bg_id) || '');
         let pins = null; let pinsError = '';
@@ -2518,6 +2573,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   (start, stop, restart, sync, secrets, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
+  cc status [--json] | cc test | cc rollback [--to <version>]          (the Claude Code pin: bots roll onto it between turns)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)
   suggest <bot> --topic <t> [--lesson <file>] [--dry-run]
@@ -2534,7 +2590,7 @@ const COMMANDS = {
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   send: cmdSend, inbox: cmdInbox,
-  update: cmdUpdate, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
+  update: cmdUpdate, cc: cmdCc, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
   help: () => { out(HELP); return 0; },
 };
 
