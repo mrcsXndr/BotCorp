@@ -78,8 +78,9 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
   const job = jobFile ? await readJson(jobFile) : null;
   const block = bgBlockVerdict({ running: live.alive, bgId, job });
   const blocked = block.level === 'FAIL' || block.level === 'WARN';
-  // core/observe.mjs's activity from this measurement, and the one phase every reader shows (core/state.mjs)
-  const activity = activityOf({ alive: live.alive, blocked, breakpoint: live.alive && breakpointFresh(name), quietMs: live.alive ? transcriptQuietMs(name) : null });
+  // core/observe.mjs's activity from this measurement, and the one phase every reader shows (core/state.mjs);
+  // only a hard block (FAIL) is activity `blocked`, a WARN session still takes its next prompt
+  const activity = activityOf({ alive: live.alive, blocked: block.level === 'FAIL', breakpoint: live.alive && breakpointFresh(name), quietMs: live.alive ? transcriptQuietMs(name) : null });
   return {
     running: live.alive,
     activity,

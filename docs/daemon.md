@@ -90,8 +90,9 @@ back as a claim:
 | `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, at, kind, claude_pid, session_id, quiet_s}` |
 
 `activity` is what the session does: `down` (no live claude or pty-host),
-`blocked` (it waits on a person: a login, a usage limit, or its last turn
-asked something), `idle` (a fresh `.botcorp_breakpoint`, or the transcript
+`blocked` (it waits on something nothing unattended answers: a login, a
+usage limit, trust; a session whose last turn asked something keeps that
+question in `observed.blocked` but reads idle or working), `idle` (a fresh `.botcorp_breakpoint`, or the transcript
 quiet 5 min or more), `working` (the transcript moved within 5 min) or
 `unknown` (alive, nothing tells). These are `Test-SessionBusy`'s semantics:
 working and unknown are busy.

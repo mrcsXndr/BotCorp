@@ -49,6 +49,11 @@ test('blocked: the job record waits on a person (doctor `session not blocked`)',
   assert.equal(live.running, true);
   assert.equal(live.blocked.needs, 'approve config change 825a64 in cockpit');
   assert.match(live.blocked.detail, /waits on/);
+  // its last turn asked something (WARN): shown, but it still takes a prompt, so the phase is not blocked
+  assert.notEqual(live.phase, 'blocked');
+  // a login (FAIL) is a hard block: nothing typed answers it
+  jobRecord(cfgDir, { tempo: 'blocked', needs: 'login required - run /login' });
+  assert.equal((await liveness('blocked', {}, state, null, cfgDir)).phase, 'blocked');
   // idle between prompts is not blocked
   jobRecord(cfgDir, { tempo: 'blocked', needs: 'send a prompt to start' });
   assert.equal((await liveness('blocked', {}, state, null, cfgDir)).blocked, null);

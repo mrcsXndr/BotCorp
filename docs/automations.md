@@ -55,8 +55,9 @@ A due fire is **skipped**, with the reason recorded, when the session's phase
 
 1. the session is down (`down` or `stopped`): no live pty-host and no live
    claude pid;
-2. the session is `blocked` on a dialog, because typed text plus Enter could
-   answer it;
+2. the session is `blocked` on a login, usage-limit or trust dialog, because
+   typed text plus Enter could answer it. A session whose last turn merely
+   ended asking something is not blocked: it takes the prompt;
 3. the session is busy (`working`, `starting` or `unknown`: the transcript
    was written in the last 5 min and no breakpoint is declared, the same
    semantics as `Test-SessionBusy`), or observe could not run (`session state

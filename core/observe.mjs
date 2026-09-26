@@ -7,8 +7,11 @@
 // at, kind, claude_pid, session_id, quiet_s } (`phase`: core/state.mjs, from
 // this measurement and the state file). `activity` is one of ACTIVITIES:
 //   down     no live claude (bg) or pty-host process
-//   blocked  the session waits on a person (bgBlockVerdict FAIL or WARN:
-//            a login or usage limit, or its last turn ended asking something)
+//   blocked  the session waits on something nothing unattended answers
+//            (bgBlockVerdict FAIL: a login, a usage limit, trust). A WARN (its
+//            last turn ended asking something) is still carried in `blocked`
+//            for display, but the activity comes from the transcript: the
+//            session takes its next prompt.
 //   working  the transcript moved within QUIET_MIN and no fresh breakpoint
 //   idle     a fresh breakpoint (<BotHome>/.claude/.botcorp_breakpoint), or
 //            the transcript quiet >= QUIET_MIN
@@ -133,7 +136,7 @@ export function observeBot(name, { roster = false, parents = processParents } = 
   }
   const now = Date.now();
   const quietMs = alive ? transcriptQuietMs(name, now) : null;
-  const activity = activityOf({ alive, blocked, breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState });
+  const activity = activityOf({ alive, blocked: !!blocked && blocked.level === 'FAIL', breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState });
   return {
     bot: name,
     alive,

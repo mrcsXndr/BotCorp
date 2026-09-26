@@ -24,7 +24,11 @@ One state model and one observer (R1).
   `session alive`, `restart` (waits until observe sees the session alive, up
   to 90 s), the prompt and `idle_gated` automation gates and the update-apply
   gate all show or gate on it. A prompt is still only typed into an idle
-  session. Doctor now FAILs a launch left `starting` or `restarting` for
+  session. `blocked` now means a hard block only (a login, a usage limit,
+  trust). A session whose last turn ended asking something is shown with
+  that question but reads idle or working, so a scheduled prompt still
+  reaches it. Before, it was skipped until the question cleared, which could
+  take hours. Doctor now FAILs a launch left `starting` or `restarting` for
   more than 5 min (it read INFO).
 - **`BOTCORP_BOTS_DIR`** replaces `<checkout>/bots` for the CLI, cockpit,
   daemon and launcher alike.
