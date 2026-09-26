@@ -3,7 +3,7 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## Unreleased
+## v0.3.0
 
 One state model and one observer (R1).
 
