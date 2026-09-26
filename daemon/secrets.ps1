@@ -60,7 +60,7 @@ function Test-PathUnder { param([string]$Path, [string]$Root) return ("$Path\".S
 $root = if ($BotCorpRoot) { $BotCorpRoot } else { Split-Path $PSScriptRoot -Parent }
 $botsDir = Get-BotsDir -Root $root
 $botHome = Join-Path $botsDir $Bot
-if ($Bot -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { Write-Error "secrets: bad bot name '$Bot'"; exit 1 }
+if ($Bot -notmatch '^_?[a-z0-9][a-z0-9-]{0,31}$') { Write-Error "secrets: bad bot name '$Bot'"; exit 1 }   # '_' = a shipped fixture, started by hand
 if (-not (Test-Path (Join-Path $botHome 'bot.yaml'))) { Write-Error "secrets: no bot at $botHome (no bot.yaml)"; exit 1 }
 
 $aliases = @{ oauth = 'oauth_token'; telegram = 'telegram_token'; hub = 'hub_token' }

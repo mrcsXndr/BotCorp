@@ -160,7 +160,8 @@ async function cmdSecrets({ pos, flags }) {
   const [, action, bot, key] = pos;
   if (!action) usage('secrets set|list|delete|acl|audit|migrate|lock|unlock|export-bundle|import-bundle <bot> [key]   (key = any name; oauth|telegram|hub alias oauth_token|telegram_token|hub_token; others reach automations as UPPERCASE env via automations[].secrets)');
   if (action === 'audit') return cmdSecretsAudit(bot, flags);
-  requireBot(bot);
+  // a '_' fixture needs its own oauth_token to be started by hand
+  requireBot(bot, HAND_NAME_RE);
   if (action === 'list') {
     const r = flags.json ? secretsListJson(bot) : runPwshFile(SECRETS_PS1, ['-Bot', bot, '-Action', 'list', '-BotCorpRoot', ROOT], { timeoutMs: 60_000 });
     if (flags.json) { if (!r.ok) fail(r.err); outJson(r.rows); return 0; }
@@ -2514,7 +2515,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
   send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order once the session is idle)
   inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
-  (start, stop, restart, sync, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
+  (start, stop, restart, sync, secrets, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)

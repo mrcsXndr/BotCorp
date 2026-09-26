@@ -81,6 +81,14 @@ def test_sync_takes_the_fixture(box):
     assert (bots / "_canary" / ".claude" / "settings.json").exists()
 
 
+def test_secrets_take_the_fixture(box):
+    # a real start needs the fixture's own oauth_token in its vault
+    _, _, env = box
+    r = _cli(env, "secrets", "list", "_canary", "--json")
+    assert r.returncode == 0 and "bad bot name" not in r.stderr, r.stderr + r.stdout
+    assert _cli(env, "secrets", "list", "__canary", "--json").returncode == 2
+
+
 def test_other_verbs_and_bad_names_are_refused(box):
     _, _, env = box
     assert _cli(env, "status", "_canary").returncode == 2
