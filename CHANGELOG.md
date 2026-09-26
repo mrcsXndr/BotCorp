@@ -3,6 +3,16 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+- **Janitor transcript prune stamp is per bot.** `resource_monitor.ps1
+  -Clean` kept its once-a-day stamp in the harness checkout, so the first
+  bot to prune each day skipped every other bot's config home, and the
+  untracked file made `botcorp doctor` warn "harness edited in place". It now
+  lives in the config home it guards (`.botcorp_transcript_prune_stamp`).
+  Upgrading: delete `harness/tools/infra/.transcript_prune_stamp` from the
+  checkout.
+
 ## v0.4.0
 
 The inbox (R2): one queue per bot, the one way text reaches a session.

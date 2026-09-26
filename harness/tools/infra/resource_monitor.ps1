@@ -341,7 +341,9 @@ try {
 if ($Clean) {
   try {
     $projectsDir = Join-Path $ConfigHome 'projects'
-    $stamp = Join-Path $PSScriptRoot '.transcript_prune_stamp'
+    # Per config home, never in the harness checkout: a shared stamp let one
+    # bot's daily prune skip every other bot's, and dirtied the checkout.
+    $stamp = Join-Path $ConfigHome '.botcorp_transcript_prune_stamp'
     $due = -not (Test-Path $stamp)
     if (-not $due) { if (((Get-Date) - (Get-Item $stamp).LastWriteTime).TotalHours -ge 24) { $due = $true } }
     if ($due -and (Test-Path $projectsDir)) {
