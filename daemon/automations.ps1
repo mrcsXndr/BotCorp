@@ -36,7 +36,8 @@
 #
 # `botcorp automations pause` flips `enabled: false` in bot.yaml; this script
 # only honours it. -RunNow <name> queues one run now, respecting timeout_min but
-# not max_per_day (the cockpit's "Run now").
+# not max_per_day (the cockpit's "Run now"). `botcorp automations <bot> run
+# <name>` queues the same thing in events/run-now.queue for the next pass.
 #
 # Test seam: BOTCORP_FAKE_NOW=<ISO> overrides "now" for the schedule (due,
 # next_due, runs_today's date, run start/end stamps). Harmless when unset.
@@ -305,22 +306,49 @@ $today = $now.ToString('yyyy-MM-dd')
 $blocked = Test-BotAccountBlocked -Bot $Bot
 $inline = @()
 
+# `botcorp automations <bot> run <name>` appends {automation, ts} lines to
+# events/run-now.queue. The pass takes the whole file by an atomic rename (a CLI
+# append racing it starts a fresh queue for the next pass) and marks each known
+# name due once, however often it was queued; unknown names are logged and dropped.
+$queued = New-Object 'System.Collections.Generic.HashSet[string]'
+$rnq = Join-Path $EventsDir 'run-now.queue'
+if (Test-Path -LiteralPath $rnq) {
+    $take = $rnq
+    if (-not $DryRun) {
+        $take = "$rnq.$PID.taking"
+        try { Move-Item -LiteralPath $rnq -Destination $take -Force -ErrorAction Stop } catch { Log "run-now queue not taken (fail-open): $($_.Exception.Message)"; $take = $null }
+    }
+    if ($take) {
+        foreach ($ln in @(Get-Content -LiteralPath $take -ErrorAction SilentlyContinue)) {
+            if (-not "$ln".Trim()) { continue }
+            $n = $null; try { $n = "$(($ln | ConvertFrom-Json).automation)" } catch {}
+            if (-not $n) { Log 'run-now: dropped an unreadable queue line'; continue }
+            if (-not @($autos | Where-Object { "$($_.name)" -eq $n }).Count) { Log "run-now: dropped '$n' (no such automation in bot.yaml)"; continue }
+            [void]$queued.Add($n)
+        }
+        if (-not $DryRun) { Remove-Item -LiteralPath $take -Force -ErrorAction SilentlyContinue }
+        if ($queued.Count) { Log "run-now queued: $(@($queued) -join ', ')" }
+    }
+}
+
 if ($autos.Count -gt 0 -or $RunNow) {
     Use-AutoState {
         param($st)
         foreach ($a in $autos) {
             $name = "$($a.name)"
             if ($RunNow -and $name -ne $RunNow) { continue }
+            $isRunNow = ($RunNow -or $queued.Contains($name))
             if (-not $st.ContainsKey($name)) { $st[$name] = @{} }
             $e = $st[$name]
             $enabled = -not (($a.PSObject.Properties.Name -contains 'enabled') -and ($a.enabled -eq $false))
 
             if ($e['running_run_id']) {
                 $rp = [int](Num $e['running_pid'] 0)
-                if ($rp -gt 0 -and (Test-ProcAlive $rp @('pwsh', 'powershell'))) { Log "$name still running (run $($e['running_run_id']), waiter pid $rp)" -Quiet; continue }
+                if ($rp -gt 0 -and (Test-ProcAlive $rp @('pwsh', 'powershell'))) { Log "$name still running (run $($e['running_run_id']), waiter pid $rp)$(if ($isRunNow) { '; run-now dropped' })" -Quiet:(-not $isRunNow); continue }
                 Log "$name run $($e['running_run_id']) has no live waiter - clearing the record"
                 $e['running_run_id'] = $null; $e['running_pid'] = $null; $e['running_since'] = $null
             }
+            if (-not $enabled -and $isRunNow) { Log "run-now for $name dropped: disabled (enabled: false in bot.yaml)" }
             # A skip reason is logged once per change, not every 3-minute tick.
             if (-not $enabled) { if ("$($e['last_skip'])" -ne 'disabled') { Log "skip ${name}: disabled (enabled: false in bot.yaml)"; $e['last_skip'] = 'disabled' }; continue }
             if ("$($e['runs_today_date'])" -ne $today) { $e['runs_today'] = 0; $e['runs_today_date'] = $today }
@@ -328,7 +356,7 @@ if ($autos.Count -gt 0 -or $RunNow) {
             $trig = $a.trigger
             $due = $false; $reason = ''
             $eventName = $null; try { if ($trig.event) { $eventName = "$($trig.event)" } } catch {}
-            if ($RunNow) { $due = $true; $reason = 'run-now' }
+            if ($isRunNow) { $due = $true; $reason = 'run-now' }
             elseif ($eventName) {
                 $q = Join-Path $EventsDir "$eventName.queue"
                 if ((Test-Path $q) -and ((Get-Item $q).Length -gt 0)) { $due = $true; $reason = "event $eventName queued" }

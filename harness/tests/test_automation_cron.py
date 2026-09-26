@@ -59,3 +59,30 @@ def test_a_cron_job_run_records_its_next_due(repo_bot, cron):
     assert "state update failed" not in logs, logs
     state = json.loads((rt / "state" / name / "automations.json").read_text(encoding="utf-8-sig"))
     assert state["monthly"].get("next_due"), state
+
+
+@needs_win
+def test_the_run_now_queue_runs_a_queued_name_once_and_empties(repo_bot):
+    name, home, rt, env = repo_bot
+    (home / "bot.yaml").write_text(
+        f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n"
+        "automations:\n  - name: monthly\n    trigger: {cron: \"0 5 2 * *\"}\n    command: \"echo ran\"\n"
+        "    timeout_min: 0.2\n    idle_gated: false\n", encoding="utf-8")
+    for _ in range(2):   # queued twice, runs once
+        q = subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "automations", name, "run", "monthly"],
+                           capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY), env=env)
+        assert q.returncode == 0, q.stderr + q.stdout
+    queue = rt / "state" / name / "events" / "run-now.queue"
+    with queue.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"automation": "nope"}) + "\n")
+
+    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "automations.ps1"),
+                        "-Bot", name], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+    assert r.returncode == 0, r.stderr + r.stdout
+    logs = (rt / "logs" / name / "daemon.log").read_text(encoding="utf-8-sig", errors="replace")
+    assert logs.count("run-now queued: monthly") == 1, logs
+    assert logs.count("(run-now) -> inline") == 1, logs
+    assert "run-now: dropped 'nope' (no such automation in bot.yaml)" in logs, logs
+    assert not list(queue.parent.glob("run-now.queue*")), list(queue.parent.iterdir())
+    runs = [ln for ln in (rt / "state" / name / "runs.jsonl").read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
+    assert [json.loads(ln)["automation"] for ln in runs] == ["monthly"]

@@ -524,7 +524,8 @@ applied at once; the next daemon tick honours it). `run` appends
 `{"automation": "<name>", "ts": "<iso>"}` to
 `<BOTCORP_HOME>/state/<bot>/events/run-now.queue`, which
 `daemon/automations.ps1` consumes on its next tick (the run still obeys
-`timeout_min`, `max_per_day` and the idle gate).
+`timeout_min`, `max_per_day` and the idle gate). A name queued twice runs
+once; an unknown or disabled name is logged and dropped.
 
 ### `update [--json]` / `update --apply <tag>` / `update --skip <tag>` / `update --check`
 
