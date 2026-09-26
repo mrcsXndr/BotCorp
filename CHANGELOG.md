@@ -15,8 +15,9 @@ One state model and one observer (R1).
 - **State schema 2**: `state/<bot>.json` loses the `status` field. It gets
   three blocks instead: `desired` (running or stopped, who asked, when),
   `launch` (the launch attestation plus the launcher's phase and exit code)
-  and `observed`. Migration `002-state-schema-v2` rewrites every state file
-  during `update --apply`; every reader also reads an un-migrated file.
+  and `observed`, and carries its own `schema: 2`. The daemon tick rewrites
+  every v1 state file on its first run on the new code; every reader also
+  reads an un-migrated file. `bot.yaml` is untouched (`botYamlSchema` stays 1).
 - **One phase for every reader**: idle, working, blocked, unknown, starting,
   stopped or down, from `core/state.mjs`. The cockpit (`/api/bots/<bot>`
   `phase` and the bot list), the tray tooltip, `botcorp status`, doctor's
@@ -31,8 +32,8 @@ One state model and one observer (R1).
   for lifecycle and state-model checks. Like every `_` folder it is never
   supervised; `botcorp doctor` validates the file.
 
-Upgrading: `botcorp update --apply <tag>`. The apply runs migration 002 and
-stamps schema 2; the daemon's next tick runs the new code. No manual step.
+Upgrading: `botcorp update --apply <tag>`. The daemon's next tick runs the
+new code and migrates the state files. No manual step.
 
 ## v0.2.17
 

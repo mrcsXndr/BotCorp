@@ -109,11 +109,12 @@ a prompt), the `idle_gated` gate and the update-apply gate.
 
 A v1 file (flat `status`, `exit_code`, `stopped_at`, `stopped_by`) reads the
 same way through `core/state.mjs` `stateView()`, so nothing breaks before the
-migration runs. `harness/migrations/002-state-schema-v2.ps1` rewrites every
+migration runs. Every tick starts with `Update-BotStatesV2`, which rewrites every
 v1 file into the blocks (idempotent: a second run changes no byte), and every
-`Write-BotState` converts on write as well (`ConvertTo-BotStateV2`).
-`botcorp.json` `botYamlSchema: 2` is the schema `update.ps1 -Apply` stamps
-after running it.
+`Write-BotState` converts on write as well (`ConvertTo-BotStateV2`). The
+state schema is versioned in each file (`schema: 2`), separately from
+`botcorp.json` `botYamlSchema`, which numbers the `bot.yaml` migrations in
+`harness/migrations/` and is unchanged.
 
 ## Two session kinds (`bot.yaml` `harness.session`)
 
@@ -409,6 +410,7 @@ tasks. It also sets the checkout's repo-local git identity
 ```
 mutex Global\BotCorpDaemon (another tick holds it -> exit 0)
 machine steps
+  state schema          Update-BotStatesV2: every v1 state/<bot>.json -> v2 (a no-op once all are v2)
   observe               node cli/botcorp.mjs observe --all --json (120 s cap) -> `observed` in every state/<bot>.json
                         (no --roster; fail-open: a failed run leaves the previous record and its `at`)
   cockpit keepalive     GET /healthz; down -> hidden `node cockpit/server.mjs`; capped 3 starts / 30 min;

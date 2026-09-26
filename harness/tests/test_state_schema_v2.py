@@ -1,10 +1,11 @@
 """State schema v2: `desired` / `launch` / `observed`, no `status` field.
 
 Locked behaviour:
-- harness/migrations/002-state-schema-v2.ps1 rewrites every <BOTCORP_HOME>/state/<bot>.json
-  from v1 (flat status / exit_code / stopped_at / stopped_by) into the blocks, keeps
-  the vault attestation inside `launch`, leaves non-bot files (updates.json, ...)
-  alone, and a second run changes no byte;
+- the tick's Update-BotStatesV2 (daemon/_common.ps1) rewrites every
+  <BOTCORP_HOME>/state/<bot>.json from v1 (flat status / exit_code / stopped_at /
+  stopped_by) into the blocks, keeps the vault attestation inside `launch`, leaves
+  non-bot files (updates.json, ...) alone, and a second run changes no byte. It is
+  not a harness/migrations script: that number (botYamlSchema) is bot.yaml's;
 - the readers (core/state.mjs stateView, cli/_lib.mjs sessionAliveVerdict) read an
   un-migrated v1 file the same way as its migrated v2 form;
 - Set-BotLaunchPhase keeps the attestation, and a new attestation (New-LaunchNonce)
@@ -32,7 +33,6 @@ import pytest
 
 ASSEMBLY = Path(__file__).resolve().parents[2]
 COMMON = ASSEMBLY / "daemon" / "_common.ps1"
-MIGRATION = ASSEMBLY / "harness" / "migrations" / "002-state-schema-v2.ps1"
 
 pytestmark = pytest.mark.skipif(sys.platform != "win32" or shutil.which("pwsh") is None or shutil.which("node") is None,
                                 reason="Windows with pwsh and node on PATH")
@@ -53,11 +53,6 @@ def rt(tmp_path):
                 "BOTCORP_DAEMON_MUTEX": f"Global\\BotCorpDaemon-test-{secrets.token_hex(8)}", "BOT_TG_MUTE": "1"})
     (tmp_path / "bots").mkdir()
     return home, env
-
-
-def _migrate(env: dict) -> subprocess.CompletedProcess:
-    return subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(MIGRATION)],
-                          capture_output=True, text=True, timeout=180, cwd=str(ASSEMBLY), env=env)
 
 
 def _ps(body: str, env: dict) -> str:
@@ -95,9 +90,8 @@ def test_the_migration_folds_v1_into_the_blocks_and_runs_idempotently(rt):
     _write(st / "delta.json", other)
     v1_views = {b: _node(f"s.stateView({json.dumps(r)})", env) for b, r in (("alpha", V1_RUNNING), ("beta", V1_STOPPED), ("gamma", V1_FAILED))}
 
-    r = _migrate(env)
-    assert r.returncode == 0, r.stderr + r.stdout
-    assert "3 bot state files, 3 rewritten, 0 failed" in r.stdout
+    migrate = "$r = Update-BotStatesV2; \"$($r.Seen) $($r.Changed) $($r.Failed)\""
+    assert _ps(migrate, env) == "3 3 0"
 
     a = _read(st / "alpha.json")
     assert "status" not in a and "exit_code" not in a and a["schema"] == 2
@@ -123,8 +117,7 @@ def test_the_migration_folds_v1_into_the_blocks_and_runs_idempotently(rt):
     assert verdicts == ["FAIL", "FAIL", "INFO", "INFO", "FAIL", "FAIL"]
 
     before = {p.name: p.read_bytes() for p in st.iterdir()}
-    r2 = _migrate(env)
-    assert r2.returncode == 0 and "3 bot state files, 0 rewritten, 0 failed" in r2.stdout, r2.stdout
+    assert _ps(migrate, env) == "3 0 0"
     assert {p.name: p.read_bytes() for p in st.iterdir()} == before
 
 
@@ -167,6 +160,7 @@ def test_a_real_tick_persists_observed(rt, tmp_path):
     assert r.returncode == 0, r.stderr
     log = (home / "daemon.log").read_text(encoding="utf-8")
     assert "ACTION=START" not in log and "observe:" not in log, log[-2000:]
+    assert "state file rewritten to schema v2" in log, "the tick migrates a v1 file before it observes"
     s = _read(home / "state" / f"{name}.json")
     assert "status" not in s and s["schema"] == 2
     o = s["observed"]

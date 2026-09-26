@@ -1224,6 +1224,27 @@ function ConvertTo-BotStateV2 {
     return @{ State = $m; Changed = $true }
 }
 
+function Update-BotStatesV2 {
+    # Rewrite every v1 <BOTCORP_HOME>/state/<bot>.json to v2, once per tick
+    # before anything reads it. Idempotent: a v2 file is left byte-for-byte as
+    # it was, so after the first tick on the new code this only reads. A miss
+    # heals on its own (every reader takes v1, every Write-BotState converts).
+    # Returns @{ Seen; Changed; Failed }.
+    $seen = 0; $changed = 0; $failed = 0
+    foreach ($f in @(Get-ChildItem -Path $script:StateDir -Filter '*.json' -File -ErrorAction SilentlyContinue)) {
+        $name = $f.BaseName
+        $st = Read-JsonFile -Path $f.FullName
+        # bot state files only (updates.json, harness.json, daemon.json share the folder)
+        if (-not $st -or "$($st.bot)" -ne $name) { continue }
+        $seen++
+        $v2 = ConvertTo-BotStateV2 -State $st
+        if (-not $v2.Changed) { continue }
+        if (Write-JsonFile -Path $f.FullName -Object $v2.State -Depth 6) { $changed++; Write-DaemonLog 'state file rewritten to schema v2' -Bot $name }
+        else { $failed++; Write-DaemonLog 'state file NOT rewritten to schema v2 (readers still take v1)' -Bot $name }
+    }
+    return @{ Seen = $seen; Changed = $changed; Failed = $failed }
+}
+
 function Set-BotLaunchPhase {
     # launch.phase (starting | cold-starting | restarting | up | exited | locked)
     # merged into the `launch` block next to the vault attestation, with any

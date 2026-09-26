@@ -678,6 +678,9 @@ try {
     $script:RestartAllWhy = $null
     $script:Observed = @{}
     if (-not $ProbeOnly) {
+        # state schema v2 has its own version (`schema` in each file), migrated here, not by
+        # harness/migrations (that number is bot.yaml's); a no-op once every file is v2
+        if (-not $DryRun) { [void](Update-BotStatesV2) }
         # one measurement per tick, persisted as state/<bot>.json `observed` (state schema v2)
         $script:Observed = Update-BotsObserved -NoWrite:$DryRun
         Invoke-CockpitKeepalive -AsDryRun:$DryRun
