@@ -2,7 +2,9 @@
 # Like every '_' folder it is never supervised: the daemon, the cockpit and
 # `botcorp status` skip it, and `botcorp doctor` only validates this file.
 # `service: manual` keeps it off the cold-start path even when copied to a
-# real bot folder. It declares no secrets and no Telegram token.
+# real bot folder. It declares only `oauth_token` (the value lives in its
+# vault, never here: `botcorp secrets set _canary oauth`) and no Telegram token.
+# Without that vault entry a real start refuses to launch.
 
 name: _canary
 persona: "A canary: exists to be started, observed and stopped."
@@ -10,4 +12,4 @@ harness:
   service: manual
   modules:
     telegram: false
-secrets: []
+secrets: [oauth_token]
