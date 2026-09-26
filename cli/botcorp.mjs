@@ -91,7 +91,7 @@ function doSync(bot, dryRun = false) {
 // home when the module is on and it is missing (an imported or adopted bot).
 // Not in daemon/sync.mjs: the tick runs that one and must not touch the network.
 function cmdSync({ pos, flags }) {
-  const bot = requireBot(pos[1]);
+  const bot = requireBot(pos[1], HAND_NAME_RE);
   const dryRun = !!flags['dry-run'];
   doSync(bot, dryRun);
   let telegram = false;
@@ -2514,7 +2514,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
   send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order once the session is idle)
   inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
-  (start, stop, restart, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
+  (start, stop, restart, sync, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)

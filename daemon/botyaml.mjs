@@ -76,7 +76,7 @@ export const DEFAULTS = {
   suggest: { weekly: false, max_prs_per_week: 2, digest_bot: null },
 };
 
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const NAME_RE = /^_?[a-z0-9][a-z0-9-]{0,31}$/;   // '_' = a shipped fixture (bots/_canary), named like its folder
 
 function isObj(v) { return v && typeof v === 'object' && !Array.isArray(v); }
 

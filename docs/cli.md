@@ -418,9 +418,10 @@ says so). `reject` drops the entry.
 
 ### `start <bot> [--fresh] [--debug] [--dry-run]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
 
-These three, `send`, `inbox` and `observe` also take a shipped `_` fixture
-(`bots/_canary`), which the daemon never supervises or cold-starts; an
-operator starts, sends to and stops it by hand. `start --dry-run` runs
+These three, `sync`, `send`, `inbox` and `observe` also take a shipped `_`
+fixture (`bots/_canary`, whose `name:` is its folder name), which the daemon
+never supervises or cold-starts; an operator syncs, starts, sends to and stops
+it by hand. `start --dry-run` runs
 `launch.ps1 -DryRun` (bg) or prints the pty-host command (pty): nothing is
 launched, no nonce minted, a paused marker kept.
 

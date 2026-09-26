@@ -4,7 +4,7 @@
 # `service: manual` keeps it off the cold-start path even when copied to a
 # real bot folder. It declares no secrets and no Telegram token.
 
-name: canary
+name: _canary
 persona: "A canary: exists to be started, observed and stopped."
 harness:
   service: manual

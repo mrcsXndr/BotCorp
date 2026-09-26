@@ -24,7 +24,7 @@ export const BOTCORP_HOME = process.env.BOTCORP_HOME || path.join(os.homedir(), 
 export const STATE_DIR = path.join(BOTCORP_HOME, 'state');
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 // NAME_RE or a shipped '_' fixture (bots/_canary): the verbs an operator runs by
-// hand (start, stop, restart, send, observe) take one. Nothing supervises it.
+// hand (start, stop, restart, sync, send, observe) take one. Nothing supervises it.
 export const HAND_NAME_RE = /^_?[a-z0-9][a-z0-9-]{0,31}$/;
 export const SENDER_RE = /^[0-9]{1,20}$/;
 

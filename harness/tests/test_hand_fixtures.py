@@ -3,7 +3,8 @@
 Locked behaviour:
 - `botcorp start _canary --dry-run` is accepted and reaches launch.ps1 -DryRun
   (nothing launched, no nonce minted); `stop` and `observe` take the name too;
-- every other verb keeps NAME_RE (`sync _canary` is a usage error), and a name
+- `sync _canary` passes: its bot.yaml `name:` is the folder name;
+- every other verb keeps NAME_RE (`status _canary` is a usage error), and a name
   that is only underscores or has two is still refused;
 - `status` / `observe --all` never list a '_' folder;
 - pty-host accepts the name (an attach host can serve the canary);
@@ -71,9 +72,17 @@ def test_stop_and_observe_take_the_fixture(box):
     assert o["bot"] == "_canary" and o["alive"] is False and o["phase"] in ("stopped", "down"), o
 
 
+def test_sync_takes_the_fixture(box):
+    # its bot.yaml `name:` is the folder name, which sync checks after validate()
+    _, bots, env = box
+    r = _cli(env, "sync", "_canary")
+    assert r.returncode == 0 and "sync: _canary ok" in r.stdout, r.stderr + r.stdout
+    assert (bots / "_canary" / ".claude" / "settings.json").exists()
+
+
 def test_other_verbs_and_bad_names_are_refused(box):
     _, _, env = box
-    assert _cli(env, "sync", "_canary").returncode == 2
+    assert _cli(env, "status", "_canary").returncode == 2
     for bad in ("_", "__canary", "_Canary"):
         r = _cli(env, "start", bad, "--dry-run")
         assert r.returncode == 2, (bad, r.stdout, r.stderr)
