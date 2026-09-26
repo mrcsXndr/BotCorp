@@ -96,12 +96,19 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
       PYTHONIOENCODING: 'utf-8',
       CLAUDE_CODE_ARTIFACT_AUTO_OPEN: '0',
       CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY: '1',
+      // A bot runs the Claude Code version BotCorp pinned and tested on the
+      // canary (daemon/cc.ps1), so its session never downloads one itself. This
+      // reverses the earlier choice to keep auto-update on: riding the global
+      // update is how untested versions went live. Never DISABLE_UPDATES - that
+      // also blocks `claude update` for every other Claude Code user of the box.
+      DISABLE_AUTOUPDATER: '1',
       BOT_NAME: cfg.name,
       BOT_HOME: fwd(botHome),
     },
     // No Claude Code UI noise in a bot session: a bot's config home does not
     // inherit the operator's ~/.claude/settings.json, so it is set here. NOT
-    // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC - that also disables auto-update.
+    // CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC - that turns off more than the
+    // UI noise (auto-update is handled by DISABLE_AUTOUPDATER above).
     feedbackSurveyRate: 0,
     feedbackDrafts: 'off',
     spinnerTipsEnabled: false,

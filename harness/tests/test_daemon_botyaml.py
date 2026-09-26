@@ -166,3 +166,15 @@ def test_sync_settings_turn_off_cc_ui_noise(tmp_path):
     assert settings["env"]["CLAUDE_CODE_DISABLE_FEEDBACK_SURVEY"] == "1"
     # would also kill auto-update, so it must never be set
     assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in settings["env"]
+
+
+def test_generated_settings_disable_autoupdater(tmp_path):
+    # R3: a bot runs the pinned Claude Code (daemon/cc.ps1), so its session never
+    # downloads an update itself; DISABLE_UPDATES would also block `claude update`
+    # for every other Claude Code user of the box, so it is never set.
+    root = _root_with_bot(tmp_path, "eta", "name: eta\n")
+    r = _node(str(SYNC), "eta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    settings = json.loads((root / "bots" / "eta" / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert settings["env"]["DISABLE_AUTOUPDATER"] == "1"
+    assert "DISABLE_UPDATES" not in settings["env"]
