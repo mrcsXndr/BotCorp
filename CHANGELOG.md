@@ -3,6 +3,19 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.2.17
+
+- **Prompt automations**: a typed `/name` prompt is confirmed when Claude Code
+  records it under a plugin namespace (`/standup` lands as
+  `<command-name>/botcorp:standup</command-name>`). The first live fire was
+  delivered but recorded as `failed: ... no matching user turn`. The test stub
+  now records slash commands in that real shape.
+
+Upgrading: check out `v0.2.17`; the daemon runs `inject.mjs` fresh per fire.
+Note: a running session keeps the skills it loaded at start, so a harness skill
+change (e.g. `/standup` in v0.2.15) reaches a bot only after its session
+restarts (`botcorp restart <bot>` at a breakpoint).
+
 ## v0.2.16
 
 - **Doctor `<bot>: session not blocked`**: Claude Code keeps `tempo: blocked`
