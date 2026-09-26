@@ -1,0 +1,13 @@
+# Canary bot.yaml: a shipped fixture for lifecycle and state-model checks.
+# Like every '_' folder it is never supervised: the daemon, the cockpit and
+# `botcorp status` skip it, and `botcorp doctor` only validates this file.
+# `service: manual` keeps it off the cold-start path even when copied to a
+# real bot folder. It declares no secrets and no Telegram token.
+
+name: canary
+persona: "A canary: exists to be started, observed and stopped."
+harness:
+  service: manual
+  modules:
+    telegram: false
+secrets: []

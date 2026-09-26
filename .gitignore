@@ -1,5 +1,5 @@
 # --- bots/ is WHITELIST-ignored: every bot is a plain private folder nested here (never a nested repo).
-# Only the README and the shipped example are tracked; nothing a real bot
+# Only the README, the shipped example and the canary's bot.yaml are tracked; nothing a real bot
 # writes (memory, transcripts, vault, config home) can ever be staged in BotCorp.
 bots/*
 !bots/README.md
@@ -7,6 +7,9 @@ bots/*
 bots/_example/.claude-*/
 bots/_example/.vault/
 bots/_example/memory/
+!bots/_canary/
+bots/_canary/*
+!bots/_canary/bot.yaml
 
 # --- belt and braces for the two things that must never leave a machine ---
 bots/**/.vault/

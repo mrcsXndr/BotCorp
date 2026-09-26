@@ -38,7 +38,7 @@ const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = awa
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
-  botHome, configDir, botYamlPath, botExists, listBots,
+  botHome, configDir, botYamlPath, botExists, listBots, listFixtureBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
@@ -2359,6 +2359,11 @@ async function cmdDoctor({ flags }) {
         else add('PASS', `${bot}: integrations.access`, `team=${cfg.integrations.access.team} matches the machine`, 'bots');
       }
       await botIntegrationChecks(bot, cfg, (l, n, d) => add(l, n, d, 'bots'));
+    }
+    // shipped fixtures ('_' folders): never supervised, so only their bot.yaml is checked
+    for (const bot of listFixtureBots()) {
+      try { const errs = validate(loadBotYaml(botYamlPath(bot))); add(errs.length ? 'FAIL' : 'PASS', `${bot}: bot.yaml`, errs.length ? errs.join('; ') : 'valid (fixture, not supervised)', 'bots'); }
+      catch (e) { add('FAIL', `${bot}: bot.yaml`, e.message, 'bots'); }
     }
 
     // accounts (chat logins): does each token still log in? --no-accounts skips the live call

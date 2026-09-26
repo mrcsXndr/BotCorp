@@ -35,6 +35,17 @@ export function listBots() {
     .sort();
 }
 
+// The shipped '_' fixture folders holding a bot.yaml (bots/_example, bots/_canary):
+// never supervised, only validated by doctor.
+export function listFixtureBots() {
+  let entries = [];
+  try { entries = fs.readdirSync(path.join(ROOT, 'bots'), { withFileTypes: true }); } catch { return []; }
+  return entries
+    .filter((e) => e.isDirectory() && e.name.startsWith('_') && fs.existsSync(botYamlPath(e.name)))
+    .map((e) => e.name)
+    .sort();
+}
+
 export class CliError extends Error {
   constructor(message, code = 1) { super(message); this.code = code; }
 }
