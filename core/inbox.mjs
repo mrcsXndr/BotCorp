@@ -18,6 +18,13 @@
 //              typed turn never reached the transcript. Never retyped: a retry
 //              could land twice.
 //
+// Both files are bounded. inbox.jsonl is trimmed to the newest KEEP_ITEMS once
+// it passes KEEP_ITEMS + 100, never dropping an item that still waits; every
+// write to it holds <bot>/inbox.lock, so a trim never loses a line another
+// producer appended meanwhile. inbox.results.jsonl (the drainer is its only
+// writer) is cut to the newest line of each item inbox.jsonl still holds once
+// it passes 2 * KEEP_ITEMS lines.
+//
 // The transport is the bot's pty-host: a pty session's own host, or for a bg
 // session an attach host (`pty-host --attach`), started here when none is up
 // and shared with the cockpit terminal. Nothing here stops it: it exits on its
@@ -46,6 +53,7 @@ export const HOST_UP_MS = 15_000;   // a started attach host publishes its endpo
 const SETTLE_MS = 1_500;            // output quiet this long = the TUI has drawn
 const READY_MS = 20_000;            // ... or give up waiting for quiet and type anyway
 export const CONFIRM_MS = 30_000;   // the user turn must reach the transcript by then
+export const KEEP_ITEMS = 500;
 const pollMs = () => Number(process.env.BOTCORP_INBOX_POLL_MS) || 10_000;
 
 const norm = (s) => String(s).replace(/\s+/g, ' ').trim();
@@ -69,6 +77,27 @@ function append(file, obj) {
   fs.appendFileSync(file, JSON.stringify(obj) + '\n');
 }
 
+function rewrite(file, rows) {
+  const tmp = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, rows.map((r) => JSON.stringify(r) + '\n').join(''));
+  fs.renameSync(tmp, file);
+}
+
+// Held for the few ms a write to inbox.jsonl takes; older than 10 s = a crashed holder's.
+function withInboxLock(bot, fn) {
+  const f = path.join(STATE_DIR, bot, 'inbox.lock');
+  fs.mkdirSync(path.dirname(f), { recursive: true });
+  for (const end = Date.now() + 10_000; ;) {
+    try { fs.writeFileSync(f, String(process.pid), { flag: 'wx' }); break; } catch (e) {
+      if (e.code !== 'EEXIST') throw e;
+      try { if (Date.now() - fs.statSync(f).mtimeMs > 10_000) fs.unlinkSync(f); } catch {}
+      if (Date.now() > end) throw new Error(`inbox: ${f} is held`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try { return fn(); } finally { try { fs.unlinkSync(f); } catch {} }
+}
+
 // '30m' | '90s' | '2h' | '45' (minutes) -> seconds (max 24 h); null when unparsable.
 export function parseTtl(s) {
   const m = /^(\d+)([smh]?)$/.exec(String(s ?? '').trim());
@@ -79,7 +108,14 @@ export function parseTtl(s) {
 
 export function enqueue(bot, { text, source = 'cli', ttlS = DEFAULT_TTL_S }) {
   const item = { id: `${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`, text, source, ttl_s: ttlS, at: new Date().toISOString() };
-  append(inboxFile(bot), item);
+  withInboxLock(bot, () => {
+    append(inboxFile(bot), item);
+    const rows = readLines(inboxFile(bot));
+    if (rows.length <= KEEP_ITEMS + 100) return;
+    const done = new Set(readInbox(bot).filter((i) => TERMINAL.has(i.status)).map((i) => i.id));
+    const cut = rows.length - KEEP_ITEMS;
+    try { rewrite(inboxFile(bot), rows.filter((r, n) => n >= cut || (r && r.id && !done.has(r.id)))); } catch {}
+  });
   return item;
 }
 
@@ -95,7 +131,17 @@ export function readInbox(bot) {
 
 export function itemOf(bot, id) { return readInbox(bot).find((i) => i.id === id) || null; }
 const waiting = (bot) => readInbox(bot).filter((i) => !TERMINAL.has(i.status));
-const record = (bot, id, status, detail = '') => append(resultsFile(bot), { id, status, at: new Date().toISOString(), detail });
+function record(bot, id, status, detail = '') {
+  append(resultsFile(bot), { id, status, at: new Date().toISOString(), detail });
+  const rows = readLines(resultsFile(bot));
+  if (rows.length <= 2 * KEEP_ITEMS) return;
+  // a result dropped for an item inbox.jsonl still holds would read `queued` and be retyped
+  const ids = withInboxLock(bot, () => new Set(readLines(inboxFile(bot)).map((i) => i && i.id)));
+  if (!ids.has(id)) return;
+  const newest = new Map();
+  for (const r of rows) if (r && ids.has(r.id)) newest.set(r.id, r);
+  try { rewrite(resultsFile(bot), [...newest.values()]); } catch {}
+}
 
 // The live drainer's pid, or 0.
 export function drainerPid(bot) {

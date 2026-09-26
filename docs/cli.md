@@ -581,7 +581,11 @@ starts a drainer when a message waits and none runs (the daemon tick does
 this every tick); `drain` is the drainer itself, run in the foreground.
 State: `<BOTCORP_HOME>/state/<bot>/inbox.jsonl` (the messages),
 `inbox.results.jsonl` (each status change, newest wins) and `inbox.drainer`
-(the live drainer's pid).
+(the live drainer's pid). Both files are bounded: `inbox.jsonl` is trimmed to
+the newest 500 messages once it passes 600 (a message that still waits is
+always kept), and `inbox.results.jsonl` to the newest line of each kept
+message once it passes 1000 lines. Writers to `inbox.jsonl` hold
+`inbox.lock` for the few ms a write takes.
 
 ### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
 

@@ -342,6 +342,31 @@ def test_a_captured_send_returns_while_its_drainer_waits(box):
     assert _cli(box, "inbox", box["name"], "kick").stdout.strip().endswith("runs)"), "the drainer is still waiting"
 
 
+def test_both_files_are_bounded_and_keep_every_status(box):
+    # 650 finished items (each a held line then an expired one) behind 3 that
+    # still wait: one more send trims inbox.jsonl to the newest 500 plus the 3,
+    # and the drainer's next result cuts inbox.results.jsonl to one line per kept item.
+    _yaml(box, "bg")                              # no state file: stopped, so the drainer fails what waits
+    d = box["rt"] / "state" / box["name"]
+    d.mkdir()
+    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    waiting = [{"id": f"wait-{n}", "text": "still waiting", "source": "cli", "ttl_s": 86400, "at": now} for n in range(3)]
+    done = [{"id": f"done-{n}", "text": f"old {n}", "source": "cli", "ttl_s": 60, "at": "2026-09-01T00:00:00Z"} for n in range(650)]
+    (d / "inbox.jsonl").write_text("".join(json.dumps(i) + "\n" for i in waiting + done), encoding="utf-8")
+    (d / "inbox.results.jsonl").write_text("".join(json.dumps({"id": i["id"], "status": s, "at": now, "detail": ""}) + "\n"
+                                                   for i in done for s in ("held", "expired")), encoding="utf-8")
+    r = _cli(box, "send", box["name"], "--wait", "--json", "one more")
+    assert r.returncode == 1 and json.loads(r.stdout)["status"] == "failed", r.stdout + r.stderr
+    kept = [json.loads(ln)["id"] for ln in (d / "inbox.jsonl").read_text(encoding="utf-8").splitlines()]
+    new_id = json.loads(r.stdout)["id"]
+    assert kept == [i["id"] for i in waiting] + [f"done-{n}" for n in range(151, 650)] + [new_id], (len(kept), kept[:5])
+    items = json.loads(_cli(box, "inbox", box["name"], "--json", "--tail", "1000").stdout)
+    assert {i["id"]: i["status"] for i in items} == {**{i["id"]: "failed" for i in waiting}, **{f"done-{n}": "expired" for n in range(151, 650)}, new_id: "failed"}
+    results = [json.loads(ln) for ln in (d / "inbox.results.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert len(results) == len(items) == 503, len(results)
+    assert not list(d.glob("*.tmp")) and not (d / "inbox.lock").exists()
+
+
 def _free_port() -> int:
     import socket
     with socket.socket() as s:
