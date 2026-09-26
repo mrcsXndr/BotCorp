@@ -70,7 +70,7 @@ process.stdin.on('data', (b) => {
     process.stdout.write('\r\nok\r\nstub session> ');
   }
 });
-setTimeout(() => process.exit(0), 120000);
+setTimeout(() => process.exit(0), 60000);
 """
 
 
@@ -151,20 +151,19 @@ def _start_pty_host(b) -> dict:
     raise AssertionError("pty-host did not publish its endpoint")
 
 
-def _invoke_run_now(b):
-    # Output to a file, not a pipe: the attach host the drainer starts outlives
-    # the run and inherits pwsh's handles, so a pipe would not close until it exits.
-    out = b["tmp"] / "run-now.out"
-    with open(out, "wb") as fh:
-        r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(AUTOMATIONS),
-                            "-Bot", b["name"], "-RunNow", "standup"], stdout=fh, stderr=subprocess.STDOUT, timeout=300,
-                           cwd=str(ASSEMBLY), env=b["env"])
-    assert r.returncode == 0, out.read_text(encoding="utf-8", errors="replace")
+def _invoke_run_now(b) -> float:
+    # Read through a pipe, as a caller would: the seconds it took to return.
+    t0 = time.time()
+    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(AUTOMATIONS),
+                        "-Bot", b["name"], "-RunNow", "standup"], capture_output=True, text=True, timeout=300,
+                       cwd=str(ASSEMBLY), env=b["env"])
+    assert r.returncode == 0, r.stderr + r.stdout
+    return time.time() - t0
 
 
 def _run_now(b):
-    _invoke_run_now(b)
-    runs =[json.loads(ln) for ln in (b["rt"] / "state" / b["name"] / "runs.jsonl").read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
+    b["took"] = _invoke_run_now(b)
+    runs = [json.loads(ln) for ln in (b["rt"] / "state" / b["name"] / "runs.jsonl").read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
     state = json.loads((b["rt"] / "state" / b["name"] / "automations.json").read_text(encoding="utf-8-sig"))["standup"]
     logs = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in b["rt"].rglob("*.log"))
     return runs, state, logs
@@ -237,6 +236,8 @@ def test_sent_to_a_bg_session_through_an_attach_host(bot, fake_claude_exe):
     runs, state, logs = _run_now(bot)
     assert runs[-1]["result"] == "sent", (runs, logs)
     assert "via a new attach host" in runs[-1]["summary"], runs
+    # the attach host (its stub lives 60 s) outlives the run and must not hold the caller's pipe
+    assert bot["took"] < 10, f"run-now's caller waited {bot['took']:.1f}s"
     # recorded namespaced (/botcorp:standup), yet confirmed as the typed /standup
     assert _typed(bot) == ["<command-message>botcorp:standup</command-message>\n<command-name>/botcorp:standup</command-name>\n<command-args></command-args>"]
     rec = json.loads((bot["rt"] / "state" / f"{bot['name']}.pty.json").read_text(encoding="utf-8"))

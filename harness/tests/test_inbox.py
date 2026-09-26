@@ -296,6 +296,26 @@ def test_send_refuses_bad_input(box, args, stdin, err):
     assert not (box["rt"] / "state" / box["name"] / "inbox.jsonl").exists()
 
 
+def test_a_captured_send_returns_while_its_drainer_waits(box):
+    # A script that captures `botcorp send`'s output, itself read through a
+    # pipe: the drainer outlives send (down session, 60 s ttl) and must not hold
+    # that pipe. node spawn passes every inheritable handle on, so a drainer
+    # spawned that way kept it until the ttl ran out.
+    _yaml(box, "bg")
+    p = subprocess.Popen([sys.executable, "-c", ""])
+    p.wait()
+    (box["rt"] / "state" / f"{box['name']}.json").write_text(json.dumps({"bot": box["name"], "status": "running", "claude_pid": p.pid, "bg_id": "abc123"}),
+                                                            encoding="utf-8")
+    script = f"$r = 'hello' | node '{CLI}' send {box['name']} --ttl 60s; $r"
+    t0 = time.time()
+    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-Command", script], capture_output=True, text=True, timeout=120,
+                       cwd=str(ASSEMBLY), env=box["env"])
+    took = time.time() - t0
+    assert r.returncode == 0 and r.stdout.startswith("queued "), r.stdout + r.stderr
+    assert took < 10, f"send's caller waited {took:.1f}s for the drainer"
+    assert _cli(box, "inbox", box["name"], "kick").stdout.strip().endswith("runs)"), "the drainer is still waiting"
+
+
 def _free_port() -> int:
     import socket
     with socket.socket() as s:

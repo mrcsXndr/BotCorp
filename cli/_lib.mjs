@@ -737,9 +737,24 @@ export function humanAge(ms) {
   return `${Math.round(h / 24)}d`;
 }
 
-// Detached, fire-and-forget child (the pty-host). Nothing is captured: the
-// host writes its own state file, which is what the caller waits for.
+// Detached, fire-and-forget child (the pty-host, the inbox drainer). Nothing is
+// captured: the child writes its own state file, which is what the caller
+// waits for. On Windows it is started by Start-Process (ShellExecute), which
+// passes no handles on: node's spawn hands the child every inheritable handle
+// this process holds, and a pipe some caller up the chain reads (a script
+// capturing `botcorp send`, automations.ps1's cmd hop) then stayed open for the
+// child's whole life. The daemon's Start-Hidden works the same way. -> pid, 0
+// when the launch failed.
 export function spawnDetached(file, args, { cwd = ROOT, env = null } = {}) {
+  if (WIN) {
+    const q = (s) => `'${String(s).replace(/'/g, "''")}'`;
+    const line = args.map((a) => (a === '' || /[\s"]/.test(a) ? `"${String(a).replace(/"/g, '\\"')}"` : a)).join(' ');
+    const ps = `$ProgressPreference = 'SilentlyContinue'; (Start-Process -FilePath ${q(file)} -ArgumentList ${q(line)} -WorkingDirectory ${q(cwd)} -WindowStyle Hidden -PassThru).Id`;
+    const r = spawnSync(POWERSHELL_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(ps, 'utf16le').toString('base64')], {
+      cwd, env: env ? { ...process.env, ...env } : process.env, encoding: 'utf-8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], timeout: 30_000,
+    });
+    return Number(String(r.stdout || '').trim()) || 0;
+  }
   const child = spawn(file, args, {
     cwd,
     env: env ? { ...process.env, ...env } : process.env,
