@@ -6,13 +6,17 @@ Locked behaviour:
 - a due prompt fire with the session down or busy is recorded as
   `skipped: <reason>` (runs.jsonl + automations.json last_result), advances
   to the next cron fire, and logs at most the prompt's first 60 chars.
-- with the session up and idle, daemon/inject.mjs types the prompt through
-  the pty-host (the cockpit chat's path) and the run is `sent` once the user
-  entry reaches the transcript. A bg session gets a transient attach host that
-  is stopped again; the session itself keeps running.
+- with the session up and idle, `botcorp send --wait` puts the prompt in the
+  bot's inbox (the cockpit chat's path), the drainer types it through the
+  pty-host and the run is `sent` once the user entry reaches the transcript.
+  A bg session gets an attach host that stays up for the next message (it
+  exits on its own idle ttl); the session itself keeps running.
+- a prompt that waits in the inbox past its ttl (half the run's timeout) is
+  `failed: expired ...`, and is never typed afterwards.
 
 The session is a stub hosted by the real pty-host (BOTCORP_PTY_COMMAND): it
-writes each line typed into it to a fake transcript as a user entry.
+writes each line typed into it to a fake transcript as a user entry, in
+Claude Code's own shape.
 """
 from __future__ import annotations
 
@@ -42,10 +46,12 @@ PROMPT = "Read the answers on the board, act on each, then re-sync the list. TAI
 
 STUB = r"""
 const fs = require('fs');
-const out = process.argv[2];
+const crypto = require('crypto');
+const [out, cwd] = process.argv.slice(2);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 process.stdout.write('stub session> ');
-let buf = '';
+let buf = '', parent = null;
+const sessionId = crypto.randomUUID();
 process.stdin.on('data', (b) => {
   buf += b.toString('utf8');
   let i;
@@ -56,7 +62,11 @@ process.stdin.on('data', (b) => {
     // skill: namespaced, in a <command-name> wrapper (reference host 2026-09-26).
     const m = /^\/([\w.-]+)\s*([\s\S]*)$/.exec(text);
     const content = m ? `<command-message>botcorp:${m[1]}</command-message>\n<command-name>/botcorp:${m[1]}</command-name>\n<command-args>${m[2]}</command-args>` : text;
-    fs.appendFileSync(out, JSON.stringify({ type: 'user', message: { role: 'user', content }, timestamp: new Date().toISOString() }) + '\n');
+    const uuid = crypto.randomUUID();
+    fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, promptId: crypto.randomUUID(), type: 'user',
+      message: { role: 'user', content }, uuid, timestamp: new Date().toISOString(), userType: 'external', entrypoint: 'cli',
+      cwd, sessionId, version: '2.1.282', gitBranch: '' }) + '\n');
+    parent = uuid;
     process.stdout.write('\r\nok\r\nstub session> ');
   }
 });
@@ -111,7 +121,8 @@ def bot(tmp_path):
     stub.write_text(STUB, encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
     env["BOTCORP_HOME"] = str(rt)
-    env["BOTCORP_PTY_COMMAND"] = f'node "{stub}" "{transcript}"'
+    env["BOTCORP_PTY_COMMAND"] = f'node "{stub}" "{transcript}" "{home}"'
+    env["BOTCORP_INBOX_POLL_MS"] = "500"
     hosts: list[subprocess.Popen] = []
     try:
         yield {"name": name, "home": home, "rt": rt, "env": env, "transcript": transcript, "hosts": hosts, "tmp": tmp_path}
@@ -140,12 +151,20 @@ def _start_pty_host(b) -> dict:
     raise AssertionError("pty-host did not publish its endpoint")
 
 
+def _invoke_run_now(b):
+    # Output to a file, not a pipe: the attach host the drainer starts outlives
+    # the run and inherits pwsh's handles, so a pipe would not close until it exits.
+    out = b["tmp"] / "run-now.out"
+    with open(out, "wb") as fh:
+        r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(AUTOMATIONS),
+                            "-Bot", b["name"], "-RunNow", "standup"], stdout=fh, stderr=subprocess.STDOUT, timeout=300,
+                           cwd=str(ASSEMBLY), env=b["env"])
+    assert r.returncode == 0, out.read_text(encoding="utf-8", errors="replace")
+
+
 def _run_now(b):
-    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(AUTOMATIONS),
-                        "-Bot", b["name"], "-RunNow", "standup"], capture_output=True, text=True, timeout=300,
-                       cwd=str(ASSEMBLY), env=b["env"])
-    assert r.returncode == 0, r.stderr + r.stdout
-    runs = [json.loads(ln) for ln in (b["rt"] / "state" / b["name"] / "runs.jsonl").read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
+    _invoke_run_now(b)
+    runs =[json.loads(ln) for ln in (b["rt"] / "state" / b["name"] / "runs.jsonl").read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
     state = json.loads((b["rt"] / "state" / b["name"] / "automations.json").read_text(encoding="utf-8-sig"))["standup"]
     logs = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in b["rt"].rglob("*.log"))
     return runs, state, logs
@@ -209,7 +228,7 @@ def fake_claude_exe(tmp_path_factory):
 
 
 @needs_win
-def test_sent_to_a_bg_session_through_a_transient_attach_host(bot, fake_claude_exe):
+def test_sent_to_a_bg_session_through_an_attach_host(bot, fake_claude_exe):
     (bot["home"] / "bot.yaml").write_text(_yaml(bot["name"], "bg", _prompt_entry("/standup")), encoding="utf-8")
     session = subprocess.Popen([str(fake_claude_exe), "-e", "setTimeout(() => {}, 120000)"])
     bot["hosts"].append(session)
@@ -217,8 +236,38 @@ def test_sent_to_a_bg_session_through_a_transient_attach_host(bot, fake_claude_e
     _set_idle(bot["transcript"], True)
     runs, state, logs = _run_now(bot)
     assert runs[-1]["result"] == "sent", (runs, logs)
-    assert "transient attach host" in runs[-1]["summary"]
+    assert "via a new attach host" in runs[-1]["summary"], runs
     # recorded namespaced (/botcorp:standup), yet confirmed as the typed /standup
     assert _typed(bot) == ["<command-message>botcorp:standup</command-message>\n<command-name>/botcorp:standup</command-name>\n<command-args></command-args>"]
-    assert not (bot["rt"] / "state" / f"{bot['name']}.pty.json").exists(), "the transient attach host must be stopped"
-    assert session.poll() is None, "stopping the attach host must not touch the session"
+    rec = json.loads((bot["rt"] / "state" / f"{bot['name']}.pty.json").read_text(encoding="utf-8"))
+    assert rec["mode"] == "attach", "the attach host stays up for the next message"
+    assert session.poll() is None, "the session keeps running"
+    item = [json.loads(ln) for ln in (bot["rt"] / "state" / bot["name"] / "inbox.jsonl").read_text(encoding="utf-8").splitlines()][-1]
+    assert item["source"] == "automation" and item["text"] == "/standup" and item["ttl_s"] == 15, item
+
+
+@needs_win
+def test_a_prompt_that_waits_past_its_ttl_fails_and_is_never_typed(bot):
+    # A cockpit message ahead of it in the queue: the drainer types that one,
+    # the session turns busy, and the prompt waits past its ttl (timeout 0.6 min -> 18 s).
+    entry = _prompt_entry().replace("timeout_min: 0.5", "timeout_min: 0.6")
+    (bot["home"] / "bot.yaml").write_text(_yaml(bot["name"], "pty", entry), encoding="utf-8")
+    _start_pty_host(bot)
+    _set_idle(bot["transcript"], True)
+    ahead = {"id": "ahead-000001", "text": "a message from the cockpit", "source": "cockpit", "ttl_s": 1800,
+             "at": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())}
+    (bot["rt"] / "state" / bot["name"]).mkdir(parents=True, exist_ok=True)
+    (bot["rt"] / "state" / bot["name"] / "inbox.jsonl").write_text(json.dumps(ahead) + "\n", encoding="utf-8")
+    _invoke_run_now(bot)   # a detached waiter (timeout > 0.5 min): the record lands later
+    runs_file = bot["rt"] / "state" / bot["name"] / "runs.jsonl"
+    deadline = time.time() + 90
+    while True:
+        runs = [json.loads(ln) for ln in runs_file.read_text(encoding="utf-8-sig").splitlines() if ln.strip()] if runs_file.exists() else []
+        if runs and runs[-1].get("result"):
+            break
+        assert time.time() < deadline, runs
+        time.sleep(1)
+    assert re.match(r"^failed: expired \S+: waited past its ttl \(18s\)$", runs[-1]["result"]), runs
+    assert runs[-1]["exit"] == 1, runs
+    time.sleep(2)
+    assert _typed(bot) == ["a message from the cockpit"], "the expired prompt is never typed"

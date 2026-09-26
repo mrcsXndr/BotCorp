@@ -37,18 +37,22 @@ mixes.
 
 A prompt automation puts one prompt into the bot's running Claude Code session
 on a schedule, as if the operator had typed it in the cockpit. It uses the
-cockpit chat's own path: `daemon/inject.mjs` dials the bot's pty-host (the
-endpoint in `<rt>/state/<bot>.pty.json`) and sends a bracketed paste plus
-Enter.
+cockpit chat's own path, the bot's inbox: the run is `botcorp send <bot>
+--wait --source automation` (docs/cli.md "send"), whose drainer types the
+prompt through the bot's pty-host as a bracketed paste plus Enter.
 
 - `session: pty`: the pty-host is the session.
 - `session: bg`: the pty-host is only the attach transport. When none is up,
-  the run starts one (`pty-host --attach`), types the prompt, and stops it
-  again. Stopping an attach host kills only the `claude attach` client; the
-  session keeps running.
+  the drainer starts one (`pty-host --attach`), which stays up for the next
+  message and exits on its own after `BOTCORP_ATTACH_IDLE_MIN` with no client.
+  It only ever holds the `claude attach` client; the session keeps running.
 
-The run counts as **sent** when the prompt shows up as a user turn in the
-session transcript within 30 s. Otherwise it is **failed**.
+The run counts as **sent** when the inbox reports the item delivered: the
+prompt showed up as a user turn in the session transcript within 30 s.
+Anything else is **failed**, with the inbox's status and reason (`failed:
+expired <id>: waited past its ttl (300s)`). The item's ttl is half the run's
+`timeout_min`, between 15 s and 5 min, so a prompt queued behind another
+message never lands late, and an expiry is recorded before the run times out.
 
 A due fire is **skipped**, with the reason recorded, when the session's phase
 (a fresh `botcorp observe <bot>`, docs/daemon.md "State file") is not `idle`:
@@ -71,9 +75,9 @@ chance, because a morning prompt typed at noon would land out of context. An
 `event:` trigger's queue file is consumed by the skip too. `idle_gated` makes
 no difference here: gate 3 always applies.
 
-The prompt is operator config and treated as trusted. It reaches `inject.mjs`
-in the environment (`BOT_PROMPT`), never on a command line. Logs show only its
-first 60 characters.
+The prompt is operator config and treated as trusted. It reaches `botcorp
+send` on stdin, never on a command line. Logs show only its first 60
+characters; the inbox file (`<rt>/state/<bot>/inbox.jsonl`) keeps it whole.
 
 ## Triggers
 

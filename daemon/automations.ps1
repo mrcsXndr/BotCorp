@@ -27,12 +27,15 @@
 # Per-automation state (failure_streak, next_due, runs_today, last_ok, ...) in
 # <rt>/state/<bot>/automations.json.
 #
-# `kind: prompt` entries run no command: daemon/inject.mjs types `prompt:` into
-# the bot's live session (the cockpit chat's path). A fire that finds the
-# session down, blocked on a dialog or busy (or the account blocked, or
-# max_per_day reached) is recorded as `skipped: <reason>` and the NEXT fire is
-# the next chance: no queue, no per-tick retry, no backoff. Records carry
-# `result` (sent | failed: ... | skipped: ...), state `last_result`.
+# `kind: prompt` entries run no command: `botcorp send <bot> --wait` puts
+# `prompt:` in the bot's inbox (core/inbox.mjs, the cockpit chat's path too)
+# and waits for it to be delivered. Its ttl is half the run's timeout (15 s to
+# 5 min): it never lands late, and an expiry is recorded as one before the run
+# times out. A fire that finds the session down, blocked on
+# a dialog or busy (or the account blocked, or max_per_day reached) is
+# recorded as `skipped: <reason>` and the NEXT fire is the next chance: no
+# per-tick retry, no backoff. Records carry `result` (sent = delivered |
+# failed: ... | skipped: ...), state `last_result`.
 #
 # `botcorp automations pause` flips `enabled: false` in bot.yaml; this script
 # only honours it. -RunNow <name> queues one run now, respecting timeout_min but
@@ -198,12 +201,13 @@ function Invoke-AutomationJob {
         BOT_MODULES = (@($job.modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
         GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
     }
-    # kind: prompt runs inject.mjs; the prompt rides in the env, never on the command line.
+    # kind: prompt runs `botcorp send`; the prompt goes on its stdin, never on the command line.
     $isPrompt = ("$($a.kind)" -eq 'prompt')
     $command = "$($a.command)"
     if ($isPrompt) {
-        $command = "`"$(Resolve-Node)`" `"$(Join-Path $PSScriptRoot 'inject.mjs')`" --bot $Bot --session $($job.session)"
-        $envMap['BOT_PROMPT'] = "$($a.prompt)"
+        $ttlS = [int][Math]::Min(300, [Math]::Max(15, [Math]::Floor($timeoutMin * 30)))
+        $command = "`"$(Resolve-Node)`" `"$(Join-Path $BotCorp 'cli\botcorp.mjs')`" send $Bot --wait --source automation --ttl ${ttlS}s"
+        $envMap['BOTCORP_BOTS_DIR'] = $BotsDir
     }
     $secretNames = @(); try { $secretNames = @($a.secrets | Where-Object { $_ }) } catch {}
     if ($secretNames.Count -gt 0) {
@@ -233,7 +237,9 @@ function Invoke-AutomationJob {
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $P.BotHome
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
+        if ($isPrompt) { $psi.RedirectStandardInput = $true; $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false) }
         $proc = [System.Diagnostics.Process]::Start($psi)
+        if ($isPrompt) { try { $proc.StandardInput.Write("$($a.prompt)"); $proc.StandardInput.Close() } catch { Log "run ${name}: prompt not written to send's stdin: $($_.Exception.Message)" } }
         if ($proc.WaitForExit([int]($timeoutMin * 60000))) { $exit = $proc.ExitCode }
         else { $timedOut = $true; try { $proc.Kill($true) } catch {}; try { & (Join-Path $env:SystemRoot 'System32\taskkill.exe') /PID $proc.Id /T /F 2>$null | Out-Null } catch {}; $exit = 124 }
     } catch { Log "run ${name}: launch failed: $($_.Exception.Message)"; $exit = 127; try { "launch failed: $($_.Exception.Message)" | Out-File -FilePath $logPath -Append -Encoding utf8 } catch {} }
@@ -404,7 +410,7 @@ if ($autos.Count -gt 0 -or $RunNow) {
 
             $runId = $now.ToString('yyyyMMdd-HHmmss') + '-' + ('{0:x4}' -f (Get-Random -Maximum 65535))
             $logPath = Join-Path (Join-Path $P.BotLogDir $name) "$runId.log"
-            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); session = (Get-BotSessionKind $cfg); log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
+            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
             $jobFile = Join-Path $JobsDir "$runId.json"
             if (-not (Write-JsonFile -Path $jobFile -Object $job -Depth 8)) { Log "could not write job file for $name"; continue }
             if ($eventName) { try { Remove-Item (Join-Path $EventsDir "$eventName.queue") -Force -ErrorAction SilentlyContinue } catch {} }
