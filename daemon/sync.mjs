@@ -51,6 +51,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBotYaml, validate, resolveContextWindow } from './botyaml.mjs';
+import { botHome as botHomeOf } from '../core/paths.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -320,7 +321,7 @@ function syncToolShims(botHome, botcorpRoot, dry, report) {
 
 export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.execPath } = {}) {
   const root = botcorpRoot || path.resolve(__dirname, '..');
-  const botHome = path.join(root, 'bots', botName);
+  const botHome = botHomeOf(botName, root);
   const yamlPath = path.join(botHome, 'bot.yaml');
   if (!fs.existsSync(yamlPath)) throw new Error(`no bot.yaml at ${yamlPath}`);
   const cfg = loadBotYaml(yamlPath);

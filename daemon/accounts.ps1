@@ -32,6 +32,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vault.ps1')
+. (Join-Path $PSScriptRoot '_paths.ps1')
 
 $ID_RE = '^[a-z0-9][a-z0-9-]{0,31}$'
 $root = if ($BotCorpRoot) { $BotCorpRoot } else { Split-Path $PSScriptRoot -Parent }
@@ -121,7 +122,7 @@ try {
             Write-Output "accounts: removed $Id (its claude/ config dir under $acctHome is kept; delete it by hand if wanted)"
         }
         'seed' {
-            $botsDir = Join-Path $root 'bots'
+            $botsDir = Get-BotsDir -Root $root
             $done = @(); $skipped = @()
             foreach ($d in (Get-ChildItem -Path $botsDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
                 if ($d.Name.StartsWith('_') -or -not (Test-Path (Join-Path $d.FullName 'bot.yaml'))) { continue }

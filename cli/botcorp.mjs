@@ -265,7 +265,7 @@ function vaultIsolationCheck(bot) {
   if (!registered) return { level: 'FAIL', detail: 'harness/hooks/hooks.json does not register hooks/vault-guard.sh for Read|...|Bash' };
   const bash = resolveBash();
   if (!bash) return { level: 'WARN', detail: 'no bash to probe the hook (Git for Windows expected)' };
-  const sibling = path.join(ROOT, 'bots', bot === 'other-bot' ? 'another-bot' : 'other-bot', '.vault', 'secrets.json');
+  const sibling = path.join(botHome(bot === 'other-bot' ? 'another-bot' : 'other-bot'), '.vault', 'secrets.json');
   const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: sibling } });
   const r = run(bash, [path.join(ROOT, 'harness', 'hooks', 'vault-guard.sh')], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness') } });
   if (r.code === 2 && /BLOCKED/.test(r.err)) return { level: 'PASS', detail: 'vault-guard blocks a Read of a sibling .vault (exit 2)' };

@@ -13,10 +13,11 @@ import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botLiveness, processParentsAsync, sessionAliveVerdict, bgJobFile, bgBlockVerdict, firstInt } from '../cli/_lib.mjs';
+import { botsDir } from '../core/paths.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const BOTCORP_ROOT = path.resolve(__dirname, '..');
-export const BOTS_DIR = path.join(BOTCORP_ROOT, 'bots');
+export const BOTS_DIR = botsDir(BOTCORP_ROOT);
 export const BOTCORP_HOME = process.env.BOTCORP_HOME || path.join(os.homedir(), '.botcorp');
 export const STATE_DIR = path.join(BOTCORP_HOME, 'state');
 

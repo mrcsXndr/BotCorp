@@ -54,6 +54,7 @@ import crypto from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { WebSocketServer } from 'ws';
+import { botHome as botHomeOf } from '../core/paths.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -202,7 +203,7 @@ function host(a) {
   if (!NAME_RE.test(a.bot || '')) { console.error('pty-host: --bot <name> required (lowercase, digits, hyphens)'); process.exit(2); }
   if (!a.botcorp) { console.error('pty-host: --botcorp <BotCorp root> required'); process.exit(2); }
   a.botcorp = path.resolve(a.botcorp);
-  const botHome = path.join(a.botcorp, 'bots', a.bot);
+  const botHome = botHomeOf(a.bot, a.botcorp);
   if (!fs.existsSync(path.join(botHome, 'bot.yaml'))) { console.error(`pty-host: ${botHome}/bot.yaml not found`); process.exit(1); }
 
   const existing = readPtyJson(a.bot);

@@ -45,6 +45,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'vault.ps1')
 . (Join-Path $PSScriptRoot 'bundle.ps1')
+. (Join-Path $PSScriptRoot '_paths.ps1')
 
 function Read-PassphraseFromStdin {
     $v = [Console]::In.ReadToEnd()
@@ -57,7 +58,7 @@ function Get-FullPathNorm { param([string]$P) return ([System.IO.Path]::GetFullP
 function Test-PathUnder { param([string]$Path, [string]$Root) return ("$Path\".StartsWith("$Root\", [System.StringComparison]::OrdinalIgnoreCase)) }
 
 $root = if ($BotCorpRoot) { $BotCorpRoot } else { Split-Path $PSScriptRoot -Parent }
-$botsDir = Join-Path $root 'bots'
+$botsDir = Get-BotsDir -Root $root
 $botHome = Join-Path $botsDir $Bot
 if ($Bot -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { Write-Error "secrets: bad bot name '$Bot'"; exit 1 }
 if (-not (Test-Path (Join-Path $botHome 'bot.yaml'))) { Write-Error "secrets: no bot at $botHome (no bot.yaml)"; exit 1 }

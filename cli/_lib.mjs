@@ -12,6 +12,9 @@ import readline from 'node:readline';
 import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
+import { botsDir, botHome } from '../core/paths.mjs';
+
+export { botHome };
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,14 +24,13 @@ export const STATE_DIR = path.join(BOTCORP_HOME, 'state');
 export const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
 export const SENDER_RE = /^[0-9]{1,20}$/;
 
-export function botHome(name) { return path.join(ROOT, 'bots', name); }
 export function configDir(name) { return path.join(botHome(name), `.claude-${name}`); }
 export function botYamlPath(name) { return path.join(botHome(name), 'bot.yaml'); }
 export function botExists(name) { return NAME_RE.test(name || '') && fs.existsSync(botYamlPath(name)); }
 
 export function listBots() {
   let entries = [];
-  try { entries = fs.readdirSync(path.join(ROOT, 'bots'), { withFileTypes: true }); } catch { return []; }
+  try { entries = fs.readdirSync(botsDir(), { withFileTypes: true }); } catch { return []; }
   return entries
     .filter((e) => e.isDirectory() && !e.name.startsWith('_') && NAME_RE.test(e.name) && fs.existsSync(botYamlPath(e.name)))
     .map((e) => e.name)
@@ -39,7 +41,7 @@ export function listBots() {
 // never supervised, only validated by doctor.
 export function listFixtureBots() {
   let entries = [];
-  try { entries = fs.readdirSync(path.join(ROOT, 'bots'), { withFileTypes: true }); } catch { return []; }
+  try { entries = fs.readdirSync(botsDir(), { withFileTypes: true }); } catch { return []; }
   return entries
     .filter((e) => e.isDirectory() && e.name.startsWith('_') && fs.existsSync(botYamlPath(e.name)))
     .map((e) => e.name)
