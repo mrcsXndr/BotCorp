@@ -25,6 +25,23 @@ ConPTY (node-pty). Paths below are shortened to `<config>`, `<bot>`.
 | x | `SubagentStart` / `SubagentStop` hook payloads | **confirmed 2026-09-24 2.1.281** (verbatim below). `SubagentStop` carries `agent_id`, `agent_type`, `agent_transcript_path`, `last_assistant_message` | `subagent.sh` records `agent_id`, `agent_type`, duration; the prompt summary uses `last_assistant_message` (first 200 chars) |
 | xi | A project skill in `bots/<name>/.claude/skills/<x>/` beats the plugin skill of the same name (`botcorp:<x>`) | **NOT confirmed -> designed around.** No probe; resolution order between a project skill and a same-named plugin skill is undocumented | `bot.yaml` `harness.skills: [...]` lists the core skills to keep; `sync` writes every other harness skill into `disabledSkills` as `botcorp:<name>`, so a bot that ships its own `launch` simply leaves `launch` out of the list and the plugin one is hidden (the first bot does this for `launch`, `prd`, `weekly`) |
 
+## The Claude Code pin (R3, 2.1.283)
+
+What the pin (docs/daemon.md, "Claude Code pin") leans on. `verified` = seen
+on a real binary or in the docs; `inferred` = read from binary strings or
+minified code, not yet observed end to end.
+
+| # | Question | Answer | Status | Consequence |
+|---|---|---|---|---|
+| S1 | Does Claude Code's own supervisor move running bg sessions onto a newer binary? | **Yes.** When its watched binary changes it logs `binary at <exe> changed (mtime changed) — self-restarting for upgrade`, re-adopts its workers and respawns stale ones on the new build | **verified 2026-09-25** in the `daemon.log` of three independent config homes on the reference host, at both global updates (2.1.281 -> 2.1.282 -> 2.1.283); the roster then reads the new `cliVersion` | A bot started from the shared `~/.local/bin/claude.exe` rides every global update untested |
+| S1b | Does it wait for a busy worker? | It defers while workers are mid-turn, capped at a few minutes, then proceeds anyway | inferred (binary strings: `tengu_daemon_upgrade_defer_busy`) | Claude Code's own wait is not "never mid-turn"; the tick's roll gate is |
+| S1c | Does it follow a change to an OLDER build? | **No**: `keeping the running build (claude daemon stop --any to override)` | inferred (binary strings: `tengu_daemon_refuse_stale_upgrade`) | A rollback recycles the bot's Claude Code daemon through the normal restart path; it never relies on the watch |
+| S2 | Which file does the supervisor watch? | Its own `process.execPath`, unless that lies under `~/.local/share/claude/versions/`, in which case it watches the launcher `~/.local/bin/claude`. Workers spawn with the daemon's own exe | **verified: watches own execPath (positive control); global-change negative pending the next release.** The gate's check 2 finds the canary's daemon.lock pid running `<rt>/cc/<v>/claude.exe`; that no global update restarts it is still to be observed | Bots run a copy at `<rt>/cc/<v>/claude.exe` that nothing else writes to; running straight from `versions/<v>` is rejected (it still follows `~/.local/bin`, and that dir keeps only 3 builds) |
+| S3 | How is the auto-updater stopped? | `DISABLE_AUTOUPDATER=1` stops only the background download (`claude update` / `claude install` keep working); `DISABLE_UPDATES` blocks every update path; `autoUpdates: false` in config is ignored for native installs | verified (docs: code.claude.com setup) + inferred (code) | `DISABLE_AUTOUPDATER=1` in each bot's generated settings env and launch env; never `DISABLE_UPDATES`, which would block updates for every other Claude Code user on the machine |
+| S3b | Does that stop the hot swap? | **No.** The swap follows the file changing, and any Claude Code user on the machine can change the shared exe | inferred (S1 + S2) | The copy (S2) is the fix; `DISABLE_AUTOUPDATER` only keeps bot sessions from being the ones that download |
+| S4 | How is a specific version launched? | Execute that version's file directly. `claude install <v>` rewrites the SHARED global install; `versions/` keeps only 3 builds | verified (`claude --help`, `claude install --help`, a directory listing) | BotCorp keeps its own copies and never runs `claude install` or `claude update` |
+| S5 | Is a copy intact? | Windows builds are Authenticode-signed `Anthropic, PBC` | verified (docs); checked per file at stage time | Staging requires signature Valid, that signer, `--version` equal to the version, and records the sha256; doctor FAILs a pinned exe whose sha256 changed |
+
 ## Facts found on the way (each changed the code)
 
 | Fact | Evidence | Where it landed |

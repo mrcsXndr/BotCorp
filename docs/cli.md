@@ -624,6 +624,22 @@ kept) and `--skip <tag>` sets `skipped`; both stamp `decided_at` /
 never applies anything itself. `--check` shells to `daemon/update.ps1
 -Check` to record new releases now.
 
+### `cc status [--json]` / `cc test` / `cc rollback [--to <version>]`
+
+The Claude Code pin (docs/daemon.md, "Claude Code pin"). `botcorp cc status`
+prints the pinned version (who pinned it, when, the exe), the kept previous
+versions, the candidate with its status and each of its 8 checks, the
+rejected versions, and per bot the Claude Code it runs now: on the pin, `roll
+pending` (the tick rolls it between turns) or not running. `--json` gives
+`{pinned, previous, candidate, rejected, checked_at, bots: [{bot, alive,
+phase, cc_version, cc_exe, on_pin, at}]}` (`on_pin` is `null` when the bot is
+not running or nothing tells); the cockpit's `GET /api/cc` returns the same,
+each bot as of its last tick. `botcorp cc test` runs `daemon/cc.ps1 -Check`
+then `-Test` in the foreground (the canary run takes minutes).
+`botcorp cc rollback` moves the pin to the newest kept previous version (or
+`--to <version>`) and rejects the one it replaced; refused from inside a bot
+session (`BOT_NAME` set).
+
 ### `install [--s4u] [--unregister] [--dry-run]`
 
 Registers the two scheduled tasks via `daemon/install.ps1`. The daemon task
@@ -693,6 +709,13 @@ logins, `--no-tg-probe` the Telegram slot probe.
   worktree);
 - `harness/.claude-plugin/plugin.json` readable; `claude plugin validate
   harness --strict` passes;
+- `cc pin`: FAIL when the pinned exe is missing or no longer matches its
+  recorded sha256, WARN before the first pin; `cc autoupdater`: WARN naming
+  every bot whose generated `.claude/settings.json` env lacks
+  `DISABLE_AUTOUPDATER=1` (`botcorp sync <bot>`); `cc candidate` (INFO, WARN
+  when rejected); `cc canary`: WARN "promotion disabled" while `_canary` has
+  no `bot.yaml` or no `oauth_token`; per bot, `cc running`: WARN "roll
+  pending" when it runs something other than the pin;
 - `python` / `pwsh` / `git` are reported with the absolute path they resolved
   to. Every system binary is spawned by absolute path (`%SystemRoot%\System32`
   for `powershell.exe`, `curl.exe`, `taskkill`, `icacls`, `wscript`; pwsh via

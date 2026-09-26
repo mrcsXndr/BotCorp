@@ -5,6 +5,43 @@ versions follow SemVer.
 
 ## Unreleased
 
+The Claude Code update gate (R3): bots stop riding every global Claude Code
+update untested.
+
+- **Bots run a pinned, BotCorp-owned copy of Claude Code**,
+  `<BOTCORP_HOME>/cc/<version>/claude.exe`, named by one machine-wide pin in
+  `state/cc.json`. Every resolver (daemon, CLI, pty-host, harness Python)
+  takes `BOTCORP_CLAUDE_EXE`, then the pin, then the native install, then
+  PATH. Claude Code's supervisor watches the exe it was started from, so a
+  copy nobody writes to never self-upgrades (`docs/cc-compat.md` S1-S5).
+- **The daemon checks hourly** (`daemon/cc.ps1 -Check`): the first run pins
+  the Claude Code that runs today (`by: bootstrap`); a newer global version
+  is staged as a candidate (copied, signature, version and sha256 checked; a
+  stored exe is never written over). Nothing in BotCorp runs `claude update`
+  or `claude install`.
+- **A candidate is promoted only after 8 checks pass on `bots/_canary`**
+  (`cc.ps1 -Test`, detached from the tick): launch, version and status
+  parse, hooks, inbox delivery, resume, the Telegram poller, statusline
+  numbers, clean teardown. A second failure rejects the version and tells a
+  human once.
+- **Bots roll onto the pin between turns only**: idle, with a fresh
+  breakpoint or the job record awaiting its next prompt, no inbox drainer,
+  at most once per 30 min. The tick no longer runs `update_restart.py
+  --auto`; `update_restart.py` and TG `/update` refuse while the pin is in
+  force.
+- **`botcorp cc status [--json] | cc test | cc rollback [--to <v>]`**,
+  doctor rows (`cc pin`, `cc autoupdater`, `cc candidate`, `cc canary`, per
+  bot `cc running`), `GET /api/cc` and one line in the cockpit's updates
+  dialog. Observe records carry `cc_version` and `cc_exe`.
+- **Generated settings set `DISABLE_AUTOUPDATER=1`**, as does the launch
+  env (never `DISABLE_UPDATES`, which would block every other Claude Code
+  user on the machine). `BOT_HOOK_TRACE=1` makes the harness hooks append
+  `<iso> <hook>` to `memory/metrics/hook-trace.log` (the gate's check 3).
+- Upgrading: `botcorp sync <bot>` for every bot (the autoupdater env). The
+  first tick pins what runs today. Promotion needs `bots/_canary` provisioned
+  with an `oauth_token` (`botcorp secrets set _canary oauth`); until then
+  `botcorp doctor` shows `cc canary` WARN and new versions stay candidates.
+
 - **Janitor transcript prune stamp is per bot.** `resource_monitor.ps1
   -Clean` kept its once-a-day stamp in the harness checkout, so the first
   bot to prune each day skipped every other bot's config home, and the

@@ -423,6 +423,8 @@ machine steps
                         EVERY bot's phase this tick is idle, blocked, down or stopped (working, starting,
                         unknown or not observed defer);
                         update.ps1 -Apply -Tag <tag>; success -> every live bot restarts this tick (idle-gated)
+  cc check              hourly (daemon.json cc_check_at): daemon/cc.ps1 -Check (bootstrap + stage, 180 s cap);
+                        a candidate due a gate run (Get-CcTestDue) -> cc.ps1 -Test DETACHED (see "Claude Code pin")
 per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own try/catch
   config                node daemon/botyaml.mjs -> JSON; `_modules` gates every module tick; harness.session picks the kind
   liveness              bg : claude agents --json (bot config home) row by bg_id / session_id / cwd with a live pid
@@ -436,6 +438,8 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
   decision              not alive                                    -> cold-start (unless state/<bot>.paused or harness.service: manual)
                         alive + DEAD, launch older than LauncherGraceMin -> restart   (idle-gated)
                         alive + OWNED / UNKNOWN                      -> none
+                        none, bg bot running a Claude Code that is not the pin, Get-CcRollAction roll
+                                                                     -> restart onto the pin ("cc <from> -> <pin>")
                         cold-start/restart, vault operator-locked -> locked (state/<bot>.json launch.phase: locked;
                                     waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
                                     without secrets, a restart would throw away the ones the live session holds)
@@ -443,7 +447,6 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                         hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
   isolated ticks        usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
                         alert_triage: alert_triage.py scan [--session-busy] every BOT_TRIAGE_EVERY_MIN (30)
-                        breakpoint roll (action none): marker fresh -> update_restart.py --auto --claude-pid N
                         board: gh_projects.py poll -> tg_send.py per queued card
                         hub:   tools/infra/hub_push.py when present
                         janitor: tools/infra/resource_monitor.ps1 -Clean once a day per bot
@@ -517,8 +520,10 @@ Python is resolved at runtime in this order: `BOT_PYTHON` (when set and it
 exists) > the `py` launcher (`py -3 -c "import sys; print(sys.executable)"`) >
 the `HKCU`/`HKLM` `Python\PythonCore` registry (newest version) >
 `%LOCALAPPDATA%\Programs\Python\Python3*` (newest) > PATH. Claude Code is
-`~/.local/bin/claude.exe` first, then PATH (a stale npm shim has shadowed the
-native install before). System binaries (`powershell.exe`, `taskkill.exe`,
+`BOTCORP_CLAUDE_EXE` when set, else the pinned `<rt>/cc/<v>/claude.exe` (see
+"Claude Code pin"), else `~/.local/bin/claude.exe`, then PATH (a stale npm shim
+has shadowed the native install before); a launch sets `BOTCORP_CLAUDE_EXE`
+and `DISABLE_AUTOUPDATER=1` in the bot's env. System binaries (`powershell.exe`, `taskkill.exe`,
 `icacls.exe`, `wscript.exe`) are always spawned by their absolute
 `%SystemRoot%\System32` path, never a bare name - session-0 PATH is
 unreliable and bare names have failed to spawn there.
@@ -540,6 +545,88 @@ ages and file mtimes stay real, so it can never make a live process look dead.
 `BOTCORP_PTY_COMMAND` is pty-host's own seam (runs a command instead of
 launch.ps1). `BOTCORP_DAEMON_MUTEX` renames the tick's mutex (default
 `Global\BotCorpDaemon`) so a test tick never collides with a live daemon.
+
+## Claude Code pin
+
+Bots run a BotCorp-owned copy of Claude Code, `<rt>/cc/<version>/claude.exe`,
+named by one machine-wide pin in `state/cc.json`, never the shared
+`~/.local/bin/claude.exe`. Claude Code's supervisor watches the exe it was
+started from and self-restarts its sessions onto a newer build when that file
+changes (`docs/cc-compat.md` S1, S2), so a bot started from the shared exe
+rides every global update, untested and possibly mid-turn. A copy nobody
+writes to never moves; the pin moves only through the gate below.
+
+```
+state/cc.json
+  schema, checked_at
+  pinned     {version, exe, sha256, promoted_at, by: bootstrap|gate|rollback}
+  previous   [{version, exe, sha256, promoted_at}]   at most 2, newest first
+  candidate  {version, exe, sha256, status: staged|testing|passed|failed|rejected|promoted,
+              attempts, checks[{n, name, result, detail}], staged_at, tested_at, detail}
+  rejected   [version]                                never staged again
+```
+
+- **Check** (`cc.ps1 -Check`, the tick hourly). No `cc.json` yet: copy the
+  global exe into the store and pin it `by: bootstrap` (what runs today, no
+  gate). Then a global version newer than the pin, not rejected and not
+  already the candidate is **staged**: copied into a new temp dir under
+  `<rt>/cc`, checked (Authenticode Valid, signer `Anthropic, PBC`,
+  `--version` equal to the version, sha256 equal to the source) and renamed
+  to `<rt>/cc/<v>`. A stored exe is **immutable**: an existing one with the
+  source's sha256 is reused, one with another sha256 is left alone and
+  nothing is staged. `-Check` never tests, never promotes and only reads the
+  global install. Nothing in BotCorp runs `claude update` or `claude
+  install`, or sets `DISABLE_UPDATES`.
+- **Gate** (`cc.ps1 -Test`, started DETACHED by the tick when
+  `Get-CcTestDue` says so: a staged candidate, or a failed one with an
+  attempt left whose last run is 55 min old; never while `state/cc.lock` is
+  live). It drives the `_canary` fixture bot with `BOTCORP_CLAUDE_EXE` set to
+  the candidate through the CLI, and records 8 checks:
+
+  | # | check | PASS when |
+  |---|---|---|
+  | 1 | version / status parse | `--version` is the candidate's; `agents --json` gives a JSON array; `daemon status` exits 0 |
+  | 2 | bg launch visible | `botcorp start _canary --fresh`: a live roster row with that `cliVersion`, and the daemon.lock pid runs the candidate exe |
+  | 3 | hooks fire | `session-start`, `user-prompt-submit`, `memory-sync` in `hook-trace.log` (`BOT_HOOK_TRACE=1`) |
+  | 4 | inbox delivers | `botcorp send --wait` delivers and an assistant reply carries the nonce |
+  | 5 | resume keeps session id | stop, start: the same `session_id` in the state file and the roster |
+  | 6 | TG poller owns its token | observe `poller` OWNED (SKIP when `_canary` has no telegram module or token) |
+  | 7 | statusline numbers | `status.json` rewritten with the candidate's version, context and five-hour percentages |
+  | 8 | clean teardown | stopped: no candidate process, no live roster row, no bun/node under the canary, `.paused` set |
+
+  Every non-SKIP check PASS -> **promote**: the candidate is pinned `by:
+  gate`, the old pin heads `previous`, and prune runs. Otherwise the
+  candidate is `failed`, retried once an hour later; the second failure
+  rejects the version and tells a human ONCE per bot (a board card where the
+  board module is on, else a `HUMAN:` line in
+  `<BotHome>/memory/metrics/alerts.log`). An unprovisioned canary (no
+  `bots/_canary/bot.yaml`, no `oauth_token` in its vault, a locked vault) or
+  a canary already running fails the run without counting an attempt;
+  `botcorp doctor` shows it as `cc canary` WARN, "promotion disabled".
+  `_canary` is stopped before `-Test` returns, whatever happened.
+- **Roll.** Observe reports what each bg bot runs: `cc_version` (the roster
+  row's `cliVersion`) and `cc_exe` (the config home's daemon.lock pid's
+  ExecutablePath). When the tick's decision is `none` and either differs
+  from the pin, `Get-CcRollAction` decides: **roll** only when the phase is
+  `idle`, the bot declared a fresh breakpoint or its job record awaits the
+  next prompt, no inbox drainer is live, and no `cc_roll_at` is younger than
+  30 min; the bot then restarts through the normal restart path (the relaunch
+  recycles the old Claude Code daemon, which is also what makes a rollback
+  work: the supervisor never follows a change to an older build). Anything
+  else defers quietly to a later tick. Unknown exe and version never roll;
+  pty bots are not rolled.
+- **Prune** (after a promote, and `cc.ps1 -Prune`): deletes `<rt>/cc/<v>`
+  unless it is the pin, `previous[0..1]`, the candidate, or any process runs
+  an exe under it.
+- **Rollback** (`botcorp cc rollback [--to <v>]`, operator only): the pin
+  moves to `previous[0]` (or the named previous version) and the version it
+  replaced is rejected; the tick rolls the bots at their next idle point.
+
+The generated `bots/<name>/.claude/settings.json` env and the launch env
+carry `DISABLE_AUTOUPDATER=1`, so a bot session is never the one that
+downloads an update (doctor: `cc autoupdater`). `update_restart.py` and TG
+`/update` refuse while `BOTCORP_CLAUDE_EXE` is set ("Claude Code is pinned by
+BotCorp: botcorp cc status"); the tick no longer runs them.
 
 ## Harness update (admin-applied, never automatic)
 
