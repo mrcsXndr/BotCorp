@@ -3,7 +3,7 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## Unreleased
+## v0.5.0
 
 The Claude Code update gate (R3): bots stop riding every global Claude Code
 update untested.
