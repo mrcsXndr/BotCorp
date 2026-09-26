@@ -570,8 +570,16 @@ client. A pty session goes through its own pty-host. Each message ends:
 
 Without `--wait` it prints `queued <id>` and exits 0. `--wait` prints the
 final status and detail and exits 0 only on `delivered`, 1 otherwise; bad
-input exits 2. The attach host needs the daemon's elevation (docs/daemon.md,
-"Two session kinds"): a send from a shell that lacks it fails at the attach.
+input exits 2.
+
+Elevation: the drainer, and the attach host it starts, run at the level of
+whatever kicked them. A bg session runs at the supervisor's level (docs/daemon.md,
+"Two session kinds"), so a `send` from a non-elevated shell against an
+elevated supervisor may fail at the attach (`failed`, the attach host did not
+come up or could not reach the session) unless a drainer or attach host the
+daemon started is already up. The cockpit composer and `kind: prompt`
+automations queue through the cockpit and the daemon, which run at the
+supervisor's level, so their drainer and attach host do too.
 
 ### `inbox <bot> [list [--json] [--tail N] | kick | drain]`
 
