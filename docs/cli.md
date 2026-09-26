@@ -705,8 +705,8 @@ logins, `--no-tg-probe` the Telegram slot probe.
   recorded `bg_id` is in `<config home>/jobs/pins.json` (FAIL: unpinned, Claude
   Code retires an idle bg session after 60 min; the next daemon tick pins it)
   and `<bot>: session not blocked` - its `jobs/<bg_id>/state.json` is not
-  blocked on a login / permission / question (FAIL with the `claude attach
-  <id>` hint), both INFO when the bot is not running (docs/daemon.md, "Idle
+  blocked on a login / auth / usage limit / trust dialog (FAIL with the `claude
+  attach <id>` hint) or on a question its last turn ended with (WARN), both INFO when the bot is not running (docs/daemon.md, "Idle
   retirement and the pin"); `integrations.access.team` set but the cockpit
   not exposed, or a different team than the machine file => WARN;
   `integrations.cloudflare: {account_id, workers}` + `CLOUDFLARE_API_TOKEN`

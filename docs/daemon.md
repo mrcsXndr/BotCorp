@@ -248,7 +248,10 @@ prompt to start" (a login, a permission, a question) waits for a human that
 an unattended start does not have. The tick logs `BLOCKED: session <id> waits
 on '<needs>' ...` once per change (and `no longer blocked`), records
 `session_blocked`, and doctor's `<bot>: session not blocked` FAILs with the
-`claude attach <id>` hint. What an unattended start does to avoid the known
+`claude attach <id>` hint when `needs` is a login, auth, usage-limit or trust
+blocker. Anything else is usually the model's own summary of how its last turn
+ended (a question), and the session still takes its next prompt: that is a WARN,
+shown in the cockpit as waiting on you. What an unattended start does to avoid the known
 prompts: onboarding and workspace trust are pre-seeded in the config home's
 `.claude.json` (`botcorp new`, re-merged by `botcorp sync`), `permissions:
 bypass` (the default) passes `--dangerously-skip-permissions`, and a resume

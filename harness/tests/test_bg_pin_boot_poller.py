@@ -124,9 +124,13 @@ def test_doctor_pin_and_block_verdicts():
     blk = _node("[m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: 'send a prompt to start'}}),"
                 " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: 'login required - run /login'}}),"
                 " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'active', state: 'working'}}),"
-                " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: null})]")
-    assert [b["level"] for b in blk] == ["PASS", "FAIL", "PASS", "INFO"]
+                " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: null}),"
+                " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: \"confirm tg_send.py executed with 'back online after reboot'\"}}),"
+                " m.bgBlockVerdict({running: true, bgId: 'a1b2c3d4', job: {tempo: 'blocked', needs: 'Claude usage limit reached, resets 5pm'}})]")
+    assert [b["level"] for b in blk] == ["PASS", "FAIL", "PASS", "INFO", "WARN", "FAIL"]
     assert "login required" in blk[1]["detail"] and "claude attach a1b2c3d4" in blk[1]["detail"]
+    # a turn that ended asking something is not a broken bot (reference host 2026-09-26: doctor FAILed a healthy idle bot)
+    assert "still takes its next prompt" in blk[4]["detail"] and "claude attach a1b2c3d4" in blk[4]["detail"]
 
 
 @needs_pwsh

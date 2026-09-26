@@ -79,8 +79,8 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
     pid: pty?.ptyPid ?? (live.claudeAlive ? Number(state.claude_pid) : null),
     // doctor `session alive`: FAIL = the state says it runs but nothing does
     down: session.level === 'FAIL' ? session.detail : null,
-    // doctor `session not blocked`: FAIL = it waits on something only a person answers
-    blocked: block.level === 'FAIL' ? { needs: String(job.needs).trim(), detail: block.detail } : null,
+    // doctor `session not blocked`: FAIL (login, limit) or WARN (its last turn asked something) = it waits on a person
+    blocked: block.level === 'FAIL' || block.level === 'WARN' ? { needs: String(job.needs).trim(), detail: block.detail } : null,
     // doctor `telegram channel running`
     poller: telegram ? { state: live.poller, up: live.poller === 'OWNED' } : null,
   };

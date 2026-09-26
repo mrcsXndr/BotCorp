@@ -338,6 +338,12 @@ export function sessionSecretEnvVerdict({ running, launch, declaredEnv = [] }) {
 // (<config>/jobs/<short>/state.json) says the session waits on something no
 // unattended launch answers (daemon/_common.ps1 Get-BgBlock: tempo blocked,
 // `needs` other than "send a prompt to start").
+// `needs` is often the model's own summary of how its last turn ended ("confirm
+// tg_send.py executed ..."): the session is idle and takes its next prompt, so
+// that is a WARN (the cockpit still shows it as waiting on you). Only a
+// mechanical blocker that stops every next turn too (login, usage limit, the
+// folder-trust dialog) FAILs.
+const HARD_BLOCK_RE = /\/login|\blog ?in\b|authenticat|oauth|usage limit|rate limit|\btrust\b/i;
 export function bgJobFile(cfgDir, bgId) {
   return /^[0-9a-f]{6,12}$/.test(String(bgId || '')) ? path.join(cfgDir, 'jobs', String(bgId), 'state.json') : null;
 }
@@ -345,7 +351,10 @@ export function bgBlockVerdict({ running, bgId = '', job = null }) {
   if (!running) return { level: 'INFO', detail: 'not running' };
   if (!job) return { level: 'INFO', detail: `no job record for ${bgId || 'the session'} (cannot tell)` };
   const needs = String(job.needs || '').trim();
-  if (job.tempo === 'blocked' && needs && !needs.includes('send a prompt to start')) return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+  if (job.tempo === 'blocked' && needs && !needs.includes('send a prompt to start')) {
+    if (HARD_BLOCK_RE.test(needs)) return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+    return { level: 'WARN', detail: `session ${bgId} waits on "${needs}" (its last turn ended asking this; it still takes its next prompt). If it needs an answer: claude attach ${bgId} (or the cockpit)` };
+  }
   return { level: 'PASS', detail: `session ${bgId} ${job.tempo === 'blocked' ? 'idle, waiting for its next prompt' : `is ${job.tempo || job.state || 'running'}`}` };
 }
 
