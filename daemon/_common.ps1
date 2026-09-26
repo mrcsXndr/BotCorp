@@ -426,6 +426,149 @@ function Test-ClaudeVersion {
     return $false
 }
 
+# --- the Claude Code gate (daemon/cc.ps1): pure decisions ------------------------------
+# <rt>/state/cc.json (docs/daemon.md "Claude Code pin"):
+#   { schema, checked_at,
+#     pinned:    {version, exe, sha256, promoted_at, by: bootstrap|gate|rollback|operator},
+#     previous:  [{version, exe, sha256, promoted_at}, ... at most 2],
+#     candidate: {version, exe, sha256, status: staged|testing|passed|failed|rejected|promoted,
+#                 attempts, checks: [{n, name, result: PASS|FAIL|SKIP, detail}], tested_at, detail},
+#     rejected:  ["<version>", ...] }
+# Everything below takes and returns plain data so the tests drive it without a canary.
+function ConvertTo-CcVersion {
+    param([string]$V)
+    if ("$V" -match '^(\d+)\.(\d+)\.(\d+)$') { return [version]"$($matches[1]).$($matches[2]).$($matches[3])" }
+    return $null
+}
+
+function Copy-CcRecord {
+    # One record (PSCustomObject or dictionary) -> an ordered hashtable copy; $null stays $null.
+    param($R)
+    if ($null -eq $R) { return $null }
+    $h = [ordered]@{}
+    if ($R -is [System.Collections.IDictionary]) { foreach ($k in $R.Keys) { $h[$k] = $R[$k] } }
+    else { foreach ($p in $R.PSObject.Properties) { $h[$p.Name] = $p.Value } }
+    return $h
+}
+
+function ConvertTo-CcState {
+    # cc.json as read (or $null) -> the full shape with every key present.
+    param($Raw)
+    $s = [ordered]@{ schema = 1; checked_at = $null; pinned = $null; previous = @(); candidate = $null; rejected = @() }
+    if ($null -eq $Raw) { return $s }
+    try { $s.checked_at = $Raw.checked_at } catch {}
+    try { $s.pinned = Copy-CcRecord $Raw.pinned } catch {}
+    try { $s.candidate = Copy-CcRecord $Raw.candidate } catch {}
+    try { $s.previous = @(@($Raw.previous) | Where-Object { $null -ne $_ } | ForEach-Object { Copy-CcRecord $_ }) } catch {}
+    try { $s.rejected = @(@($Raw.rejected) | Where-Object { $_ } | ForEach-Object { "$_" }) } catch {}
+    return $s
+}
+
+function Get-CcStageDecision {
+    # What -Check does with the newest version the global install has:
+    #   bootstrap   no pin yet (-Check pins what runs today; no gate)
+    #   stage       newer than the pin, never rejected, not already the candidate
+    #   none:<why>  current | older | rejected | candidate | unreadable
+    param($State, [string]$Source)
+    $s = ConvertTo-CcState $State
+    if (-not $s.pinned) { return 'bootstrap' }
+    $src = ConvertTo-CcVersion $Source
+    $pin = ConvertTo-CcVersion "$($s.pinned.version)"
+    if (-not $src -or -not $pin) { return 'none:unreadable' }
+    if ($src -eq $pin) { return 'none:current' }
+    if ($src -lt $pin) { return 'none:older' }
+    if ($s.rejected -contains $Source) { return 'none:rejected' }
+    if ($s.candidate -and "$($s.candidate.version)" -eq $Source) { return 'none:candidate' }
+    return 'stage'
+}
+
+function Get-CcPromoteDecision {
+    # 'promote' only when the run recorded each of the 8 checks exactly once,
+    # none FAILed and at least one PASSed (SKIP = does not apply here); else
+    # 'fail'. A run that stopped early therefore never promotes.
+    param($Checks = @())
+    $seen = @{}
+    foreach ($c in @($Checks)) {
+        if ($null -eq $c) { continue }
+        $n = 0; try { $n = [int]$c.n } catch {}
+        if ($n -lt 1 -or $n -gt 8 -or $seen.ContainsKey($n)) { return 'fail' }
+        $r = "$($c.result)"
+        if ($r -cne 'PASS' -and $r -cne 'SKIP') { return 'fail' }
+        $seen[$n] = $r
+    }
+    if ($seen.Count -ne 8) { return 'fail' }
+    if (@($seen.Values | Where-Object { $_ -ceq 'PASS' }).Count -eq 0) { return 'fail' }
+    return 'promote'
+}
+
+function Get-CcTestOutcome {
+    # A finished gate run -> @{ Action; State }:
+    #   promote  the old pin heads previous (at most 2 kept), the candidate is pinned by: gate
+    #   retry    first failure: status failed, attempts 1 (the tick retries it an hour later)
+    #   reject   second failure: status rejected, the version joins rejected[] (never staged again)
+    param($State, $Checks = @(), [string]$Now)
+    $s = ConvertTo-CcState $State
+    $c = Copy-CcRecord $s.candidate
+    $c['checks'] = @($Checks); $c['tested_at'] = $Now
+    if ((Get-CcPromoteDecision -Checks $Checks) -eq 'promote') {
+        $prev = @()
+        if ($s.pinned) { $prev += [ordered]@{ version = $s.pinned.version; exe = $s.pinned.exe; sha256 = $s.pinned.sha256; promoted_at = $s.pinned.promoted_at } }
+        $s.previous = @($prev + @($s.previous) | Select-Object -First 2)
+        $s.pinned = [ordered]@{ version = $c.version; exe = $c.exe; sha256 = $c.sha256; promoted_at = $Now; by = 'gate' }
+        $c['status'] = 'promoted'; $c['detail'] = ''
+        $s.candidate = $c
+        return @{ Action = 'promote'; State = $s }
+    }
+    $c['attempts'] = [int]$c.attempts + 1
+    $bad = @(@($Checks) | Where-Object { $_ -and "$($_.result)" -cne 'PASS' -and "$($_.result)" -cne 'SKIP' } | ForEach-Object { "check $($_.n) ($($_.name)): $($_.detail)" })
+    $c['detail'] = $(if ($bad.Count) { $bad -join '; ' } else { "incomplete run ($(@($Checks).Count) of 8 checks recorded)" })
+    if ($c.attempts -ge 2) {
+        $c['status'] = 'rejected'
+        if ($s.rejected -notcontains "$($c.version)") { $s.rejected = @($s.rejected) + "$($c.version)" }
+        $s.candidate = $c
+        return @{ Action = 'reject'; State = $s }
+    }
+    $c['status'] = 'failed'
+    $s.candidate = $c
+    return @{ Action = 'retry'; State = $s }
+}
+
+function Get-CcPruneList {
+    # The <rt>/cc/<version> dirs prune may delete, oldest first: every one that
+    # is not the pin, previous[0..1], the candidate, or run by a process (-InUse).
+    param([string[]]$Versions = @(), $State, [string[]]$InUse = @())
+    $s = ConvertTo-CcState $State
+    $keep = @{}
+    if ($s.pinned) { $keep["$($s.pinned.version)"] = $true }
+    foreach ($p in @($s.previous | Select-Object -First 2)) { $keep["$($p.version)"] = $true }
+    if ($s.candidate) { $keep["$($s.candidate.version)"] = $true }
+    foreach ($v in @($InUse)) { if ($v) { $keep["$v"] = $true } }
+    return @(@($Versions) | Where-Object { (ConvertTo-CcVersion $_) -and -not $keep.ContainsKey("$_") } | Sort-Object { ConvertTo-CcVersion $_ })
+}
+
+function Get-CcRollbackState {
+    # -> @{ Ok; Detail; State; From; Target }. The pin moves to previous[0] (or
+    # the previous entry -To names), which leaves previous; the version it
+    # replaced joins rejected[] so -Check never stages it again.
+    param($State, [string]$To, [string]$Now)
+    $s = ConvertTo-CcState $State
+    if (-not $s.pinned) { return @{ Ok = $false; Detail = 'no pin to roll back from (cc.json has none)' } }
+    $prev = @($s.previous)
+    if ($prev.Count -eq 0) { return @{ Ok = $false; Detail = 'no previous version is kept' } }
+    $idx = 0
+    if ($To) {
+        $idx = -1
+        for ($i = 0; $i -lt $prev.Count; $i++) { if ("$($prev[$i].version)" -eq $To) { $idx = $i; break } }
+        if ($idx -lt 0) { return @{ Ok = $false; Detail = "$To is not a kept previous version (kept: $(@($prev | ForEach-Object { $_.version }) -join ', '))" } }
+    }
+    $t = $prev[$idx]
+    $from = "$($s.pinned.version)"
+    $s.pinned = [ordered]@{ version = $t.version; exe = $t.exe; sha256 = $t.sha256; promoted_at = $Now; by = 'rollback' }
+    $s.previous = @(for ($i = 0; $i -lt $prev.Count; $i++) { if ($i -ne $idx) { $prev[$i] } })
+    if ($s.rejected -notcontains $from) { $s.rejected = @($s.rejected) + $from }
+    return @{ Ok = $true; Detail = ''; State = $s; From = $from; Target = $t }
+}
+
 # --- background sessions (harness.session: bg) -----------------------------------------
 function Get-BgAgents {
     # `claude agents --json` (run under the bot's CLAUDE_CONFIG_DIR) -> array of
