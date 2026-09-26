@@ -11,7 +11,7 @@ Locked behaviour (daemon/launch.ps1):
   claude) sees it;
 - no vault oauth_token and no /login in the bot's own config home
   (.credentials.json) = exit 5, a launches.log line "refusing to launch",
-  state exit_code 5, and no claude is started;
+  state launch.exit_code 5, and no claude is started;
 - with a config-home /login the launch proceeds, still without the inherited token.
 
 Only fake values (`value-for-tests-...`) are used.
@@ -88,7 +88,8 @@ def test_no_vault_token_refuses_and_never_passes_the_inherited_one(bot, args):
     log = (rt / "logs" / name / "launches.log").read_text(encoding="utf-8-sig")
     assert "refusing to launch" in log and HKCU_TOKEN not in log
     state = json.loads((rt / "state" / f"{name}.json").read_text(encoding="utf-8-sig"))
-    assert state["exit_code"] == 5 and state["status"] == "exited"
+    assert state["launch"]["exit_code"] == 5 and state["launch"]["phase"] == "exited" and "status" not in state
+    assert state["launch"]["consumed_at"] and state["launch"]["nonce_sha256"]  # the attestation shares the block
     # no claude was started for the session; any claude call on the way never saw the token
     calls = seen.read_text(encoding="utf-8", errors="replace") if seen.exists() else ""
     assert HKCU_TOKEN not in calls

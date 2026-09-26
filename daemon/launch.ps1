@@ -334,7 +334,7 @@ if (-not $secrets.ContainsKey('oauth_token')) {
         if (-not $DryRun) {
             if ($tokenFile -and (Test-Path $tokenFile)) { Remove-Item -LiteralPath $tokenFile -Force -ErrorAction SilentlyContinue }
             if ($attested) { Confirm-LaunchNonce -Bot $Bot }
-            Write-State @{ status = 'exited'; exit_code = 5; updated_at = (Get-Date).ToString('o') }
+            Set-BotLaunchPhase -Bot $Bot -Phase exited -ExitCode 5 -Updates @{ updated_at = (Get-Date).ToString('o') }
             exit 5
         }
     }
@@ -437,10 +437,11 @@ if ($DryRun) {
     exit 0
 }
 
-Write-State @{
+Set-BotLaunchPhase -Bot $Bot -Phase starting -Updates @{
     bot = $Bot; claude_pid = $null; shell_pid = $(if ($Bg) { $null } else { $PID })
     started_at = (Get-Date).ToString('o'); started_by = $StartedBy; updated_at = (Get-Date).ToString('o')
-    poller = $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'NONE' }); status = 'starting'
+    poller = $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'NONE' })
+    desired = [ordered]@{ state = 'running'; by = $StartedBy; at = (Get-Date).ToString('o') }
     in_pty = [bool]$InPty; resume = $resume; service = $(if ($Bg) { 'bg' } else { 'fg' })
     env_launcher_pid = $PID; session_env = $null   # not launcher_pid: the tick's hung-launcher tracking owns that key
 }
@@ -491,7 +492,7 @@ if ($Bg) {
         $why = $(if ($DebugLog) { 'this start asks for -DebugLog (--debug)' } else { "it saved other flags than this launch's (saved: $savedFlags | now: $flagsKey)" })
         if ($plan -eq 'refuse') {
             Write-LaunchLog "bg: FAIL - session $resumeId is in the roster and $why; resuming it with flags would start a copy. New session with the new flags: botcorp start $Bot --fresh$(if ($DebugLog) { ' --debug' })"
-            Write-State @{ status = 'exited'; exit_code = 4; updated_at = (Get-Date).ToString('o') }
+            Set-BotLaunchPhase -Bot $Bot -Phase exited -ExitCode 4 -Updates @{ updated_at = (Get-Date).ToString('o') }
             $code = 4
             exit 4
         } elseif ($plan -eq 'reflag') {
@@ -574,10 +575,10 @@ if ($Bg) {
         if ($copy.Count) { Write-LaunchLog "bg: WARN claude --bg started a COPY instead of continuing $resumeId ($($copy[0]))" }
         # exit 0 is not success: only a live claude process running the session is (Get-BgLaunchResult)
         $res = Get-BgLaunchResult -ExitCode $code -ClaudePid $cpid -Alive (Test-ProcAlive $cpid @('claude'))
-        $upd = @{ claude_pid = $(if ($cpid -gt 0) { $cpid } else { $null }); bg_id = $(if ($bgId) { $bgId } else { $null }); status = $(if ($res.Ok) { 'running' } else { 'exited' }); exit_code = $res.Code; updated_at = (Get-Date).ToString('o') }
+        $upd = @{ claude_pid = $(if ($cpid -gt 0) { $cpid } else { $null }); bg_id = $(if ($bgId) { $bgId } else { $null }); updated_at = (Get-Date).ToString('o') }
         if ($sid) { $upd['session_id'] = $sid }
         if ($res.Ok -and $plan -ne 'bare') { $upd['bg_flags'] = $flagsKey }   # what this session saved as its options
-        Write-State $upd
+        Set-BotLaunchPhase -Bot $Bot -Phase $(if ($res.Ok) { 'up' } else { 'exited' }) -ExitCode $res.Code -Updates $upd
         if ($canOwn -and $cpid -gt 0) { try { [System.IO.File]::WriteAllText($lockFile, "$cpid`n$((Get-Date).ToString('o'))") } catch {} }
         Write-LaunchLog "bg: id=$bgId conversation=$sid$(if ($workerSid -and $workerSid -ne $sid) { " worker_session=$workerSid" }) claude_pid=$cpid exit=$code"
         if (-not $res.Ok) {
@@ -626,7 +627,7 @@ if ($Bg) {
             Write-LaunchLog "env: $($chk.Verdict) - $($chk.Text)$(if ($chk.Verdict -eq 'OK') { " and oauth $(if ($oauthVal) { "$(Mask $oauthVal) ($oauthSrc)" } else { 'none (the config home''s own login)' }); $injected" } elseif ($chk.Verdict -ne 'UNKNOWN') { ". Fix: botcorp stop $Bot; botcorp start $Bot" } else { "; this launch passed $injected" })"
             Write-State @{ session_env = $chk.Verdict; updated_at = (Get-Date).ToString('o') }
         }
-    } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Write-State @{ status = 'exited'; exit_code = 1; updated_at = (Get-Date).ToString('o') } }
+    } catch { Write-LaunchLog "bg launch failed: $($_.Exception.Message)"; Set-BotLaunchPhase -Bot $Bot -Phase exited -ExitCode 1 -Updates @{ updated_at = (Get-Date).ToString('o') } }
     finally {
         foreach ($k in $secretEnvNames) { Remove-Item "env:$k" -ErrorAction SilentlyContinue }
         if ($attested) { Confirm-LaunchNonce -Bot $Bot }   # consumed: the child is up (or failed); never reusable
@@ -669,7 +670,7 @@ try {
         Write-LaunchLog "telegram: token file $(if (Test-Path $tokenFile) { 'NOT deleted (remove it by hand)' } else { 'deleted' }) at session exit: $tokenFile"
     }
     if ($tokenJob) { Remove-Job -Job $tokenJob -Force -ErrorAction SilentlyContinue }
-    Write-State @{ status = 'exited'; exit_code = $code; updated_at = (Get-Date).ToString('o'); claude_pid = $null }
+    Set-BotLaunchPhase -Bot $Bot -Phase exited -ExitCode $code -Updates @{ updated_at = (Get-Date).ToString('o'); claude_pid = $null }
     # Release our own owner-lock only (SessionEnd does the same from inside;
     # this covers a kill that never fired the hook).
     try {

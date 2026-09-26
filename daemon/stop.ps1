@@ -34,5 +34,5 @@ if ($bgId -or $cpid -gt 0 -or (Get-BgDaemon -ConfigDir (Get-BotPaths -Bot $Bot).
 } elseif (-not (Test-Path $ptyJson)) {
     Write-Output "stop ${Bot}: nothing recorded as running"
 }
-Write-BotState -Bot $Bot -Updates @{ status = 'stopped'; stopped_at = (Get-Date).ToString('o'); stopped_by = 'cli' }
+Write-BotState -Bot $Bot -Updates @{ desired = [ordered]@{ state = 'stopped'; by = 'cli'; at = (Get-Date).ToString('o') } }
 exit $(if ($ok) { 0 } else { 1 })

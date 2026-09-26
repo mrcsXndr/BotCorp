@@ -112,8 +112,8 @@ export async function getBot(name) {
     configDir: configDir(name),
     yamlError,
     state,                                 // daemon-written, passed through
-    // A pty-host OR a live claude --bg session (was `!!pty`: a bg bot always
-    // read "stopped", so Start stayed enabled on a live bot).
+    // A pty-host OR a live claude --bg session (was the pty record alone: a bg
+    // bot always read "stopped", so Start stayed enabled on a live bot).
     running: live.running,
     kind: cfg?.harness?.session === 'pty' ? 'pty' : 'bg',
     poller: live.poller,

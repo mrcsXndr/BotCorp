@@ -1171,7 +1171,8 @@ function Read-BotState {
 
 function Write-BotState {
     # Merge $Updates over the existing record (launch.ps1 writes the same file
-    # with the same shape; every key it wrote is preserved).
+    # with the same shape; every key it wrote is preserved). Every write is a
+    # schema v2 write: a v1 record is folded in on the way (ConvertTo-BotStateV2).
     param([Parameter(Mandatory)][string]$Bot, [hashtable]$Updates)
     try {
         $cur = Read-BotState -Bot $Bot
@@ -1179,8 +1180,108 @@ function Write-BotState {
         if ($cur) { foreach ($p in $cur.PSObject.Properties) { $m[$p.Name] = $p.Value } }
         if (-not $m.Contains('bot')) { $m['bot'] = $Bot }
         foreach ($k in $Updates.Keys) { $m[$k] = $Updates[$k] }
+        $m = (ConvertTo-BotStateV2 -State ([pscustomobject]$m)).State
         [void](Write-JsonFile -Path (Join-Path $script:StateDir "$Bot.json") -Object $m -Depth 6)
     } catch { Write-DaemonLog "state write failed (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
+# --- state schema v2 (docs/daemon.md "State file"; core/state.mjs reads it) ------
+# The process record stays flat (bg_id, session_id, claude_pid, ...); three
+# blocks carry the rest, and there is no `status` field any more:
+#   desired   {state: running|stopped, by, at}
+#   launch    the vault attestation (vault.ps1) + {phase, phase_at, exit_code}
+#   observed  core/observe.mjs, persisted by the tick (Update-BotsObserved)
+function ConvertTo-OrderedMap {
+    # A JSON object (PSCustomObject) or a dictionary -> [ordered], one level.
+    param($Object)
+    $m = [ordered]@{}
+    if ($null -eq $Object) { return $m }
+    if ($Object -is [System.Collections.IDictionary]) { foreach ($k in $Object.Keys) { $m[$k] = $Object[$k] }; return $m }
+    foreach ($p in $Object.PSObject.Properties) { $m[$p.Name] = $p.Value }
+    return $m
+}
+
+function ConvertTo-BotStateV2 {
+    # A v1 record (flat status / exit_code / stopped_at / stopped_by) -> v2,
+    # the same mapping as core/state.mjs stateView. A v2 record comes back as
+    # it was with Changed = $false, so a second run changes nothing.
+    param($State)
+    $m = ConvertTo-OrderedMap $State
+    $legacy = @(@('status', 'exit_code', 'stopped_at', 'stopped_by') | Where-Object { $m.Contains($_) })
+    if ("$($m['schema'])" -eq '2' -and $legacy.Count -eq 0) { return @{ State = $m; Changed = $false } }
+    $status = "$($m['status'])"
+    if (-not $m['desired'] -and $status) {
+        $m['desired'] = if ($status -eq 'stopped') { [ordered]@{ state = 'stopped'; by = $m['stopped_by']; at = $(if ($m['stopped_at']) { $m['stopped_at'] } else { $m['updated_at'] }) } }
+                        else { [ordered]@{ state = 'running'; by = $m['started_by']; at = $(if ($m['started_at']) { $m['started_at'] } else { $m['updated_at'] }) } }
+    }
+    $l = ConvertTo-OrderedMap $m['launch']
+    $v1 = @{ running = 'up'; starting = 'starting'; 'cold-starting' = 'cold-starting'; restarting = 'restarting'; exited = 'exited'; locked = 'locked' }
+    if (-not $l['phase'] -and $status -and $v1.ContainsKey($status)) { $l['phase'] = $v1[$status]; $l['phase_at'] = $m['updated_at'] }
+    if (-not $l.Contains('exit_code') -and $m.Contains('exit_code')) { $l['exit_code'] = $m['exit_code'] }
+    if ($l.Count -gt 0) { $m['launch'] = $l }
+    foreach ($k in $legacy) { $m.Remove($k) }
+    $m['schema'] = 2
+    return @{ State = $m; Changed = $true }
+}
+
+function Set-BotLaunchPhase {
+    # launch.phase (starting | cold-starting | restarting | up | exited | locked)
+    # merged into the `launch` block next to the vault attestation, with any
+    # flat $Updates, in one write.
+    param([Parameter(Mandatory)][string]$Bot, [Parameter(Mandatory)][string]$Phase, $ExitCode = $null, [hashtable]$Updates = @{})
+    $st = Read-BotState -Bot $Bot
+    $l = ConvertTo-OrderedMap $(if ($st) { $st.launch } else { $null })
+    $l['phase'] = $Phase; $l['phase_at'] = (Get-Date).ToString('o'); $l['exit_code'] = $ExitCode
+    $u = @{}; foreach ($k in $Updates.Keys) { $u[$k] = $Updates[$k] }
+    $u['launch'] = $l
+    Write-BotState -Bot $Bot -Updates $u
+}
+
+function Update-BotsObserved {
+    # `botcorp observe --all --json` once per tick (core/observe.mjs); each
+    # record is persisted as `observed` in its state/<bot>.json. No --roster:
+    # the tick's own roster query (Get-BgAgents, dead bots only) refreshes a
+    # restarted worker's claude_pid, which the next observe reads. Returns
+    # @{ <bot> = <record> }, empty when observe could not run (fail-open: the
+    # readers then see the previous tick's record, with its `at`).
+    param([switch]$NoWrite)
+    $out = @{}
+    try {
+        $node = Resolve-Node
+        if (-not $node) { Write-DaemonLog 'observe: node.exe not found (fail-open)'; return $out }
+        $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $script:BotCorp 'cli\botcorp.mjs'), 'observe', '--all', '--json') -TimeoutSec 120 -Label 'observe' -Capture -Env @{ BOTCORP_HOME = $script:RtHome; BOTCORP_BOTS_DIR = $script:BotsDir } -WorkingDirectory $script:BotCorp
+        if ($r.ExitCode -ne 0) { Write-DaemonLog "observe: exit=$($r.ExitCode) (fail-open): $("$($r.Output)".Trim() -split "`n" | Select-Object -Last 1)"; return $out }
+        foreach ($o in @(ConvertFrom-ObserveJson -Text "$($r.Output)")) {
+            if (-not $o -or -not $o.bot) { continue }
+            $out["$($o.bot)"] = $o
+            if (-not $NoWrite) { Write-BotState -Bot "$($o.bot)" -Updates @{ observed = $o } }
+        }
+    } catch { Write-DaemonLog "observe: swallowed exception (fail-open): $($_.Exception.Message)" }
+    return $out
+}
+
+function Get-BotObserved {
+    # A fresh `botcorp observe <bot> --json` (no roster: the pid the launcher
+    # recorded is enough between ticks); $null when it could not run.
+    param([Parameter(Mandatory)][string]$Bot, [int]$TimeoutSec = 60)
+    try {
+        $node = Resolve-Node
+        if (-not $node) { return $null }
+        $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $script:BotCorp 'cli\botcorp.mjs'), 'observe', $Bot, '--json') -TimeoutSec $TimeoutSec -Label 'observe' -Capture -Env @{ BOTCORP_HOME = $script:RtHome; BOTCORP_BOTS_DIR = $script:BotsDir } -WorkingDirectory $script:BotCorp -Bot $Bot
+        if ($r.ExitCode -ne 0) { return $null }
+        return (ConvertFrom-ObserveJson -Text "$($r.Output)")
+    } catch { return $null }
+}
+
+function ConvertFrom-ObserveJson {
+    # The pretty-printed JSON block of `botcorp observe --json` (stdout), with
+    # anything a child wrote to stderr around it ignored. $null = unparsable.
+    param([string]$Text)
+    $lines = @("$Text" -split "`r?`n")
+    $i = -1; $j = -1
+    for ($n = 0; $n -lt $lines.Count; $n++) { if ($i -lt 0 -and $lines[$n] -match '^[\[{]') { $i = $n }; if ($lines[$n] -match '^[\]}]\s*$') { $j = $n } }
+    if ($i -lt 0 -or $j -lt $i) { return $null }
+    try { return (($lines[$i..$j] -join "`n") | ConvertFrom-Json -ErrorAction Stop) } catch { return $null }
 }
 
 function Get-BotEnv {

@@ -371,7 +371,11 @@ function Update-VaultLaunchState {
         if (Test-Path $p) { $cur = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($prop in $cur.PSObject.Properties) { $m[$prop.Name] = $prop.Value } }
     } catch {}
     if (-not $m.Contains('bot')) { $m['bot'] = $Bot }
-    $m['launch'] = $Launch
+    # The launcher's outcome (phase, phase_at, exit_code) shares the `launch`
+    # block (state schema v2); a new attestation keeps it.
+    $l = [ordered]@{}; foreach ($k in $Launch.Keys) { $l[$k] = $Launch[$k] }
+    if ($m['launch']) { foreach ($k in @('phase', 'phase_at', 'exit_code')) { if (-not $l.Contains($k) -and ($m['launch'].PSObject.Properties.Name -contains $k)) { $l[$k] = $m['launch'].$k } } }
+    $m['launch'] = $l
     $dir = Split-Path $p -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
     [System.IO.File]::WriteAllText($p, (($m | ConvertTo-Json -Depth 6) + "`n"))

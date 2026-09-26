@@ -115,12 +115,17 @@ if ($service -eq 'bg') {
         Write-Host "DRYRUN: would relaunch $Bot via launch.ps1 -Bg$(if ($fresh) { ' -Fresh' }) (claude --bg under the supervisor)"
         exit 0
     }
-    Write-BotState -Bot $Bot -Updates @{ status = 'restarting'; launcher_started_at = (Get-Date).ToString('o') }
+    Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_started_at = (Get-Date).ToString('o') }
     $how = Start-BotBg -Bot $Bot -Fresh:$fresh -StartedBy 'daemon-restart'
     Write-BotState -Bot $Bot -Updates @{ launcher_started_at = $null }
-    $st2 = Read-BotState -Bot $Bot
-    $ok = $false; try { $ok = ("$($st2.status)" -eq 'running') } catch {}
-    if ($ok) { Log "relaunched OK via -> $how [$mode]"; exit 0 }
+    # Up = observe measures a live session (core/observe.mjs), never a field read back; 90 s cap.
+    $ok = $false; $until = (Get-Date).AddSeconds(90)
+    while ((Get-Date) -lt $until) {
+        $o = Get-BotObserved -Bot $Bot -TimeoutSec 30
+        if ($o -and $o.alive) { $ok = $true; break }
+        Start-Sleep -Seconds 5
+    }
+    if ($ok) { Log "relaunched OK via -> $how [$mode] (observe: $($o.activity))"; exit 0 }
     Log "RELAUNCH FAILED: $how. Start the bot by hand (botcorp start $Bot)."; exit 1
 }
 
@@ -156,12 +161,12 @@ if ($DryRun) {
 try {
     if ($sid -eq 0 -and $isid -gt 0) {
         $how = Start-VisibleLaunchTask -Bot $Bot -SessionId $isid
-        if ($how) { $viaTask = $true; Write-BotState -Bot $Bot -Updates @{ launcher_pid = $null; launcher_started_at = (Get-Date).ToString('o'); status = 'restarting' }; Log "relaunched OK via -> $how [$mode]" }
+        if ($how) { $viaTask = $true; Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_pid = $null; launcher_started_at = (Get-Date).ToString('o') }; Log "relaunched OK via -> $how [$mode]" }
     }
     if (-not $viaTask) {
         $lp = Start-PtyHost -Bot $Bot
         if ($lp -le 0) { Log 'RELAUNCH FAILED: pty-host did not start. Start the bot by hand.'; exit 1 }
-        Write-BotState -Bot $Bot -Updates @{ launcher_pid = $lp; launcher_started_at = (Get-Date).ToString('o'); status = 'restarting' }
+        Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_pid = $lp; launcher_started_at = (Get-Date).ToString('o') }
         Log "relaunched OK via -> pty-host --continue (pid $lp) [$mode]"
     }
     exit 0

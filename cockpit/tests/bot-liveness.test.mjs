@@ -1,8 +1,8 @@
 // Cockpit bot liveness (bots.mjs `liveness`): a bot runs when a pty-host OR a
 // live claude --bg session runs it, measured the way `botcorp doctor` does
 // (cli/_lib.mjs botLiveness / sessionAliveVerdict / bgBlockVerdict). The old
-// cockpit read `running: !!pty`, so a bg bot always showed "stopped" and Start
-// stayed enabled on a live session. Run: node --test cockpit/tests/
+// cockpit read running from the pty record alone, so a bg bot always showed
+// "stopped" and Start stayed enabled on a live session. Run: node --test cockpit/tests/
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -27,7 +27,7 @@ function botPid(cfgDir, pid) {
   fs.writeFileSync(path.join(cfgDir, 'channels', 'telegram', 'bot.pid'), `${pid}\n`);
 }
 
-test('a live bg session with no pty-host reads as running (the old !!pty read stopped)', async () => {
+test('a live bg session with no pty-host reads as running (the old pty-only read said stopped)', async () => {
   const cfgDir = cfgDirFor('bg');
   const state = { status: 'running', claude_pid: process.pid, bg_id: BG_ID, session_id: 'S1' };
   const pty = null;
@@ -37,8 +37,8 @@ test('a live bg session with no pty-host reads as running (the old !!pty read st
   assert.equal(live.down, null);
   assert.equal(live.blocked, null, 'no job record: cannot tell, so not blocked');
   assert.equal(live.poller, null, 'telegram module off: no poller state');
-  // the pre-fix expression on the same fixture: this is what shipped
-  assert.equal(!!pty, false);
+  // the pre-fix expression (the pty record alone) on the same fixture: this is what shipped
+  assert.equal(Boolean(pty), false);
 });
 
 test('blocked: the job record waits on a person (doctor `session not blocked`)', async () => {

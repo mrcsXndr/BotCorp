@@ -37,6 +37,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
 const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const { observeAll } = await import('../core/observe.mjs');
+const { stateView } = await import('../core/state.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, botExists, listBots, listFixtureBots,
@@ -735,12 +736,15 @@ function mintLaunchNonce(bot) {
   const nonce = crypto.randomBytes(32).toString('hex');
   const file = path.join(STATE_DIR, `${bot}.json`);
   const st = readJson(file) || { bot };
+  const prev = st.launch && typeof st.launch === 'object' ? st.launch : {};
   st.launch = {
     nonce_sha256: crypto.createHash('sha256').update(nonce, 'utf8').digest('hex'),
     minted_by_pid: process.pid,
     at: new Date().toISOString(),
     at_unix: Math.floor(Date.now() / 1000),
     consumed_at: null,
+    // the launcher's outcome shares the block (state schema v2); a new attestation keeps it
+    ...Object.fromEntries(['phase', 'phase_at', 'exit_code'].filter((k) => k in prev).map((k) => [k, prev[k]])),
   };
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.writeFileSync(file, JSON.stringify(st, null, 2) + '\n');
@@ -793,6 +797,10 @@ function stopBot(bot) {
     const r = run(process.execPath, [PTY_HOST, '--stop', bot], { timeoutMs: 60_000 });
     for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
     if (r.code !== 0) fail(`stop: pty-host --stop exited ${r.code}`);
+    // stop.ps1 records this for a bg bot (state schema v2 `desired`)
+    const file = path.join(STATE_DIR, `${bot}.json`);
+    const st = readJson(file);
+    if (st) fs.writeFileSync(file, JSON.stringify({ ...st, desired: { state: 'stopped', by: 'cli', at: new Date().toISOString() } }, null, 2) + '\n');
   }
   // Without this marker the daemon's next tick would cold-start the bot again.
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -872,7 +880,7 @@ function botStatus(bot) {
     name: bot,
     running: alive,
     pty: ptyPublic(pty),
-    state: state ? { status: alive ? state.status ?? null : 'stopped', started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
+    state: state ? { launch: stateView(state).launch.phase ?? null, started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
     telegram,
     poller_pid: botPidAlive ? botPid : null,
     session_env: alive ? { env: sessionEnv.env, oauth_last4: sessionEnv.oauth, detail: sessionEnv.detail } : null,
@@ -916,7 +924,7 @@ function printStatus(s) {
   out(`bot: ${s.name}`);
   out(`  running: ${s.running ? 'yes' : 'no'}`);
   if (s.pty) out(`  pty: pid=${s.pty.ptyPid} host=${s.pty.pid} ws=127.0.0.1:${s.pty.port} mode=${s.pty.mode} since=${s.pty.startedAt}`);
-  if (s.state) out(`  state: status=${s.state.status} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
+  if (s.state) out(`  state: launch=${s.state.launch} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
   if (s.session_env) out(`  env: ${s.session_env.env}  ${s.session_env.detail}`);
   if (s.session_secret_env) out(`  secrets env: ${s.session_secret_env.detail.replace(/<bot>/g, s.name)}`);

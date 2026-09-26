@@ -13,6 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botsDir, botHome } from '../core/paths.mjs';
+import { stateView } from '../core/state.mjs';
 
 export { botHome };
 
@@ -156,7 +157,7 @@ export function pollerVerdict({ alive, telegram, recorded = null, botPid = 0, bo
 // without it that answer is UNKNOWN.
 export function botLiveness({ pty = null, state = null, telegram = false, botPid = 0, parents = null }) {
   const claudeAlive = !!(state && pidAlive(Number(state.claude_pid)));
-  const alive = !!pty || claudeAlive;
+  const alive = Boolean(pty) || claudeAlive;
   const botPidAlive = pidAlive(botPid);
   let underClaude = null;
   if (alive && telegram && botPidAlive) {
@@ -234,9 +235,11 @@ export function sessionAliveVerdict({ running, state = null, paused = false }) {
   if (running) return { level: 'PASS', detail: `claude pid ${state && state.claude_pid ? state.claude_pid : '?'} alive${state && state.session_id ? ` (session ${state.session_id})` : ''}` };
   if (paused) return { level: 'INFO', detail: 'paused (botcorp start un-pauses it)' };
   if (!state) return { level: 'INFO', detail: 'never started' };
-  if (['running', 'starting'].includes(state.status)) return { level: 'FAIL', detail: `state says ${state.status} (session ${state.session_id || '?'}, bg_id ${state.bg_id || '?'}) but no live claude process runs it` };
-  if (state.status === 'exited' && Number(state.exit_code)) return { level: 'FAIL', detail: `the last launch failed (exit ${state.exit_code}; launches.log says why)` };
-  return { level: 'INFO', detail: `not running (${state.status || 'stopped'})` };
+  const { desired, launch } = stateView(state);
+  const stopped = desired && desired.state === 'stopped';
+  if (!stopped && ['up', 'starting'].includes(launch.phase)) return { level: 'FAIL', detail: `the last launch came ${launch.phase} (session ${state.session_id || '?'}, bg_id ${state.bg_id || '?'}) but no live claude process runs it` };
+  if (launch.phase === 'exited' && Number(launch.exit_code)) return { level: 'FAIL', detail: `the last launch failed (exit ${launch.exit_code}; launches.log says why)` };
+  return { level: 'INFO', detail: `not running (${stopped ? 'stopped' : launch.phase || 'stopped'})` };
 }
 
 // doctor `<bot>: bg session pinned`. Claude Code's supervisor retires an

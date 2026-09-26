@@ -219,7 +219,8 @@ function Invoke-UpdateApply {
         foreach ($b in (Get-BotList)) {
             $st = Read-BotState -Bot $b
             $running = $false
-            try { if ($st -and ("$($st.status)" -in @('running', 'starting', 'restarting', 'cold-starting'))) { $running = $true } } catch {}
+            # not observed this tick = not known to be down: the busy gate decides
+            try { $o = $script:Observed[$b]; if ((-not $o) -or $o.alive -or ("$((ConvertTo-BotStateV2 -State $st).State.launch.phase)" -in @('starting', 'restarting', 'cold-starting'))) { $running = $true } } catch { $running = $true }
             if ($running -and (Test-SessionBusy -Bot $b)) { Write-DaemonLog "update apply $tag DEFERRED: $b is busy (no breakpoint, transcript fresh)" -Quiet; return $null }
         }
         if ($AsDryRun) { Write-DaemonLog "DRYRUN would apply harness release $tag (every bot at a safe point) and restart the bots"; return $null }
@@ -503,7 +504,7 @@ function Invoke-BotTick {
     Write-DaemonLog "state: alive=$alive service=$service shellPid=$shellPid claudePid=$claudePid$(if ($service -eq 'bg') { " bg=$bgId $bgNote" }) poller=$poller$(if ($blocked) { " blocked='$blocked'" }) modules=$(@($cfg._modules) -join ',')" -Bot $Bot
 
     if ($alive -and -not $ProbeOnly) {
-        $upd = @{ claude_pid = $claudePid; shell_pid = $(if ($shellAlive) { $shellPid } else { $null }); updated_at = (Get-Date).ToString('o'); poller = $poller; status = 'running' }
+        $upd = @{ claude_pid = $claudePid; shell_pid = $(if ($shellAlive) { $shellPid } else { $null }); updated_at = (Get-Date).ToString('o'); poller = $poller }
         if ($service -eq 'bg') { if ($bgId) { $upd['bg_id'] = $bgId }; if ($sessionId) { $upd['session_id'] = $sessionId } }
         Write-BotState -Bot $Bot -Updates $upd
     }
@@ -530,7 +531,7 @@ function Invoke-BotTick {
     # live session holds. Wait for `botcorp secrets unlock` / the cockpit.
     if (($action -in @('cold-start', 'restart')) -and (Test-VaultLocked -BotHome $P.BotHome -Bot $Bot)) {
         Write-DaemonLog "vault LOCKED (operator lock, not unlocked since boot) - not ${action}ing; botcorp secrets unlock $Bot or the cockpit" -Bot $Bot -Quiet
-        if ($action -eq 'cold-start' -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ status = 'locked'; updated_at = (Get-Date).ToString('o') } }
+        if ($action -eq 'cold-start' -and -not $DryRun) { Set-BotLaunchPhase -Bot $Bot -Phase locked -Updates @{ updated_at = (Get-Date).ToString('o') } }
         $action = 'locked'
     }
 
@@ -572,9 +573,9 @@ function Invoke-BotTick {
             $ls = [datetime]::MinValue
             if ($st.launcher_started_at -and [datetime]::TryParse("$($st.launcher_started_at)", [ref]$ls)) { $lageMin = ((Get-Date) - $ls).TotalMinutes }
             # A launch.ps1 in its bounded pre-steps (manual or ours) has already
-            # seeded status=starting; give it the same grace.
+            # seeded launch.phase=starting; give it the same grace.
             try {
-                if ("$($st.status)" -eq 'starting' -and $st.started_at) {
+                if ("$((ConvertTo-BotStateV2 -State $st).State.launch.phase)" -eq 'starting' -and $st.started_at) {
                     $ss = [datetime]::MinValue
                     if ([datetime]::TryParse("$($st.started_at)", [ref]$ss) -and $shellAlive) { $lageMin = [Math]::Min($lageMin, ((Get-Date) - $ss).TotalMinutes) }
                 }
@@ -636,7 +637,7 @@ function Invoke-BotTick {
         if ($claudePid -le 0) { Write-DaemonLog 'restart DEFERRED: claude pid unresolved (never restart.ps1 -OldPid 0)' -Bot $Bot; return }
         $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session idle -> $rel)" -Bot $Bot
-        Write-BotState -Bot $Bot -Updates @{ started_by = 'daemon-restart'; updated_at = (Get-Date).ToString('o'); status = 'restarting' }
+        Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ started_by = 'daemon-restart'; updated_at = (Get-Date).ToString('o') }
         $rp = Start-RestartDetached -Bot $Bot -OldPid $claudePid -OldShellPid $shellPid
         if ($service -eq 'bg') {
             # `claude stop <id>` first (the conversation is kept), then the
@@ -660,7 +661,7 @@ function Invoke-BotTick {
         [void](Stop-BotProcessTree -ProcId $shellPid -Bot $Bot -Why 'cold-start: orphan launcher shell (no claude child)')
     }
     Write-DaemonLog "ACTION=START bot=$Bot kind=cold-start ($(if ($why) { $why } else { 'bot process down' }))" -Bot $Bot
-    Write-BotState -Bot $Bot -Updates @{ started_by = 'daemon-cold'; claude_pid = $null; shell_pid = $null; updated_at = (Get-Date).ToString('o'); status = 'cold-starting' }
+    Set-BotLaunchPhase -Bot $Bot -Phase cold-starting -Updates @{ started_by = 'daemon-cold'; claude_pid = $null; shell_pid = $null; updated_at = (Get-Date).ToString('o') }
     $how = Start-BotCold -Bot $Bot -Paths $P -Service $service
     Write-DaemonLog "cold-start launched via: $how" -Bot $Bot
 }
@@ -676,7 +677,10 @@ if (-not $haveMutex) { Write-DaemonLog 'another daemon tick holds the mutex; exi
 try {
     Write-DaemonLog "tick start (probe=$ProbeOnly dry=$DryRun headless=$(Test-Headless) rt=$RtHome)" -Quiet
     $script:RestartAllWhy = $null
+    $script:Observed = @{}
     if (-not $ProbeOnly) {
+        # one measurement per tick, persisted as state/<bot>.json `observed` (state schema v2)
+        $script:Observed = Update-BotsObserved -NoWrite:$DryRun
         Invoke-CockpitKeepalive -AsDryRun:$DryRun
         Invoke-OtelSinkKeepalive -AsDryRun:$DryRun
         Invoke-UpdateCheck -AsDryRun:$DryRun
