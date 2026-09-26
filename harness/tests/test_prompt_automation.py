@@ -52,7 +52,11 @@ process.stdin.on('data', (b) => {
   while ((i = buf.indexOf('\r')) >= 0) {
     const text = buf.slice(0, i).replace(/\x1b\[20[01]~/g, '');
     buf = buf.slice(i + 1);
-    fs.appendFileSync(out, JSON.stringify({ type: 'user', message: { role: 'user', content: text }, timestamp: new Date().toISOString() }) + '\n');
+    // A typed `/name args` is recorded the way Claude Code records a plugin
+    // skill: namespaced, in a <command-name> wrapper (reference host 2026-09-26).
+    const m = /^\/([\w.-]+)\s*([\s\S]*)$/.exec(text);
+    const content = m ? `<command-message>botcorp:${m[1]}</command-message>\n<command-name>/botcorp:${m[1]}</command-name>\n<command-args>${m[2]}</command-args>` : text;
+    fs.appendFileSync(out, JSON.stringify({ type: 'user', message: { role: 'user', content }, timestamp: new Date().toISOString() }) + '\n');
     process.stdout.write('\r\nok\r\nstub session> ');
   }
 });
@@ -214,6 +218,7 @@ def test_sent_to_a_bg_session_through_a_transient_attach_host(bot, fake_claude_e
     runs, state, logs = _run_now(bot)
     assert runs[-1]["result"] == "sent", (runs, logs)
     assert "transient attach host" in runs[-1]["summary"]
-    assert _typed(bot) == ["/standup"]
+    # recorded namespaced (/botcorp:standup), yet confirmed as the typed /standup
+    assert _typed(bot) == ["<command-message>botcorp:standup</command-message>\n<command-name>/botcorp:standup</command-name>\n<command-args></command-args>"]
     assert not (bot["rt"] / "state" / f"{bot['name']}.pty.json").exists(), "the transient attach host must be stopped"
     assert session.poll() is None, "stopping the attach host must not touch the session"

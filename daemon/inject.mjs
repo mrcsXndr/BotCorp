@@ -111,11 +111,14 @@ async function readFrom(file, offset) {
 }
 
 // Raw lines, not chat.mjs's turns: a typed `/name` is recorded as a
-// <command-name> wrapper that the chat view filters out as meta.
+// <command-name> wrapper that the chat view filters out as meta. A plugin
+// skill is recorded under its namespaced name: typed `/standup` lands as
+// `<command-name>/botcorp:standup</command-name>` (reference host 2026-09-26).
 async function confirm(bot, start, prompt) {
   const head = norm(prompt).slice(0, 60);
   const cmd = /^\/([\w:.-]+)/.exec(prompt.trim());
-  const needle = cmd ? `<command-name>/${cmd[1]}</command-name>` : null;
+  const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const needle = cmd ? new RegExp(`<command-name>/${cmd[1].includes(':') ? '' : '(?:[\\w.-]+:)?'}${esc(cmd[1])}</command-name>`) : null;
   let { file, offset } = start;
   for (const end = Date.now() + CONFIRM_MS; Date.now() < end; await sleep(500)) {
     const cur = await currentTranscript(bot);
@@ -125,7 +128,7 @@ async function confirm(bot, start, prompt) {
     try { text = await readFrom(file, offset); } catch { continue; }
     for (const line of text.split('\n')) {
       const t = userText(line);
-      if (t !== null && ((needle && t.includes(needle)) || norm(t).includes(head))) return true;
+      if (t !== null && ((needle && needle.test(t)) || norm(t).includes(head))) return true;
     }
   }
   return false;
