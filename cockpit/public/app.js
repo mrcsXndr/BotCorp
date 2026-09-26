@@ -62,7 +62,7 @@ async function refresh() {
     if (!lastSnapshot) el('list').innerHTML = `<p class="errbox">Could not load the bots: ${esc(e.message)}. Retrying.</p>`;
     return;
   }
-  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
+  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.phase, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
     const hash = decodeURIComponent(location.hash.replace(/^#/, ''));
@@ -91,14 +91,16 @@ function renderList() {
 function current() { return state.bots.find((b) => b.name === state.selected); }
 
 // running = a pty-host OR a live claude --bg session (the server measures it the
-// way `botcorp doctor` does); blocked = that session waits on a person.
+// way `botcorp doctor` does); blocked = that session waits on a person; phase =
+// the one phase every reader shows (core/state.mjs: idle, working, starting, down, ...).
 function botState(b) {
   if (b.running && b.blocked) return { cls: 'on blocked', short: 'waiting on you', long: 'waiting on you' };
   if (b.running) {
     const how = b.kind === 'bg' ? `background session${b.bgId ? ' ' + b.bgId : ''}` : `pid ${b.pid}${b.mode ? ' · ' + b.mode : ''}`;
-    return { cls: 'on', short: b.kind === 'bg' ? 'running · background' : `running · pid ${b.pid}`, long: `running · ${how}` };
+    return { cls: 'on', short: b.kind === 'bg' ? `${b.phase} · background` : `${b.phase} · pid ${b.pid}`, long: `${b.phase} · ${how}` };
   }
-  return { cls: b.down ? 'down' : '', short: 'stopped', long: 'stopped' };
+  const ph = b.phase || 'stopped';
+  return { cls: b.down ? 'down' : '', short: ph, long: ph };
 }
 
 // doctor `telegram channel running`: OWNED = a poller runs under this bot's claude.

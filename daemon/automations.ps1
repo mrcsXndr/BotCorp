@@ -161,18 +161,20 @@ function Get-NextDueAfterSuccess {
 }
 
 function Get-PromptSkip {
-    # Why a prompt must not be typed into this bot's session now ('' = type it).
-    # Up = a live pty-host or a live claude pid (what `botcorp status` reads);
-    # blocked = the tick saw the bg session waiting on a dialog, which typed
-    # text + Enter could answer; busy = Test-SessionBusy, every restart's gate.
-    $bst = Read-BotState -Bot $Bot
-    $pty = Read-JsonFile -Path $P.PtyFile
-    $hostUp = $pty -and (Test-ProcAlive ([int](Num $pty.pid 0)) @('node'))
-    $claudeUp = $bst -and (Test-ProcAlive ([int](Num $bst.claude_pid 0)) @('claude'))
-    if (-not $hostUp -and -not $claudeUp) { return 'session down' }
-    if ($bst -and ($bst.PSObject.Properties.Name -contains 'session_blocked') -and $bst.session_blocked) { return "session blocked on '$($bst.session_blocked)'" }
-    if (Test-SessionBusy -Bot $Bot) { return 'session busy' }
-    return ''
+    # Why a prompt must not be typed into this bot's session now ('' = type it),
+    # from the observed phase (core/state.mjs): down/stopped = no live pty-host
+    # or claude; blocked = the session waits on a dialog, which typed text +
+    # Enter could answer; only idle (a fresh breakpoint, or the transcript quiet
+    # >= 5 min, Test-SessionBusy's semantics) takes a prompt. Working, starting
+    # and unknown are busy. Measured fresh per fire (`botcorp observe <bot>`):
+    # a prompt typed a moment ago makes the session busy for the next one.
+    $o = Get-BotObserved -Bot $Bot
+    if (-not $o) { return 'session state unknown (observe failed)' }
+    $ph = "$($o.phase)"
+    if ($ph -in @('down', 'stopped')) { return 'session down' }
+    if ($ph -eq 'blocked') { return "session blocked on '$($o.blocked.needs)'" }
+    if ($ph -eq 'idle') { return '' }
+    return 'session busy'
 }
 
 function Get-PromptPreview { param($A) $t = ("$($A.prompt)" -replace '\s+', ' ').Trim(); if ($t.Length -gt 60) { $t = $t.Substring(0, 60) + '...' }; return $t }
@@ -395,7 +397,8 @@ if ($autos.Count -gt 0 -or $RunNow) {
             $maxPerDay = [int](Num $a.max_per_day 0)
             if ($maxPerDay -gt 0 -and [int](Num $e['runs_today'] 0) -ge $maxPerDay -and -not $RunNow) { if ("$($e['last_skip'])" -ne 'max_per_day') { Log "skip ${name}: max_per_day $maxPerDay reached ($($e['runs_today']) today)"; $e['last_skip'] = 'max_per_day' }; continue }
             $idleGated = (($a.PSObject.Properties.Name -contains 'idle_gated') -and ($a.idle_gated -eq $true))
-            if ($idleGated -and (Test-SessionBusy -Bot $Bot)) { if ("$($e['last_skip'])" -ne 'busy') { Log "skip ${name}: idle_gated and the session is busy"; $e['last_skip'] = 'busy' }; continue }
+            # busy = the observed phase is working, starting or unknown, or observe failed
+            if ($idleGated -and ("$((Get-BotObserved -Bot $Bot).phase)" -notin @('idle', 'blocked', 'down', 'stopped'))) { if ("$($e['last_skip'])" -ne 'busy') { Log "skip ${name}: idle_gated and the session is busy"; $e['last_skip'] = 'busy' }; continue }
             $e['last_skip'] = $null
             if ($DryRun) { Log "DRYRUN would run $name ($reason)"; continue }
 

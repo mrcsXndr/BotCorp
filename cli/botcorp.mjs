@@ -36,7 +36,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
 }
 const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
-const { observeAll } = await import('../core/observe.mjs');
+const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
@@ -856,7 +856,10 @@ function botStatus(bot) {
   let botPid = 0;
   try { botPid = firstInt(fs.readFileSync(path.join(configDir(bot), 'channels', 'telegram', 'bot.pid'), 'utf-8')); } catch {}
   const telegram = !!(cfg && cfg.harness.modules.telegram);
-  const { alive, claudeAlive, botPidAlive, poller } = botLiveness({ pty, state, telegram, botPid, parents: processParents });
+  let tree;
+  const parents = () => (tree === undefined ? (tree = processParents()) : tree);
+  const { alive, claudeAlive, botPidAlive, poller } = botLiveness({ pty, state, telegram, botPid, parents });
+  const observed = observeBot(bot, { parents });
   const sessionEnv = sessionEnvOf(bot, state, alive, telegram);
   const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
   // Each automation's last outcome: a prompt's result (sent | failed: ... | skipped: ...), else the exit code.
@@ -879,6 +882,8 @@ function botStatus(bot) {
   return {
     name: bot,
     running: alive,
+    phase: observed.phase,
+    activity: observed.activity,
     pty: ptyPublic(pty),
     state: state ? { launch: stateView(state).launch.phase ?? null, started_by: state.started_by ?? null, poller, claude_pid: claudeAlive ? state.claude_pid : null, started_at: state.started_at ?? null } : null,
     telegram,
@@ -922,7 +927,7 @@ function pct(v) { return v === null || v === undefined ? '?' : `${Math.round(Num
 
 function printStatus(s) {
   out(`bot: ${s.name}`);
-  out(`  running: ${s.running ? 'yes' : 'no'}`);
+  out(`  running: ${s.running ? 'yes' : 'no'}  phase: ${s.phase}`);
   if (s.pty) out(`  pty: pid=${s.pty.ptyPid} host=${s.pty.pid} ws=127.0.0.1:${s.pty.port} mode=${s.pty.mode} since=${s.pty.startedAt}`);
   if (s.state) out(`  state: launch=${s.state.launch} started_by=${s.state.started_by} poller=${s.state.poller}${s.poller_pid ? ` bot.pid=${s.poller_pid}` : ''} claude_pid=${s.state.claude_pid ?? '-'}`);
   else out('  state: (no state.json yet)');
@@ -957,7 +962,7 @@ function cmdObserve({ pos, flags }) {
   const all = observeAll(names, { roster: !!flags.roster });
   if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
   if (!all.length) out('observe: no bots under bots/ (botcorp new)');
-  for (const o of all) out(`${o.bot.padEnd(16)} ${o.activity.padEnd(8)} alive=${o.alive} poller=${o.poller ?? '-'} bg=${o.bg_id ?? '-'}${o.blocked ? ` blocked="${o.blocked.needs}"` : ''}${o.quiet_s !== null ? ` quiet=${o.quiet_s}s` : ''}`);
+  for (const o of all) out(`${o.bot.padEnd(16)} ${o.phase.padEnd(8)} alive=${o.alive} poller=${o.poller ?? '-'} bg=${o.bg_id ?? '-'}${o.blocked ? ` blocked="${o.blocked.needs}"` : ''}${o.quiet_s !== null ? ` quiet=${o.quiet_s}s` : ''}`);
   return 0;
 }
 

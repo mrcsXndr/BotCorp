@@ -184,7 +184,18 @@ def test_tray_probe_and_dry_run_never_open_a_gui():
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip()
     import re
-    assert re.search(r"tray probe: demo-bot: (running|down \(daemon restarts it\)) \| ctx .*% \| tick", r.stdout)
+    assert re.search(r"tray probe: demo-bot: (stopped|unknown|idle|working|blocked|starting|down \(daemon restarts it\)) \| ctx .*% \| tick", r.stdout)
+
+    # the tray shows the phase the tick persisted (observed.phase), not a pid check of its own
+    state_dir = Path(os.environ["BOTCORP_HOME"]) / "state"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    state_file = state_dir / "demo-bot.json"
+    for phase, text in (("down", "down (daemon restarts it)"), ("working", "working")):
+        state_file.write_text(json.dumps({"bot": "demo-bot", "schema": 2, "observed": {"alive": phase != "down", "phase": phase}}), encoding="utf-8")
+        r = _pwsh("tray.ps1", "-Bot", "demo-bot", "-Probe")
+        assert r.returncode == 0, r.stderr
+        assert f"tray probe: demo-bot: {text} | ctx" in r.stdout, r.stdout
+    state_file.unlink()
 
     r = _pwsh("tray.ps1", "-Bot", "demo-bot", "-DryRun")
     assert r.returncode == 0, r.stderr

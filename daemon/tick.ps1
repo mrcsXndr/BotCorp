@@ -204,8 +204,9 @@ function Invoke-UpdateCheck {
 function Invoke-UpdateApply {
     # Apply is an ADMIN action: only a release the CLI/cockpit marked
     # `status: apply_requested` in <rt>/state/updates.json is ever applied, and
-    # only when EVERY bot is at a safe point (fresh breakpoint marker, or idle
-    # per Test-SessionBusy; a bot that is not running is trivially safe).
+    # only when EVERY bot is at a safe point: its phase this tick (observed,
+    # core/state.mjs) is idle (fresh breakpoint marker, or transcript quiet),
+    # blocked, down or stopped. Working, starting, unknown or not observed defer.
     # update.ps1 -Apply -Tag does the checkout + smoke + rollback; on success
     # this returns the reason string and the per-bot tick restarts every live
     # bot through the normal (idle-gated) restart path onto the new code.
@@ -217,11 +218,9 @@ function Invoke-UpdateApply {
         if ($req.Count -eq 0) { return $null }
         $tag = "$($req[0].tag)"
         foreach ($b in (Get-BotList)) {
-            $st = Read-BotState -Bot $b
-            $running = $false
-            # not observed this tick = not known to be down: the busy gate decides
-            try { $o = $script:Observed[$b]; if ((-not $o) -or $o.alive -or ("$((ConvertTo-BotStateV2 -State $st).State.launch.phase)" -in @('starting', 'restarting', 'cold-starting'))) { $running = $true } } catch { $running = $true }
-            if ($running -and (Test-SessionBusy -Bot $b)) { Write-DaemonLog "update apply $tag DEFERRED: $b is busy (no breakpoint, transcript fresh)" -Quiet; return $null }
+            $ph = 'unknown'
+            try { $o = $script:Observed[$b]; if ($o -and $o.phase) { $ph = "$($o.phase)" } } catch {}
+            if ($ph -notin @('idle', 'blocked', 'down', 'stopped')) { Write-DaemonLog "update apply $tag DEFERRED: $b is $ph (no breakpoint, transcript fresh, or not observed)" -Quiet; return $null }
         }
         if ($AsDryRun) { Write-DaemonLog "DRYRUN would apply harness release $tag (every bot at a safe point) and restart the bots"; return $null }
         Write-DaemonLog "ACTION=UPDATE-APPLY tag=$tag (admin-requested, every bot at a safe point)"

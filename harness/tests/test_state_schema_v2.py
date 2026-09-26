@@ -10,7 +10,10 @@ Locked behaviour:
 - Set-BotLaunchPhase keeps the attestation, and a new attestation (New-LaunchNonce)
   keeps the phase;
 - a real tick persists core/observe.mjs's record as `observed`, and the write
-  leaves no `status` behind.
+  leaves no `status` behind;
+- core/state.mjs phase() derives the one phase from `observed` (+ `desired`, `launch`);
+- a bot whose claude process is gone reads alive:false in `botcorp observe` and
+  phase "down" in the cockpit's /api/bots/<bot>.
 
 Every run uses a temp BOTCORP_HOME / BOTCORP_BOTS_DIR and its own daemon mutex.
 """
@@ -168,3 +171,73 @@ def test_a_real_tick_persists_observed(rt, tmp_path):
     assert "status" not in s and s["schema"] == 2
     o = s["observed"]
     assert o["bot"] == name and o["alive"] is False and o["activity"] == "down" and o["at"]
+
+
+def test_phase_is_derived_from_observed_and_desired(rt):
+    _home, env = rt
+    now = 1_790_000_000_000
+    iso = lambda ms: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ms / 1000))
+    cases = [
+        ({"desired": {"state": "running"}}, {"alive": True, "activity": "working"}, "working"),
+        ({"desired": {"state": "running"}}, {"alive": True, "activity": "idle"}, "idle"),
+        ({"desired": {"state": "running"}}, {"alive": True, "activity": "blocked"}, "blocked"),
+        ({"desired": {"state": "running"}}, {"alive": True, "activity": "unknown"}, "unknown"),
+        ({"desired": {"state": "running"}, "launch": {"phase": "restarting", "phase_at": iso(now - 60_000)}}, {"alive": False}, "starting"),
+        ({"desired": {"state": "running"}, "launch": {"phase": "starting", "phase_at": iso(now - 600_000)}}, {"alive": False}, "down"),
+        ({"desired": {"state": "stopped"}, "launch": {"phase": "up"}}, {"alive": False}, "stopped"),
+        ({"desired": {"state": "running"}, "launch": {"phase": "exited", "exit_code": 0}}, {"alive": False}, "stopped"),
+        ({"desired": {"state": "running"}, "launch": {"phase": "exited", "exit_code": 5}}, {"alive": False}, "down"),
+        ({"desired": {"state": "running"}, "launch": {"phase": "up"}}, {"alive": False}, "down"),
+        (None, {"alive": False}, "stopped"),
+        ({"status": "running"}, {"alive": False}, "down"),                      # a v1 file reads the same
+        ({"desired": {"state": "running"}, "observed": {"alive": True, "activity": "idle"}}, None, "idle"),   # the persisted record by default
+    ]
+    got = _node("[" + ",".join(f"s.phase({json.dumps(st)}, {'undefined' if o is None else json.dumps(o)}, {now})" for st, o, _ in cases) + "]", env)
+    assert got == [want for _, _, want in cases]
+
+
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_a_dead_claude_reads_down_in_observe_and_the_cockpit(rt, tmp_path):
+    import urllib.request
+    home, env = rt
+    name = f"zz-d{secrets.token_hex(3)}"
+    bh = tmp_path / "bots" / name
+    bh.mkdir()
+    (bh / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n", encoding="utf-8")
+    p = subprocess.Popen([sys.executable, "-c", ""])
+    p.wait()
+    _write(home / "state" / f"{name}.json", {"bot": name, "schema": 2, "claude_pid": p.pid, "bg_id": "abc123",
+                                             "desired": {"state": "running", "by": "daemon-cold", "at": "2026-09-01T10:00:00Z"},
+                                             "launch": {"phase": "up", "phase_at": "2026-09-01T10:00:05Z", "exit_code": 0}})
+
+    r = subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "observe", name, "--json"], capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)
+    assert o["bot"] == name and o["alive"] is False and o["activity"] == "down" and o["phase"] == "down" and o["claude_pid"] is None
+
+    port = _free_port()
+    srv = subprocess.Popen(["node", str(ASSEMBLY / "cockpit" / "server.mjs"), "--port", str(port)], cwd=str(ASSEMBLY), env=env,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+    try:
+        base = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 60
+        while True:
+            try:
+                urllib.request.urlopen(base + "/healthz", timeout=5).read()
+                break
+            except OSError:
+                assert time.time() < deadline and srv.poll() is None, "cockpit did not come up"
+                time.sleep(0.5)
+        page = urllib.request.urlopen(base + "/", timeout=30)
+        cookie = page.headers["Set-Cookie"].split(";")[0]
+        bot = json.loads(urllib.request.urlopen(urllib.request.Request(base + f"/api/bots/{name}", headers={"Cookie": cookie}), timeout=60).read())
+    finally:
+        subprocess.run(["taskkill", "/PID", str(srv.pid), "/T", "/F"], capture_output=True)
+    assert bot["running"] is False and bot["activity"] == "down" and bot["phase"] == "down"
+    assert "no live claude process" in bot["down"]

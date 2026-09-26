@@ -34,17 +34,18 @@ function Get-HumanAge {
 }
 
 function Get-TrayInfo {
-    # @{ Status; CtxPct; AgeText; Tooltip }. Every read is fail-open: a missing
-    # state/status file reads as 'stopped' / '?', never a throw.
+    # @{ Status; CtxPct; AgeText; Tooltip }. Status is the phase the last tick
+    # observed (core/state.mjs phase(), persisted as observed.phase). Every read
+    # is fail-open: a missing state/status file reads as 'stopped' / '?', a state
+    # file the tick has not observed yet as 'unknown', never a throw.
     param([Parameter(Mandatory)][string]$Bot)
     $status = 'stopped'
     $updatedAt = $null
     try {
         $st = Read-BotState -Bot $Bot
         if ($st) {
-            $cpid = 0
-            try { if ($null -ne $st.claude_pid) { $cpid = [int]$st.claude_pid } } catch {}
-            if ($cpid -gt 0 -and (Test-ProcAlive $cpid @('claude'))) { $status = 'running' }
+            $status = 'unknown'
+            try { if ($st.observed -and $st.observed.phase) { $status = "$($st.observed.phase)" } } catch {}
             try { if ($st.updated_at) { $updatedAt = [datetime]::Parse("$($st.updated_at)", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind) } } catch {}
         }
         if (-not $updatedAt) {
@@ -63,9 +64,9 @@ function Get-TrayInfo {
     } catch {}
 
     $ageText = Get-HumanAge -Since $updatedAt
-    # Same wording as the reference host's tray: a stopped bot is not an alarm,
+    # Same wording as the reference host's tray: a down bot is not an alarm,
     # the daemon tick brings it back.
-    $statusText = if ($status -eq 'running') { 'running' } else { 'down (daemon restarts it)' }
+    $statusText = if ($status -eq 'down') { 'down (daemon restarts it)' } else { $status }
     $tooltip = "${Bot}: $statusText | ctx ${ctxPct}% | tick $ageText"
     if ($tooltip.Length -gt 63) { $tooltip = $tooltip.Substring(0, 63) }
     return @{ Status = $status; CtxPct = $ctxPct; AgeText = $ageText; Tooltip = $tooltip }

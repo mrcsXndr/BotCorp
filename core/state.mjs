@@ -30,3 +30,28 @@ export function stateView(raw) {
   if (launch.exit_code === undefined && st.exit_code !== undefined) launch.exit_code = st.exit_code;
   return { desired, launch, observed: isObj(st.observed) ? st.observed : null };
 }
+
+// The one phase every reader shows and gates on (cockpit, tray, status, doctor,
+// restart.ps1, the automation and update-apply gates):
+//   idle | working | blocked | unknown   alive: observe's activity
+//   starting   not alive, a launch began under LAUNCH_GRACE_MS ago
+//   stopped    not alive and nobody wants it running (desired stopped, a clean
+//              exit, or never started)
+//   down       not alive although it should run: the daemon restarts it
+// `observed` defaults to the record persisted in the state file; pass a fresh
+// one (core/observe.mjs) to judge the live session.
+export const PHASES = ['stopped', 'down', 'starting', 'idle', 'working', 'blocked', 'unknown'];
+export const LAUNCH_GRACE_MS = 5 * 60_000;
+const STARTING = ['starting', 'cold-starting', 'restarting'];
+
+export function phase(raw, observed, now = Date.now()) {
+  const v = stateView(raw);
+  const o = observed === undefined ? v.observed : observed;
+  if (o && o.alive) return ['idle', 'working', 'blocked'].includes(o.activity) ? o.activity : 'unknown';
+  const since = Date.parse(v.launch.phase_at);
+  if (STARTING.includes(v.launch.phase) && Number.isFinite(since) && now - since < LAUNCH_GRACE_MS) return 'starting';
+  if (v.desired && v.desired.state === 'stopped') return 'stopped';
+  if (v.launch.phase === 'exited' && !Number(v.launch.exit_code)) return 'stopped';
+  if (!v.desired && !v.launch.phase) return 'stopped';
+  return 'down';
+}

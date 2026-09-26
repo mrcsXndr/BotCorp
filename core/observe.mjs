@@ -3,8 +3,9 @@
 // `botcorp observe` prints it; the daemon tick persists it as `observed` in
 // state/<bot>.json; every reader derives its phase from it (core/state.mjs).
 //
-// One record per bot: { bot, alive, activity, poller, bg_id, blocked, at,
-// kind, claude_pid, session_id, quiet_s }. `activity` is one of ACTIVITIES:
+// One record per bot: { bot, alive, activity, phase, poller, bg_id, blocked,
+// at, kind, claude_pid, session_id, quiet_s } (`phase`: core/state.mjs, from
+// this measurement and the state file). `activity` is one of ACTIVITIES:
 //   down     no live claude (bg) or pty-host process
 //   blocked  the session waits on a person (bgBlockVerdict FAIL or WARN:
 //            a login or usage limit, or its last turn ended asking something)
@@ -26,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { STATE_DIR, configDir, readJson, pidAlive, firstInt, botLiveness, processParents, bgJobFile, bgBlockVerdict, runClaude } from '../cli/_lib.mjs';
 import { botHome } from './paths.mjs';
+import { phase } from './state.mjs';
 import { loadBotYaml } from '../daemon/botyaml.mjs';
 
 export const ACTIVITIES = ['idle', 'working', 'blocked', 'down', 'unknown'];
@@ -131,10 +133,12 @@ export function observeBot(name, { roster = false, parents = processParents } = 
   }
   const now = Date.now();
   const quietMs = alive ? transcriptQuietMs(name, now) : null;
+  const activity = activityOf({ alive, blocked, breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState });
   return {
     bot: name,
     alive,
-    activity: activityOf({ alive, blocked, breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState }),
+    activity,
+    phase: phase(state, { alive, activity }, now),
     poller: live.poller,
     bg_id: kind === 'bg' && bgId ? bgId : null,
     blocked,

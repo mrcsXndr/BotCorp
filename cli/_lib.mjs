@@ -13,7 +13,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botsDir, botHome } from '../core/paths.mjs';
-import { stateView } from '../core/state.mjs';
+import { stateView, phase } from '../core/state.mjs';
 
 export { botHome };
 
@@ -229,17 +229,20 @@ export function pluginCommandVerdict(command, resolved, launch = null) {
   return { level: 'PASS', detail: `"${command}" -> ${resolved.path} (${resolved.source}); the launcher puts its folder first on the session's PATH` };
 }
 
-// doctor `<bot>: session alive`: a bot whose state says it runs (or whose last
-// launch failed) with no live claude process is down, not "not running".
-export function sessionAliveVerdict({ running, state = null, paused = false }) {
+// doctor `<bot>: session alive`: a bot that should run (or whose last launch
+// failed) with no live claude process is down, not "not running". The phase
+// (core/state.mjs) of the session measured not alive: down = FAIL.
+export function sessionAliveVerdict({ running, state = null, paused = false, now = Date.now() }) {
   if (running) return { level: 'PASS', detail: `claude pid ${state && state.claude_pid ? state.claude_pid : '?'} alive${state && state.session_id ? ` (session ${state.session_id})` : ''}` };
   if (paused) return { level: 'INFO', detail: 'paused (botcorp start un-pauses it)' };
   if (!state) return { level: 'INFO', detail: 'never started' };
-  const { desired, launch } = stateView(state);
-  const stopped = desired && desired.state === 'stopped';
-  if (!stopped && ['up', 'starting'].includes(launch.phase)) return { level: 'FAIL', detail: `the last launch came ${launch.phase} (session ${state.session_id || '?'}, bg_id ${state.bg_id || '?'}) but no live claude process runs it` };
+  const { launch } = stateView(state);
+  const ph = phase(state, { alive: false }, now);
+  if (ph === 'starting') return { level: 'INFO', detail: `starting (launch ${launch.phase} at ${launch.phase_at})` };
+  if (ph === 'stopped') return { level: 'INFO', detail: 'not running (stopped)' };
+  if (launch.phase === 'locked') return { level: 'INFO', detail: 'not running (vault locked: botcorp secrets unlock <bot>, or the cockpit)' };
   if (launch.phase === 'exited' && Number(launch.exit_code)) return { level: 'FAIL', detail: `the last launch failed (exit ${launch.exit_code}; launches.log says why)` };
-  return { level: 'INFO', detail: `not running (${stopped ? 'stopped' : launch.phase || 'stopped'})` };
+  return { level: 'FAIL', detail: `down: it should run (last launch ${launch.phase || '?'}, session ${state.session_id || '?'}, bg_id ${state.bg_id || '?'}) but no live claude process runs it` };
 }
 
 // doctor `<bot>: bg session pinned`. Claude Code's supervisor retires an

@@ -14,6 +14,8 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botLiveness, processParentsAsync, sessionAliveVerdict, bgJobFile, bgBlockVerdict, firstInt } from '../cli/_lib.mjs';
 import { botsDir } from '../core/paths.mjs';
+import { activityOf, breakpointFresh, transcriptQuietMs } from '../core/observe.mjs';
+import { phase } from '../core/state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const BOTCORP_ROOT = path.resolve(__dirname, '..');
@@ -75,13 +77,18 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
   const jobFile = live.claudeAlive ? bgJobFile(cfgDir, bgId) : null;
   const job = jobFile ? await readJson(jobFile) : null;
   const block = bgBlockVerdict({ running: live.alive, bgId, job });
+  const blocked = block.level === 'FAIL' || block.level === 'WARN';
+  // core/observe.mjs's activity from this measurement, and the one phase every reader shows (core/state.mjs)
+  const activity = activityOf({ alive: live.alive, blocked, breakpoint: live.alive && breakpointFresh(name), quietMs: live.alive ? transcriptQuietMs(name) : null });
   return {
     running: live.alive,
+    activity,
+    phase: phase(state, { alive: live.alive, activity }),
     pid: pty?.ptyPid ?? (live.claudeAlive ? Number(state.claude_pid) : null),
     // doctor `session alive`: FAIL = the state says it runs but nothing does
     down: session.level === 'FAIL' ? session.detail : null,
     // doctor `session not blocked`: FAIL (login, limit) or WARN (its last turn asked something) = it waits on a person
-    blocked: block.level === 'FAIL' || block.level === 'WARN' ? { needs: String(job.needs).trim(), detail: block.detail } : null,
+    blocked: blocked ? { needs: String(job.needs).trim(), detail: block.detail } : null,
     // doctor `telegram channel running`
     poller: telegram ? { state: live.poller, up: live.poller === 'OWNED' } : null,
   };
@@ -115,6 +122,8 @@ export async function getBot(name) {
     // A pty-host OR a live claude --bg session (was the pty record alone: a bg
     // bot always read "stopped", so Start stayed enabled on a live bot).
     running: live.running,
+    activity: live.activity,
+    phase: live.phase,
     kind: cfg?.harness?.session === 'pty' ? 'pty' : 'bg',
     poller: live.poller,
     blocked: live.blocked,
