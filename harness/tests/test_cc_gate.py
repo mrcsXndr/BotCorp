@@ -331,6 +331,22 @@ def test_second_failure_rejects_and_alerts_once(box, tmp_path):
 
 
 @needs_builds
+def test_test_refuses_without_canary(box):
+    b = _staged(box)
+    r = _cc(b, "-Test")   # no _canary at all
+    assert r.returncode == 1, r.stdout + r.stderr
+    c = _state(b)["candidate"]
+    assert c["status"] == "failed" and "canary not provisioned" in c["detail"] and c["attempts"] == 0 and c["tested_at"]
+    _bot(b, "_canary")    # a bot.yaml, but no vault
+    r = _cc(b, "-Test")
+    assert r.returncode == 1, r.stdout + r.stderr
+    st = _state(b)
+    assert st["candidate"]["status"] == "failed" and "no oauth_token" in st["candidate"]["detail"]
+    assert st["candidate"]["attempts"] == 0 and st["pinned"]["version"] == V1 and not st["rejected"]
+    assert not (b["rt"] / "state" / "cc.lock").exists()
+
+
+@needs_builds
 def test_checks_file_refused_outside_temp(box, tmp_path):
     b = _staged(box)
     f = tmp_path / "checks.json"
@@ -374,6 +390,10 @@ def test_prune_keeps_pin_previous2_candidate_and_in_use(tmp_path):
     finally:
         busy.kill()
         busy.wait(timeout=30)
+    # nothing runs from the store any more: the version it kept for its process goes too
+    r = _cc(b, "-Prune")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert sorted(p.name for p in (rt / "cc").iterdir()) == ["2.1.281", "2.1.282", "2.1.283", "2.1.284"]
 
 
 # --- rollback ---------------------------------------------------------------------------------

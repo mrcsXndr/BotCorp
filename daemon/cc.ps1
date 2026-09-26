@@ -185,7 +185,7 @@ function Get-CcInUseVersions {
         $x = "$($p.ExecutablePath)"
         if ($x -and $x.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) { $v += ($x.Substring($root.Length) -split '\\')[0] }
     }
-    return @($v | Select-Object -Unique)
+    return , @($v | Select-Object -Unique)   # the comma: none in use is an empty array, not $null (unknown)
 }
 
 function Invoke-CcPrune {
@@ -239,6 +239,242 @@ function Send-CcRejectNotice {
             }
         } catch { Log "could not report the rejection to $b (fail-open): $($_.Exception.Message)" }
     }
+}
+
+# --- the canary run (-Test) ------------------------------------------------------------------
+# _canary is driven through the CLI (start, send, stop) exactly as an operator
+# would, with BOTCORP_CLAUDE_EXE=<candidate> on this process only, so every
+# launcher it reaches resolves the candidate. Each check returns PASS, FAIL or
+# SKIP; after the first FAIL only check 8 (the teardown assertion) still runs.
+$canary = '_canary'
+
+function Test-SamePath {
+    param([string]$A, [string]$B)
+    if (-not $A -or -not $B) { return $false }
+    try { return ([System.IO.Path]::GetFullPath($A) -ieq [System.IO.Path]::GetFullPath($B)) } catch { return $false }
+}
+
+function Test-Number { param($X) return ($X -is [int] -or $X -is [long] -or $X -is [double] -or $X -is [decimal]) }
+
+function Get-CcCanaryProblem {
+    # '' when _canary can take a gate run, else why not (such a run is not counted as an attempt)
+    $P = Get-BotPaths -Bot $canary
+    if (-not (Test-Path -LiteralPath (Join-Path $P.BotHome 'bot.yaml'))) { return "canary not provisioned: no $canary\bot.yaml under $BotsDir" }
+    $store = $null
+    try { $store = Read-VaultStore -BotHome $P.BotHome } catch { return "canary not provisioned: its vault is unreadable ($($_.Exception.Message))" }
+    if (-not $store.ContainsKey('oauth_token')) { return "canary not provisioned: no oauth_token in its vault (botcorp secrets set $canary oauth)" }
+    if (Test-VaultLocked -BotHome $P.BotHome -Bot $canary) { return "canary not provisioned: its vault is locked (botcorp secrets unlock $canary)" }
+    $st = Read-BotState -Bot $canary
+    if ($st -and (Test-ProcAlive ([int]$st.claude_pid) @('claude'))) { return "canary busy: $canary is running (pid $($st.claude_pid)); the gate starts and stops it itself" }
+    return ''
+}
+
+function Get-CanaryWorkers {
+    # <config>/daemon/roster.json workers with their short id (read from the file, no CLI call)
+    param($P)
+    $j = Read-JsonFile -Path (Join-Path $P.ConfigDir 'daemon\roster.json')
+    if (-not $j -or -not $j.workers) { return @() }
+    return @($j.workers.PSObject.Properties | ForEach-Object { [pscustomobject]@{ id = $_.Name; pid = [int]$_.Value.pid; sessionId = "$($_.Value.sessionId)"; cliVersion = "$($_.Value.cliVersion)" } })
+}
+
+function Get-ProcExe { param([int]$ProcId) try { return "$((Get-CimInstance Win32_Process -Filter "ProcessId=$ProcId" -ErrorAction Stop).ExecutablePath)" } catch { return '' } }
+
+function Read-Shared {
+    # a file another process is appending to
+    param([string]$Path)
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { return ([System.IO.StreamReader]::new($fs)).ReadToEnd() } finally { $fs.Dispose() }
+    } catch { return '' }
+}
+
+function Wait-Until {
+    # polls $Cond once a second; $true as soon as it holds, $false after $Sec
+    param([int]$Sec, [scriptblock]$Cond)
+    $deadline = (Get-Date).AddSeconds($Sec)
+    while ($true) {
+        if (@(& $Cond)[-1] -eq $true) { return $true }
+        if ((Get-Date) -ge $deadline) { return $false }
+        Start-Sleep -Seconds 1
+    }
+}
+
+function Invoke-CcCli {
+    param([string[]]$A, [int]$TimeoutSec = 240)
+    $r = Invoke-Bounded -Exe (Resolve-Node) -Arguments (@((Join-Path $BotCorp 'cli\botcorp.mjs')) + $A) -TimeoutSec $TimeoutSec -Label "cc gate: botcorp $($A[0])" -Capture -WorkingDirectory $BotCorp
+    return @{ code = $r.ExitCode; out = "$($r.Output)" }
+}
+
+function Tail { param([string]$Text, [int]$N = 2) return ((($Text -split "`n") | Where-Object { $_.Trim() } | Select-Object -Last $N | ForEach-Object { $_.Trim() }) -join ' | ') }
+function Pass { param([string]$D) return @{ r = 'PASS'; d = $D } }
+function Fail { param([string]$D) return @{ r = 'FAIL'; d = $D } }
+function Skip { param([string]$D) return @{ r = 'SKIP'; d = $D } }
+
+function Step {
+    param([int]$N, [string]$Name, [scriptblock]$Body)
+    if ($script:ccFailed -and $N -ne 8) { return }
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    $res = 'FAIL'; $detail = ''
+    try { $o = @(& $Body)[-1]; $res = "$($o.r)"; $detail = "$($o.d)" } catch { $detail = "exception: $($_.Exception.Message)" }
+    if ($res -cne 'PASS' -and $res -cne 'SKIP') { $res = 'FAIL' }
+    $script:ccChecks += [ordered]@{ n = $N; name = $Name; result = $res; detail = $detail }
+    Log "check $N ($Name) $res ($([int]$sw.Elapsed.TotalSeconds)s) $detail"
+    if ($res -eq 'FAIL' -and -not $script:ccFailed) { $script:ccFailed = $N }
+}
+
+function Invoke-CcCanaryRun {
+    # The 8 checks (docs/daemon.md "Claude Code pin") -> the checks, by number.
+    # _canary is stopped before this returns, whatever happened.
+    param($Candidate)
+    $P = Get-BotPaths -Bot $canary
+    $cand = "$($Candidate.exe)"; $cv = "$($Candidate.version)"
+    $t0 = (Get-Date).ToUniversalTime().AddSeconds(-1)
+    $t0Iso = $t0.ToString('yyyy-MM-ddTHH:mm:ssZ'); $t0Unix = ([DateTimeOffset]$t0).ToUnixTimeSeconds()
+    $script:ccChecks = @(); $script:ccFailed = 0
+    $env:BOTCORP_CLAUDE_EXE = $cand; $env:BOT_HOOK_TRACE = '1'; $env:BOT_TG_MUTE = '1'
+    try {
+        Step 2 'bg launch visible' {
+            $r = Invoke-CcCli @('start', $canary, '--fresh')
+            if ($r.code -ne 0) { return (Fail "botcorp start $canary --fresh exited $($r.code): $(Tail $r.out)") }
+            $script:why = 'no bg_id in the state file'
+            $ok = Wait-Until 60 {
+                $st = Read-BotState -Bot $canary; $id = "$($st.bg_id)"
+                if (-not $id) { return $false }
+                $w = @(Get-CanaryWorkers $P | Where-Object { $_.id -eq $id }) | Select-Object -First 1
+                if (-not $w -or -not (Test-ProcAlive $w.pid @('claude'))) { $script:why = "no live roster row for $id"; return $false }
+                if ($w.cliVersion -ne $cv) { $script:why = "roster row $id runs Claude Code '$($w.cliVersion)'"; return $false }
+                $d = Get-BgDaemon -ConfigDir $P.ConfigDir
+                if (-not $d.Alive) { $script:why = 'no live daemon in daemon.lock'; return $false }
+                $x = Get-ProcExe $d.Pid
+                if (-not (Test-SamePath $x $cand)) { $script:why = "the daemon (pid $($d.Pid)) runs '$x'"; return $false }
+                $script:why = "roster row $id cliVersion $cv; daemon pid $($d.Pid) runs the candidate"
+                return $true
+            }
+            if ($ok) { Pass $script:why } else { Fail "$($script:why) after 60 s" }
+        }
+        Step 1 'version / status parse' {
+            $v = Get-ExeVersion $cand
+            if ($v -ne $cv) { return (Fail "--version says '$v'") }
+            $cenv = @{ CLAUDE_CONFIG_DIR = $P.ConfigDir }
+            $a = Invoke-Bounded -Exe $cand -Arguments @('agents', '--json') -TimeoutSec 60 -Label 'cc gate: agents --json' -Capture -Env $cenv -WorkingDirectory $P.BotHome
+            $rows = $null
+            if ("$($a.Output)" -match '\[') { $rows = ConvertFrom-BgRoster -Text "$($a.Output)" }
+            if ($a.ExitCode -ne 0 -or $null -eq $rows) { return (Fail "agents --json: exit $($a.ExitCode), no JSON array: $(Tail $a.Output)") }
+            $ds = Invoke-Bounded -Exe $cand -Arguments @('daemon', 'status') -TimeoutSec 60 -Label 'cc gate: daemon status' -Capture -Env $cenv -WorkingDirectory $P.BotHome
+            if ($ds.ExitCode -ne 0) { return (Fail "daemon status exited $($ds.ExitCode): $(Tail $ds.Output)") }
+            Pass "--version $v; agents --json $(@($rows).Count) row(s); daemon status exit 0"
+        }
+        Step 4 'inbox delivers' {
+            $nonce = 'CANARY-' + [guid]::NewGuid().ToString('n').Substring(0, 8).ToUpperInvariant()
+            $r = Invoke-CcCli @('send', $canary, '--wait', '--ttl', '5m', "Reply with the word $nonce and nothing else.") 480
+            if ($r.code -ne 0) { return (Fail "botcorp send --wait exited $($r.code): $(Tail $r.out)") }
+            $dir = Join-Path (Join-Path $P.ConfigDir 'projects') ($P.BotHome -replace '[^A-Za-z0-9]', '-')
+            $ok = Wait-Until 180 {
+                foreach ($f in @(Get-ChildItem -LiteralPath $dir -Filter '*.jsonl' -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTimeUtc -ge $t0 })) {
+                    foreach ($ln in ((Read-Shared $f.FullName) -split "`n")) {
+                        if (-not $ln.Contains($nonce)) { continue }
+                        $e = $null; try { $e = $ln | ConvertFrom-Json -ErrorAction Stop } catch {}
+                        if ($e -and "$($e.type)" -eq 'assistant') { return $true }
+                    }
+                }
+                return $false
+            }
+            if ($ok) { Pass "delivered; the reply carries $nonce" } else { Fail "delivered, but no assistant reply with $nonce in $dir after 180 s" }
+        }
+        Step 3 'hooks fire' {
+            $log = Join-Path $P.BotHome 'memory\metrics\hook-trace.log'
+            $need = @('session-start', 'user-prompt-submit', 'memory-sync')
+            $script:missing = $need
+            $ok = Wait-Until 60 {
+                $seen = @{}
+                foreach ($ln in ((Read-Shared $log) -split "`r?`n")) {
+                    $parts = $ln.Split(' ', 2)
+                    if ($parts.Count -eq 2 -and [string]::CompareOrdinal($parts[0], $t0Iso) -ge 0) { $seen[$parts[1].Trim()] = $true }
+                }
+                $script:missing = @($need | Where-Object { -not $seen.ContainsKey($_) })
+                return ($script:missing.Count -eq 0)
+            }
+            if ($ok) { Pass 'SessionStart, UserPromptSubmit and Stop hooks traced' } else { Fail "not traced since ${t0Iso}: $($script:missing -join ', ') ($log)" }
+        }
+        Step 7 'statusline numbers' {
+            $f = Join-Path $P.ConfigDir 'botcorp\status.json'
+            $script:why = "no $f"
+            $ok = Wait-Until 60 {
+                $j = Read-JsonFile -Path $f
+                if (-not $j) { return $false }
+                $ts = 0.0; try { $ts = [double]$j.ts } catch {}
+                if ($ts -lt $t0Unix) { $script:why = "status.json not rewritten since the gate started (ts $ts)"; return $false }
+                if ("$($j.version)" -ne $cv) { $script:why = "status.json version '$($j.version)'"; return $false }
+                $ctx = $j.context_window.used_percentage; $five = $j.rate_limits.five_hour.used_percentage
+                if (-not (Test-Number $ctx) -or -not (Test-Number $five)) { $script:why = "context_window.used_percentage '$ctx', rate_limits.five_hour.used_percentage '$five'"; return $false }
+                $script:why = "version $cv; context $ctx%; five-hour $five%"
+                return $true
+            }
+            if ($ok) { Pass $script:why } else { Fail "$($script:why) after 60 s" }
+        }
+        Step 5 'resume keeps session id' {
+            $sid = "$((Read-BotState -Bot $canary).session_id)"
+            if (-not $sid) { return (Fail 'no session_id in the state file') }
+            $r = Invoke-CcCli @('stop', $canary) 120
+            if ($r.code -ne 0) { return (Fail "botcorp stop exited $($r.code): $(Tail $r.out)") }
+            $r = Invoke-CcCli @('start', $canary)
+            if ($r.code -ne 0) { return (Fail "botcorp start (resume) exited $($r.code): $(Tail $r.out)") }
+            $script:why = ''
+            $ok = Wait-Until 60 {
+                $st = Read-BotState -Bot $canary
+                if ("$($st.session_id)" -ne $sid) { $script:why = "state session_id '$($st.session_id)'"; return $false }
+                $w = @(Get-CanaryWorkers $P | Where-Object { $_.id -eq "$($st.bg_id)" -and (Test-ProcAlive $_.pid @('claude')) }) | Select-Object -First 1
+                if (-not $w) { $script:why = "no live roster row for $($st.bg_id)"; return $false }
+                if ($w.sessionId -ne $sid) { $script:why = "roster sessionId '$($w.sessionId)'"; return $false }
+                return $true
+            }
+            if ($ok) { Pass "session $sid kept across stop / start" } else { Fail "expected session ${sid}: $($script:why) after 60 s" }
+        }
+        Step 6 'TG poller owns its token' {
+            $cfg = Get-BotConfig -Bot $canary
+            $tok = $false
+            try { $tok = (Read-VaultStore -BotHome $P.BotHome).ContainsKey('telegram_token') } catch {}
+            if (-not ($cfg -and (Test-BotModule $cfg 'telegram')) -or -not $tok) { return (Skip "$canary has no telegram module or no telegram_token") }
+            $r = Invoke-CcCli @('observe', $canary, '--json') 60
+            $obs = $null
+            try { $obs = $r.out | ConvertFrom-Json -ErrorAction Stop } catch {}
+            if ($obs -and "$($obs.poller)" -eq 'OWNED') { Pass 'poller OWNED (a live bun below the canary session)' } else { Fail "observe: poller '$($obs.poller)'" }
+        }
+        Step 8 'clean teardown' {
+            $r = Invoke-CcCli @('stop', $canary) 120
+            if ($r.code -ne 0) { return (Fail "botcorp stop exited $($r.code): $(Tail $r.out)") }
+            $script:why = ''
+            $ok = Wait-Until 30 {
+                $procs = $null
+                try { $procs = @(Get-CimInstance Win32_Process -Property ProcessId, Name, ExecutablePath, CommandLine -ErrorAction Stop) } catch { $script:why = 'the process list could not be read'; return $false }
+                $left = @()
+                $left += @($procs | Where-Object { Test-SamePath "$($_.ExecutablePath)" $cand } | ForEach-Object { "candidate pid $($_.ProcessId)" })
+                $left += @(Get-CanaryWorkers $P | Where-Object { Test-ProcAlive $_.pid @('claude') } | ForEach-Object { "live roster row $($_.id)" })
+                $left += @($procs | Where-Object { $_.Name -in @('bun.exe', 'node.exe') -and "$($_.CommandLine)".IndexOf($P.BotHome, [System.StringComparison]::OrdinalIgnoreCase) -ge 0 } | ForEach-Object { "$($_.Name) pid $($_.ProcessId)" })
+                if (-not (Test-Path -LiteralPath $P.PausedFile)) { $left += 'no .paused marker' }
+                $script:why = $left -join ', '
+                return ($left.Count -eq 0)
+            }
+            if ($ok) { Pass 'no candidate process, no live roster row, no canary bun/node, .paused set' } else { Fail "after 30 s: $($script:why)" }
+        }
+    } finally {
+        # Never leave the canary up, nor a candidate process behind (it is not
+        # pinned, so nothing else runs that exe); this happens before any promote.
+        try {
+            $st = Read-BotState -Bot $canary
+            $up = ($st -and (Test-ProcAlive ([int]$st.claude_pid) @('claude'))) -or (@(Get-CanaryWorkers $P | Where-Object { Test-ProcAlive $_.pid @('claude') }).Count -gt 0)
+            if ($up) { Log "teardown: stopping $canary"; [void](Invoke-CcCli @('stop', $canary) 120) }
+            $gone = Wait-Until 30 { @(Get-CimInstance Win32_Process -Property ExecutablePath -ErrorAction Stop | Where-Object { Test-SamePath "$($_.ExecutablePath)" $cand }).Count -eq 0 }
+            if (-not $gone) {
+                foreach ($proc in @(Get-CimInstance Win32_Process -Property ProcessId, ExecutablePath -ErrorAction Stop | Where-Object { Test-SamePath "$($_.ExecutablePath)" $cand })) {
+                    Log "teardown: pid $($proc.ProcessId) still runs the candidate after the stop - killed"
+                    Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch { Log "teardown: $($_.Exception.Message)" }
+        Remove-Item Env:BOTCORP_CLAUDE_EXE, Env:BOT_HOOK_TRACE -ErrorAction SilentlyContinue
+    }
+    return @($script:ccChecks | Sort-Object { $_.n })
 }
 
 # --- Check --------------------------------------------------------------------------------
@@ -297,8 +533,20 @@ if ($Test) {
         $s = ConvertTo-CcState (Read-CcState)
         $c = $s.candidate
         if (-not $c -or "$($c.status)" -notin @('staged', 'failed', 'testing')) { Log "nothing to test (candidate: $(if ($c) { "$($c.version) $($c.status)" } else { 'none' }))"; exit 0 }
-        if (-not $ChecksFile) { Log 'the canary run is not available in this build; pass -ChecksFile (tests only)'; exit 1 }
-        $checks = @(Get-Content -LiteralPath $ChecksFile -Raw | ConvertFrom-Json)
+        if ($ChecksFile) { $checks = @(Get-Content -LiteralPath $ChecksFile -Raw | ConvertFrom-Json) }
+        else {
+            $why = Get-CcCanaryProblem
+            if ($why) {
+                $c.status = 'failed'; $c.detail = $why; $c.tested_at = (Now)
+                [void](Save-Cc $s)
+                Log "candidate $($c.version) not tested: $why (not counted as an attempt)"
+                exit 1
+            }
+            $c.status = 'testing'; $c.detail = ''
+            if (-not (Save-Cc $s)) { exit 1 }
+            Log "testing candidate $($c.version) on $canary ($($c.exe))"
+            $checks = @(Invoke-CcCanaryRun -Candidate $c)
+        }
         $o = Get-CcTestOutcome -State $s -Checks $checks -Now (Now)
         if (-not (Save-Cc $o.State)) { exit 1 }
         switch ($o.Action) {
