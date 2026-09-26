@@ -10,7 +10,8 @@ Locked behaviour:
   running pty-host;
 - a delivery is `delivered` only once its user turn reaches the transcript. A
   typed `/standup` is recorded namespaced (`<command-name>/botcorp:standup`,
-  reference host 2026-09-26) and still confirms (the v0.2.17 regression);
+  reference host 2026-09-26) and still confirms (the v0.2.17 regression); a
+  `/name` Claude Code does not know fails at once with that reason;
 - a message is `held` while the session is hard-blocked (a login), then goes out
   once the block clears; `expired` once its ttl runs out while it waits;
   `failed` at once when the session is stopped;
@@ -58,6 +59,14 @@ process.stdin.on('data', (b) => {
     const text = buf.slice(0, i).replace(/\x1b\[20[01]~/g, '');
     buf = buf.slice(i + 1);
     const m = /^\/([\w.-]+)\s*([\s\S]*)$/.exec(text);
+    if (m && m[1] === 'nosuch') {   // what Claude Code writes for a /name it does not know
+      for (const content of [`Unknown command: /${m[1]}`, `Args from unknown skill: ${m[2]}`]) {
+        fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, type: 'system', subtype: 'informational', content,
+          isMeta: false, timestamp: new Date().toISOString(), uuid: crypto.randomUUID(), level: 'warning', sessionId }) + '\n');
+      }
+      process.stdout.write('\r\nstub session> ');
+      continue;
+    }
     const content = m ? `<command-message>botcorp:${m[1]}</command-message>\n<command-name>/botcorp:${m[1]}</command-name>\n<command-args>${m[2]}</command-args>` : text;
     const uuid = crypto.randomUUID();
     fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, promptId: crypto.randomUUID(), type: 'user',
@@ -189,6 +198,21 @@ def test_delivered_to_a_bg_session_through_a_new_attach_host(box, fake_claude_ex
     assert _typed(box)[-1] == "<command-message>botcorp:standup</command-message>\n<command-name>/botcorp:standup</command-name>\n<command-args></command-args>"
 
 
+def test_an_unknown_command_fails_at_once_with_the_reason(box, fake_claude_exe):
+    # bare `/critic` (a plugin command) is "Unknown command" on a real host: say so, never wait out the confirm window
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    t0 = time.time()
+    r = _cli(box, "send", box["name"], "--wait", "--json", "/nosuch bot.yaml")
+    out = json.loads(r.stdout)
+    assert r.returncode == 1 and out["status"] == "failed", out
+    assert "Claude Code has no /nosuch" in out["detail"] and "/botcorp:<name>" in out["detail"], out
+    assert time.time() - t0 < 25, "reported from the system line, not after the 30 s confirm window"
+    # positive control: the same session confirms a command it knows
+    r = _cli(box, "send", box["name"], "--wait", "--json", "/standup")
+    assert r.returncode == 0 and json.loads(r.stdout)["status"] == "delivered", r.stdout
+
+
 def test_delivered_through_a_running_pty_host(box):
     _yaml(box, "pty")
     h = subprocess.Popen(["node", str(PTY_HOST), "--bot", box["name"], "--botcorp", str(ASSEMBLY), "--continue"],
@@ -252,9 +276,18 @@ def test_a_warn_block_does_not_hold(box, fake_claude_exe):
     ({"tempo": "blocked", "needs": "confirm tg_send.py executed with 'back online after reboot'"}, "working", True),   # WARN
     ({"tempo": "active", "state": "working"}, "working", False),
     (LOGIN_BLOCK, "blocked", False),                                                                                   # FAIL
+    # a turn ended: the record says done, idle, nothing in flight, as of just now
+    ({"state": "done", "tempo": "idle", "inFlight": {"tasks": 0, "queued": 0}, "updatedAt": "NOW"}, "working", True),
+    # ... but the transcript moved a minute after the record said so: a new turn is running
+    ({"state": "done", "tempo": "idle", "inFlight": {"tasks": 0, "queued": 0}, "updatedAt": "OLD"}, "working", False),
+    # ... or a background task still runs
+    ({"state": "done", "tempo": "idle", "inFlight": {"tasks": 1, "queued": 0}, "updatedAt": "NOW"}, "working", False),
 ])
 def test_a_session_awaiting_its_next_prompt_takes_it_at_once(box, fake_claude_exe, job, activity, awaiting):
     _bg_session(box, fake_claude_exe)
+    stamp = {"NOW": time.time(), "OLD": time.time() - 60}
+    if job.get("updatedAt") in stamp:
+        job = {**job, "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(stamp[job["updatedAt"]]))}
     _job(box, job)
     os.utime(box["transcript"], None)
     o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)

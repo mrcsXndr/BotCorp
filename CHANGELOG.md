@@ -12,7 +12,9 @@ The inbox (R2): one queue per bot, the one way text reaches a session.
   `state/<bot>/inbox.jsonl`. A detached drainer, one per bot, types the
   messages in order, each only while observe says the session is `idle` or
   `awaiting_prompt` (new observe field: the job record says the session
-  waits for its next prompt; `activity` and `phase` are unchanged, so the
+  waits for its next prompt, including a last turn that is `done` with
+  nothing in flight, so a chat message goes out seconds after the reply
+  instead of 5 min; `activity` and `phase` are unchanged, so the
   restart and update gates keep the quiet rule), and confirms each by its user turn reaching the transcript within 30 s
   (a typed `/name` also matches Claude Code's namespaced
   `<command-name>/plugin:name</command-name>`). Each message ends
@@ -40,15 +42,19 @@ The inbox (R2): one queue per bot, the one way text reaches a session.
 - **Prompt automations deliver through the inbox** (`send --wait`, ttl half
   the run's timeout, 15 s to 5 min); `sent` means delivered. `daemon/inject.mjs`
   is removed.
-- **`_` fixtures by hand**: `botcorp start|stop|restart|sync|send|inbox|observe`
+- **`_` fixtures by hand**: `botcorp start|stop|restart|sync|secrets|send|inbox|observe`
   accept a `_`-prefixed folder such as `bots/_canary` (whose `name:` is now
   `_canary`, matching the folder), and `start --dry-run` prints the launch
   without running it. The cockpit opens one by name (`#_canary`) and never
   lists it. The daemon still never supervises them.
 
-Upgrading: nothing to migrate. A chat message now waits for the session to
-be idle (quiet for 5 min, or a declared breakpoint) or to await its next
-prompt, instead of being typed at once.
+- **A start never passes on another bot's Telegram token**: launch.ps1
+  drops an inherited `TELEGRAM_BOT_TOKEN` next to the oauth one; a session
+  gets only its own vault's.
+
+Upgrading: nothing to migrate. A chat message now waits for the session's
+turn to end (or a declared breakpoint, or 5 min of quiet) instead of being
+typed at once.
 
 ## v0.3.0
 

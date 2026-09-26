@@ -534,8 +534,9 @@ bg_id, blocked, awaiting_prompt, at, kind, claude_pid, session_id, quiet_s}`.
 the launch and the operator's intent (`starting`, `stopped`, `down`); both are
 defined in docs/daemon.md "State file". `awaiting_prompt` (bg) is true when
 the job record says the session waits for its next prompt: tempo `blocked` on
-"send a prompt to start", or a WARN block (its last turn ended asking
-something); never on a hard block. It leaves `activity` and `phase` alone, so
+"send a prompt to start", its last turn `done` with tempo `idle`, nothing in
+flight and no transcript write more than 5 s after the record's `updatedAt`,
+or a WARN block (its last turn ended asking something); never on a hard block. It leaves `activity` and `phase` alone, so
 the restart and update gates keep the quiet rule; the inbox delivers on it at
 once. `--all` = every bot under the bots dir;
 `--json` prints one object for a named bot, an array for `--all`. The text

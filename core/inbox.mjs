@@ -217,10 +217,12 @@ async function deliver(bot, kind, text) {
   const { ws, err } = await typeInto(ep, text);
   try {
     if (err) return { ok: false, detail: err };
-    if (await confirm(t, { file, offset }, text)) {
+    const c = await confirm(t, { file, offset }, text);
+    if (c === true) {
       const via = ep.mode === 'attach' ? `${started ? 'a new' : 'the running'} attach host` : `the running pty-host (${ep.mode})`;
       return { ok: true, detail: `via ${via}; user turn confirmed in the transcript` };
     }
+    if (c) return { ok: false, detail: c };
     return { ok: false, detail: `typed, but no matching user turn reached the transcript within ${CONFIRM_MS / 1000}s` };
   } finally { try { ws.close(); } catch {} }
 }
@@ -271,10 +273,19 @@ async function readFrom(file, offset) {
   } finally { await fh.close(); }
 }
 
+// A `/name` Claude Code does not know is no user turn but a system line.
+function unknownCommand(line, name) {
+  let o;
+  try { o = JSON.parse(line); } catch { return false; }
+  return o?.type === 'system' && typeof o.content === 'string' && o.content.trim() === `Unknown command: /${name}`;
+}
+
 // Raw lines, not chat.mjs's turns: a typed `/name` is recorded as a
 // <command-name> wrapper that the chat view filters out as meta. A plugin
 // skill is recorded under its namespaced name: typed `/standup` lands as
 // `<command-name>/botcorp:standup</command-name>` (reference host 2026-09-26).
+// A plugin COMMAND is not: bare `/critic` is "Unknown command: /critic", and
+// only `/botcorp:critic` runs it. true = confirmed, a string = why it failed.
 async function confirm(t, start, text) {
   const head = norm(text).slice(0, 60);
   const cmd = /^\/([\w:.-]+)/.exec(text.trim());
@@ -290,6 +301,9 @@ async function confirm(t, start, text) {
     for (const line of chunk.split('\n')) {
       const u = userText(line);
       if (u !== null && ((needle && needle.test(u)) || norm(u).includes(head))) return true;
+      if (cmd && unknownCommand(line, cmd[1])) {
+        return `typed, but Claude Code has no /${cmd[1]}${cmd[1].includes(':') ? '' : ' (a plugin command needs its prefix, such as /botcorp:<name>)'}`;
+      }
     }
   }
   return false;

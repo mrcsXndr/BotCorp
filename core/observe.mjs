@@ -20,8 +20,9 @@
 // These are daemon/_common.ps1 Test-SessionBusy's semantics: working and
 // unknown are busy, idle is idle.
 // `awaiting_prompt` (bg only) is the job record saying the session waits for
-// its next prompt right now: tempo 'blocked' on "send a prompt to start", or a
-// bgBlockVerdict WARN; never a FAIL. The inbox delivers on it at once; it does
+// its next prompt right now: tempo 'blocked' on "send a prompt to start", its
+// last turn done with nothing in flight (turnEnded), or a bgBlockVerdict WARN;
+// never a FAIL. The inbox delivers on it at once; it does
 // not touch activity, so the restart and update gates keep the quiet rule.
 //
 // Read-only. The roster (`claude agents --json`) is opt-in ({ roster: true },
@@ -94,6 +95,19 @@ export function activityOf({ alive, blocked = null, breakpoint = false, quietMs 
   return 'unknown';
 }
 
+// The job record says the last turn is over and nothing runs on (no background
+// task, nothing queued), and the transcript has not moved since it said so (a
+// turn a monitor or cron started lands in the transcript before the record).
+export const TURN_SETTLE_MS = 5_000;
+export function turnEnded(job, quietMs, now = Date.now()) {
+  if (!job || job.state !== 'done' || job.tempo !== 'idle') return false;
+  const f = job.inFlight || {};
+  if (Number(f.tasks) || Number(f.queued)) return false;
+  const at = Date.parse(job.updatedAt);
+  if (!Number.isFinite(at)) return false;
+  return quietMs === null || now - quietMs <= at + TURN_SETTLE_MS;
+}
+
 export function ptyOf(name) {
   const rec = readJson(path.join(STATE_DIR, `${name}.pty.json`));
   if (!rec || !Number.isInteger(rec.port) || typeof rec.token !== 'string' || !pidAlive(rec.pid)) return null;
@@ -131,6 +145,8 @@ export function observeBot(name, { roster = false, parents = processParents } = 
   const measured = { ...(state || {}), claude_pid: claudePid };
   const live = botLiveness({ pty, state: measured, telegram, botPid, parents });
   const alive = live.alive;
+  const now = Date.now();
+  const quietMs = alive ? transcriptQuietMs(name, now) : null;
   let blocked = null;
   let awaitingPrompt = false;
   if (alive && kind === 'bg') {
@@ -138,10 +154,9 @@ export function observeBot(name, { roster = false, parents = processParents } = 
     const job = jobFile ? readJson(jobFile) : null;
     const v = bgBlockVerdict({ running: true, bgId, job });
     if (v.level === 'FAIL' || v.level === 'WARN') blocked = { level: v.level, needs: String(job.needs).trim() };
-    awaitingPrompt = v.level === 'WARN' || (v.level === 'PASS' && job.tempo === 'blocked' && String(job.needs || '').includes('send a prompt to start'));
+    awaitingPrompt = v.level === 'WARN' || (v.level === 'PASS' && (
+      (job.tempo === 'blocked' && String(job.needs || '').includes('send a prompt to start')) || turnEnded(job, quietMs, now)));
   }
-  const now = Date.now();
-  const quietMs = alive ? transcriptQuietMs(name, now) : null;
   const activity = activityOf({ alive, blocked: !!blocked && blocked.level === 'FAIL', breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState });
   return {
     bot: name,
