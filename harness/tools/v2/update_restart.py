@@ -122,6 +122,7 @@ def _resolve_pwsh() -> str:
 # spawned from a session-0 / Scheduled-Task environment with a minimal PATH.
 PWSH_EXE = _resolve_pwsh()
 RESTART_SCRIPT = botcorp_root() / "daemon" / "restart.ps1"
+PINNED_MSG = "Claude Code is pinned by BotCorp: botcorp cc status"
 
 
 def _claude_exe() -> str:
@@ -554,6 +555,12 @@ def main(argv: list[str]) -> int:
 
     if args.restart_only:
         return run_restart_only(dry_run=args.dry_run)
+
+    # Under BotCorp the bot runs a pinned copy the daemon's gate moves
+    # (daemon/cc.ps1); `claude update` here would bypass it.
+    if os.environ.get("BOTCORP_CLAUDE_EXE") and not args.check_only:
+        print(PINNED_MSG)
+        return 0
 
     exe = _claude_exe()
     if not Path(exe).exists():

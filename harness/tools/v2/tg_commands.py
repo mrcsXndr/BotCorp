@@ -163,6 +163,10 @@ def cmd_update(args: list[str], reply_to: str | None) -> int:
     sub = (args[0].lower() if args else "")
     script = str(HARNESS_ROOT / "tools" / "v2" / "update_restart.py")
 
+    # Under BotCorp the daemon's gate owns Claude Code updates (daemon/cc.ps1).
+    if os.environ.get("BOTCORP_CLAUDE_EXE") and sub not in ("check", "check-only", "status"):
+        return _send_tg("Claude Code is pinned by BotCorp: botcorp cc status", reply_to)
+
     if sub in ("dry-run", "dryrun", "dry"):
         _send_tg("/update: dry-run (no restart)…", reply_to)
         r = subprocess.run([PY_EXE, script, "--dry-run"],

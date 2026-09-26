@@ -569,6 +569,49 @@ function Get-CcRollbackState {
     return @{ Ok = $true; Detail = ''; State = $s; From = $from; Target = $t }
 }
 
+function Get-CcTestDue {
+    # Does the tick start a gate run (cc.ps1 -Test, detached)? Not while one
+    # holds cc.lock; yes for a staged candidate, and for a failed one with an
+    # attempt left once its last run is $RetryMin old (a candidate whose canary
+    # was not ready failed with attempts 0 and is retried the same way).
+    param($State, [bool]$LockLive, [datetime]$Now = (Get-Date), [double]$RetryMin = 55)
+    if ($LockLive) { return $false }
+    $c = (ConvertTo-CcState $State).candidate
+    if (-not $c) { return $false }
+    if ("$($c.status)" -eq 'staged') { return $true }
+    if ("$($c.status)" -ne 'failed' -or [int]$c.attempts -ge 2) { return $false }
+    $t = $(if ($c.tested_at) { ConvertTo-UtcTime $c.tested_at } else { [datetime]::MinValue })
+    return ($t -eq [datetime]::MinValue) -or (($Now.ToUniversalTime() - $t).TotalMinutes -ge $RetryMin)
+}
+
+function Get-CcRollAction {
+    # Does the tick roll a live bot onto the pin? -> none | roll | defer:<why>
+    #   none   not alive, no pin, or it runs the pin: observe's cc_exe (the exe
+    #          its config home's daemon runs) and cc_version (its worker's
+    #          cliVersion) each equal the pin or are unknown (cannot tell: no roll)
+    #   roll   it runs something else and its turn is provably over: phase idle,
+    #          a fresh breakpoint or the job record awaiting its next prompt, no
+    #          live inbox drainer, and no roll of this bot in the last $BackoffMin
+    #          minutes (a roll that fails cannot loop; the start cap still applies)
+    #   defer:phase|midturn|drainer|backoff
+    param($Observed, $Pin, [bool]$Breakpoint, [bool]$DrainerLive, $LastRollAt, [datetime]$Now = (Get-Date), [double]$BackoffMin = 30)
+    if (-not $Observed -or $Observed.alive -ne $true -or -not $Pin -or -not $Pin.exe) { return 'none' }
+    $exeOff = $false
+    if ($Observed.cc_exe) {
+        try { $exeOff = -not [string]::Equals([System.IO.Path]::GetFullPath("$($Observed.cc_exe)"), [System.IO.Path]::GetFullPath("$($Pin.exe)"), [System.StringComparison]::OrdinalIgnoreCase) } catch { $exeOff = $true }
+    }
+    $verOff = [bool]$Observed.cc_version -and ("$($Observed.cc_version)" -ne "$($Pin.version)")
+    if (-not ($exeOff -or $verOff)) { return 'none' }
+    if ("$($Observed.phase)" -ne 'idle') { return 'defer:phase' }
+    if (-not ($Breakpoint -or $Observed.awaiting_prompt -eq $true)) { return 'defer:midturn' }
+    if ($DrainerLive) { return 'defer:drainer' }
+    if ($LastRollAt) {
+        $t = ConvertTo-UtcTime $LastRollAt
+        if ($t -ne [datetime]::MinValue -and (($Now.ToUniversalTime() - $t).TotalMinutes -lt $BackoffMin)) { return 'defer:backoff' }
+    }
+    return 'roll'
+}
+
 # --- background sessions (harness.session: bg) -----------------------------------------
 function Get-BgAgents {
     # `claude agents --json` (run under the bot's CLAUDE_CONFIG_DIR) -> array of

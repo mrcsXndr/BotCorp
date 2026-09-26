@@ -12,7 +12,8 @@
 #            exists), keep the OTel sink alive if present, hourly harness update
 #            CHECK (records releases only), APPLY of an admin-requested release
 #            only when every bot is at a safe point (then the bots restart),
-#            per-bot janitor once a day.
+#            hourly Claude Code check (daemon/cc.ps1: pin, stage, a detached
+#            gate run on _canary), per-bot janitor once a day.
 #   per bot: liveness. `harness.session: bg` (default): the bot is a Claude Code
 #            background session - `claude agents --json` (under the bot's
 #            CLAUDE_CONFIG_DIR) lists its id with a live pid, or the recorded
@@ -32,7 +33,8 @@
 #                                             marker or transcript quiet)
 #              alive + OWNED/UNKNOWN      -> nothing
 #            then the isolated per-bot ticks (each in its own try/catch, module
-#            gated): usage-limit resume, alert triage, breakpoint roll, board
+#            gated): usage-limit resume, alert triage, the roll onto the
+#            Claude Code pin (between turns only), board
 #            poll, hub push, and the bot's automations (daemon/automations.ps1).
 #   guards:  session-0 stray sweep, launcher grace + hung-launcher kill,
 #            MaxStartsPerWindow cap (ACTION=START lines in the bot's log),
@@ -201,6 +203,34 @@ function Invoke-UpdateCheck {
     } catch { Write-DaemonLog "update check: swallowed exception (fail-open): $($_.Exception.Message)" }
 }
 
+function Invoke-CcCheck {
+    # Hourly: daemon/cc.ps1 -Check pins the Claude Code that runs today (first
+    # run) and stages a newer global build as the candidate; it never promotes.
+    # A candidate the gate is due to test (Get-CcTestDue) gets cc.ps1 -Test
+    # DETACHED: the 8 checks on _canary take minutes, never under this mutex.
+    param([switch]$AsDryRun)
+    try {
+        $cc = Join-Path $PSScriptRoot 'cc.ps1'
+        if (-not (Test-Path $cc)) { return }
+        $st = Get-DaemonState
+        if (Test-DueMinutes -State $st -Key 'cc_check_at' -EveryMin 55) {
+            if ($AsDryRun) { Write-DaemonLog 'DRYRUN would run the Claude Code check (cc.ps1 -Check)' }
+            else {
+                Set-DaemonState @{ cc_check_at = (Get-Date).ToString('o') }
+                $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $cc, '-Check') -TimeoutSec 180 -Label 'cc check' -Capture -WorkingDirectory $BotCorp
+                $last = ''; try { $last = (($r.Output -split "`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1) } catch {}
+                Write-DaemonLog "cc check: exit=$($r.ExitCode) $last" -Quiet
+            }
+        }
+        $lp = 0; try { $lp = Get-FirstPid ("" + (Get-Content -LiteralPath (Join-Path $StateDir 'cc.lock') -Raw -ErrorAction Stop)) } catch {}
+        $s = Read-CcState
+        if (-not (Get-CcTestDue -State $s -LockLive (Test-ProcAlive $lp @('pwsh', 'powershell')))) { return }
+        if ($AsDryRun) { Write-DaemonLog "DRYRUN would start the Claude Code gate on candidate $($s.candidate.version) (cc.ps1 -Test, detached)"; return }
+        $gp = Start-Hidden -Exe (Resolve-PwshExe) -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $cc, '-Test') -WorkingDirectory $BotCorp
+        Write-DaemonLog "ACTION=CC-TEST candidate $($s.candidate.version) (cc.ps1 -Test detached, pid $gp)"
+    } catch { Write-DaemonLog "cc check: swallowed exception (fail-open): $($_.Exception.Message)" }
+}
+
 function Invoke-UpdateApply {
     # Apply is an ADMIN action: only a release the CLI/cockpit marked
     # `status: apply_requested` in <rt>/state/updates.json is ever applied, and
@@ -309,24 +339,26 @@ function Invoke-AlertTriage {
     } catch { Write-DaemonLog "alert_triage: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
-function Invoke-BreakpointRoll {
-    # Only while <BotHome>/.claude/.botcorp_breakpoint is fresh (the bot declared
-    # a clean breakpoint): update_restart.py --auto (Claude Code's OWN update)
-    # owns every gate and spawns restart.ps1 itself. (A harness release is no
-    # longer applied at a breakpoint: Invoke-UpdateApply applies an
-    # admin-requested one when every bot is safe, then the bots restart.)
-    param([string]$Bot, $Cfg, [hashtable]$Paths, [int]$ClaudePid, [switch]$AsDryRun)
+function Get-CcRoll {
+    # Claude Code pin (daemon/cc.ps1): a live bot whose daemon or worker runs
+    # another Claude Code than the pin is restarted onto it, only between turns
+    # (Get-CcRollAction). Claude Code never updates a bot itself any more (the
+    # generated settings turn its autoupdater off). -> the restart reason, or ''.
+    param([string]$Bot, [hashtable]$Paths, $State)
     try {
-        if (-not (Test-BreakpointFresh -Bot $Bot)) { return $false }
-        if ($ClaudePid -le 0) { Write-DaemonLog 'breakpoint: marker present but claude pid unresolved - deferring' -Bot $Bot; return $false }
-        $ur = Join-Path $Harness 'tools\v2\update_restart.py'
-        if (-not (Test-Path $ur)) { return $false }
-        $a = @($ur, '--auto', '--claude-pid', "$ClaudePid"); if ($AsDryRun) { $a += '--dry-run' }
-        $r = Invoke-Bounded -Exe $pyExe -Arguments $a -TimeoutSec 300 -Label 'update_restart' -Capture -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
-        $last = ''; try { $last = (($r.Output -split "`n" | Where-Object { "$_" -match 'auto|PENDING|spawned|WOULD' }) | Select-Object -Last 1) } catch {}
-        if ($last) { Write-DaemonLog "update_restart: $($last.Trim())" -Bot $Bot }
-    } catch { Write-DaemonLog "breakpoint: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
-    return $false
+        $cs = Read-CcState
+        $pin = $(if ($cs) { $cs.pinned } else { $null })
+        if (-not $pin) { return '' }
+        $o = $script:Observed[$Bot]
+        $dp = 0; try { $dp = Get-FirstPid ("" + (Get-Content -LiteralPath (Join-Path $Paths.BotStateDir 'inbox.drainer') -Raw -ErrorAction Stop)) } catch {}
+        $lastRoll = $null; try { if ($State -and ($State.PSObject.Properties.Name -contains 'cc_roll_at')) { $lastRoll = $State.cc_roll_at } } catch {}
+        $a = Get-CcRollAction -Observed $o -Pin $pin -Breakpoint (Test-BreakpointFresh -Bot $Bot) -DrainerLive (Test-ProcAlive $dp @('node')) -LastRollAt $lastRoll
+        if ($a -eq 'none') { return '' }
+        $from = $(if ($o.cc_version) { "$($o.cc_version)" } else { "$($o.cc_exe)" })
+        if ($a -eq 'roll') { return "cc $from -> $($pin.version)" }
+        Write-DaemonLog "cc roll $from -> $($pin.version) DEFERRED ($($a -replace '^defer:', ''))" -Bot $Bot -Quiet
+    } catch { Write-DaemonLog "cc roll: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+    return ''
 }
 
 function Invoke-BoardPoll {
@@ -623,8 +655,10 @@ function Invoke-BotTick {
     $resumeWanted = $false
     if (Test-BotModule $cfg 'usage_resume') { $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun }
     if (Test-BotModule $cfg 'alert_triage') { Invoke-AlertTriage -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
+    $ccRoll = $false
     if ($action -eq 'none') {
-        if (Invoke-BreakpointRoll -Bot $Bot -Cfg $cfg -Paths $P -ClaudePid $claudePid -AsDryRun:$DryRun) { $action = 'restart'; $why = 'harness update at declared breakpoint' }
+        $ccWhy = Get-CcRoll -Bot $Bot -Paths $P -State $st
+        if ($ccWhy) { $action = 'restart'; $why = $ccWhy; $ccRoll = $true }
         if (Test-BotModule $cfg 'board') { Invoke-BoardPoll -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'hub') { Invoke-HubPush -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'janitor') { Invoke-Janitor -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
@@ -637,7 +671,7 @@ function Invoke-BotTick {
     Invoke-InboxKick -Bot $Bot -Paths $P -AsDryRun:$DryRun
 
     if ($action -in @('none', 'paused', 'locked')) { Write-DaemonLog "no action (alive=$alive poller=$poller$(if ($action -ne 'none') { " $action" }))" -Bot $Bot -Quiet; return }
-    if ($DryRun) { Write-DaemonLog "DRYRUN would $action $Bot (alive=$alive poller=$poller)" -Bot $Bot; return }
+    if ($DryRun) { Write-DaemonLog "DRYRUN would $action $Bot (alive=$alive poller=$poller)$(if ($why) { " ($why)" })" -Bot $Bot; return }
 
     # --- start cap --------------------------------------------------------------
     $recent = Get-RecentStartCount -Bot $Bot -WindowMinutes $WindowMin
@@ -651,6 +685,7 @@ function Invoke-BotTick {
         if ($claudePid -le 0) { Write-DaemonLog 'restart DEFERRED: claude pid unresolved (never restart.ps1 -OldPid 0)' -Bot $Bot; return }
         $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session idle -> $rel)" -Bot $Bot
+        if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
         Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ started_by = 'daemon-restart'; updated_at = (Get-Date).ToString('o') }
         $rp = Start-RestartDetached -Bot $Bot -OldPid $claudePid -OldShellPid $shellPid
         if ($service -eq 'bg') {
@@ -701,6 +736,7 @@ try {
         Invoke-CockpitKeepalive -AsDryRun:$DryRun
         Invoke-OtelSinkKeepalive -AsDryRun:$DryRun
         Invoke-UpdateCheck -AsDryRun:$DryRun
+        Invoke-CcCheck -AsDryRun:$DryRun
         $script:RestartAllWhy = Invoke-UpdateApply -AsDryRun:$DryRun
     }
     $bots = @(Get-BotList)

@@ -15,7 +15,10 @@ resolvers). This file covers how the pin moves:
   human exactly once;
 - prune keeps the pin, previous[0..1], the candidate and any exe a process runs;
 - `-Rollback [-To <v>]` moves the pin to a previous version and rejects the one
-  it replaced.
+  it replaced;
+- observe reports the Claude Code a bot runs (cc_version, cc_exe), and the tick
+  rolls a bot onto the pin only between turns (Get-CcRollAction), starts a gate
+  run when one is due (Get-CcTestDue), and never runs update_restart.py.
 
 The global install is simulated with private copies of the three real (signed)
 builds in ~/.local/share/claude/versions, read once per session and never
@@ -31,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -460,3 +464,123 @@ def test_observe_reads_cc_version_from_roster_file(tmp_path):
                                     capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env).stdout)
     rec = rec[0] if isinstance(rec, list) else rec
     assert rec["cc_version"] is None and rec["cc_exe"] is None
+
+
+# --- the roll onto the pin (tick) --------------------------------------------------------------
+PIN = {"version": "2.1.283", "exe": r"C:\rt\cc\2.1.283\claude.exe"}
+OLD = {"cc_exe": r"C:\rt\cc\2.1.282\claude.exe", "cc_version": "2.1.282"}
+
+
+@needs_pwsh
+@pytest.mark.parametrize("obs,bp,drainer,last_roll,pin,expected", [
+    ({"alive": True, "phase": "idle", **OLD}, True, False, "", PIN, "roll"),
+    ({"alive": True, "phase": "idle", "awaiting_prompt": True, **OLD}, False, False, "", PIN, "roll"),
+    ({"alive": True, "phase": "idle", **OLD}, False, False, "", PIN, "defer:midturn"),     # quiet only: not provably between turns
+    ({"alive": True, "phase": "working", **OLD}, True, False, "", PIN, "defer:phase"),
+    ({"alive": True, "phase": "unknown", **OLD}, True, False, "", PIN, "defer:phase"),
+    ({"alive": True, "phase": "idle", **OLD}, True, True, "", PIN, "defer:drainer"),
+    ({"alive": True, "phase": "idle", **OLD}, True, False, "2026-09-26T11:50:00Z", PIN, "defer:backoff"),
+    ({"alive": True, "phase": "idle", **OLD}, True, False, "2026-09-26T11:20:00Z", PIN, "roll"),
+    ({"alive": True, "phase": "idle", "cc_exe": PIN["exe"].upper(), "cc_version": "2.1.283"}, True, False, "", PIN, "none"),
+    ({"alive": True, "phase": "idle", "cc_exe": None, "cc_version": "2.1.282"}, True, False, "", PIN, "roll"),   # the worker still runs the old one
+    ({"alive": True, "phase": "idle", "cc_exe": None, "cc_version": None}, True, False, "", PIN, "none"),         # cannot tell: never roll
+    ({"alive": False, "phase": "down", **OLD}, True, False, "", PIN, "none"),
+    ({"alive": True, "phase": "idle", **OLD}, True, False, "", None, "none"),
+])
+def test_cc_roll_gate(obs, bp, drainer, last_roll, pin, expected):
+    body = (f"$o = ConvertFrom-Json -InputObject '{json.dumps(obs)}'\n"
+            f"$pin = {'$null' if pin is None else f'ConvertFrom-Json -InputObject {chr(39)}{json.dumps(pin)}{chr(39)}'}\n"
+            f"Get-CcRollAction -Observed $o -Pin $pin -Breakpoint ${str(bp).lower()} -DrainerLive ${str(drainer).lower()} "
+            f"-LastRollAt '{last_roll}' -Now ([datetime]'2026-09-26T12:00:00Z')")
+    assert _ps(body) == expected
+
+
+@needs_pwsh
+@pytest.mark.parametrize("cand,lock,expected", [
+    ({"status": "staged", "attempts": 0}, False, True),
+    ({"status": "staged", "attempts": 0}, True, False),                                         # a gate run holds cc.lock
+    ({"status": "failed", "attempts": 1, "tested_at": "2026-09-26T10:00:00Z"}, False, True),   # the retry, an hour later
+    ({"status": "failed", "attempts": 1, "tested_at": "2026-09-26T11:30:00Z"}, False, False),
+    ({"status": "failed", "attempts": 0, "tested_at": "2026-09-26T10:00:00Z"}, False, True),   # the canary was not ready
+    ({"status": "rejected", "attempts": 2, "tested_at": "2026-09-26T10:00:00Z"}, False, False),
+    ({"status": "promoted", "attempts": 0}, False, False),
+    (None, False, False),
+])
+def test_cc_test_due(cand, lock, expected):
+    st = {"pinned": PIN, "candidate": cand}
+    body = (f"$s = ConvertFrom-Json -InputObject '{json.dumps(st)}'\n"
+            f"Get-CcTestDue -State $s -LockLive ${str(lock).lower()} -Now ([datetime]'2026-09-26T12:00:00Z')")
+    assert _ps(body) == str(expected)
+
+
+@pytest.fixture
+def tick_box(tmp_path):
+    """A live-looking bg bot `alpha` for a -DryRun tick: a signed stand-in named claude.exe (a PING.EXE copy)
+    is its worker and its config home's daemon; its turn is over (fresh breakpoint); cc.json pins 2.1.283."""
+    rt, bots = tmp_path / "rt", tmp_path / "bots"
+    (rt / "state").mkdir(parents=True)
+    home = bots / "alpha"
+    cfg = home / ".claude-alpha"
+    (cfg / "daemon").mkdir(parents=True)
+    (home / ".claude").mkdir()
+    (home / "bot.yaml").write_text("name: alpha\nharness:\n  service: manual\n  modules:\n    telegram: false\n    janitor: false\n"
+                                   "    usage_resume: false\n", encoding="utf-8")
+    old = tmp_path / "old" / "claude.exe"
+    old.parent.mkdir()
+    shutil.copyfile(Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "PING.EXE", old)
+    proc = subprocess.Popen([str(old), "-n", "120", "127.0.0.1"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    now = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())
+    (rt / "cockpit.json").write_text('{"enabled": false}', encoding="utf-8")
+    (rt / "state" / "daemon.json").write_text(json.dumps({"update_check_at": now, "cc_check_at": now}), encoding="utf-8")
+    (rt / "state" / "alpha.json").write_text(json.dumps({"bot": "alpha", "status": "running", "service": "bg", "claude_pid": proc.pid,
+                                                        "bg_id": "abcd1234", "session_id": "S1", "poller": "n/a"}), encoding="utf-8")
+    (cfg / "daemon" / "roster.json").write_text(json.dumps({"proto": 1, "workers": {"abcd1234": {"pid": proc.pid, "cliVersion": "2.1.282"}}}), encoding="utf-8")
+    (cfg / "daemon.lock").write_text(json.dumps({"pid": proc.pid}), encoding="utf-8")
+    (home / ".claude" / ".botcorp_breakpoint").write_text("", encoding="utf-8")
+    pinned = rt / "cc" / "2.1.283" / "claude.exe"
+    pinned.parent.mkdir(parents=True)
+    pinned.write_bytes(b"stand-in 2.1.283")
+    (rt / "state" / "cc.json").write_text(json.dumps({"schema": 1, "pinned": {"version": "2.1.283", "exe": str(pinned), "sha256": _sha(pinned), "by": "gate"},
+                                                      "previous": [], "candidate": None, "rejected": []}), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
+    # BOTCORP_CLAUDE_EXE = the stand-in: whatever the tick hands a claude exe to runs PING, never a real Claude Code
+    env.update({"BOTCORP_HOME": str(rt), "BOTCORP_BOTS_DIR": str(bots), "BOTCORP_ROOT": str(ASSEMBLY), "BOTCORP_CLAUDE_EXE": str(old),
+                "BOTCORP_DAEMON_MUTEX": f"Global\\BotCorpDaemon-test-{os.urandom(8).hex()}", "BOT_TG_MUTE": "1"})
+    try:
+        yield {"rt": rt, "home": home, "env": env, "old": old}
+    finally:
+        proc.kill()
+        proc.wait(timeout=30)
+
+
+def _tick_dry(t: dict) -> str:
+    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "tick.ps1"), "-DryRun"],
+                       capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=t["env"])
+    assert r.returncode == 0, r.stderr
+    return "\n".join((t["rt"] / p).read_text(encoding="utf-8-sig") for p in ("daemon.log", "logs/alpha/daemon.log") if (t["rt"] / p).exists())
+
+
+@needs_pwsh
+def test_tick_never_runs_update_restart(tick_box):
+    log = _tick_dry(tick_box)
+    assert "state: alive=True" in log, log[-3000:]
+    assert "update_restart" not in log, log[-3000:]
+
+
+@needs_pwsh
+def test_tick_dryrun_logs_cc_roll(tick_box):
+    log = _tick_dry(tick_box)
+    assert "DRYRUN would restart alpha" in log and "(cc 2.1.282 -> 2.1.283)" in log, log[-3000:]
+    assert "cc_roll_at" not in (tick_box["rt"] / "state" / "alpha.json").read_text(encoding="utf-8-sig")   # a dry run records nothing
+
+
+def test_update_restart_refuses_when_pinned(tmp_path):
+    stand_in = tmp_path / "claude.exe"
+    stand_in.write_bytes(b"not a program")   # never run: the refusal comes first
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_"))}
+    env.update({"BOTCORP_CLAUDE_EXE": str(stand_in), "BOT_HOME": str(tmp_path), "BOT_TG_MUTE": "1"})
+    for args in (["--dry-run"], ["--auto", "--dry-run"]):
+        r = subprocess.run([sys.executable, str(ASSEMBLY / "harness" / "tools" / "v2" / "update_restart.py"), *args],
+                           capture_output=True, text=True, timeout=120, cwd=str(tmp_path), env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Claude Code is pinned by BotCorp: botcorp cc status" in r.stdout, r.stdout + r.stderr
