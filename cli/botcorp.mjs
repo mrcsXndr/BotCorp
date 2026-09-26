@@ -18,7 +18,7 @@ import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { depsVerdict, CLI_DEPS } from './_deps.mjs';
+import { depsVerdict, CLI_DEPS, worktreeLinksVerdict } from './_deps.mjs';
 import { zipWrite, zipList, zipExtract, zipEntryData } from './_zip.mjs';
 
 // The modules below need node_modules (js-yaml), and a static import of a
@@ -2134,6 +2134,9 @@ async function cmdDoctor({ flags }) {
     const gv = gitPath ? run(gitPath, ['--version'], { timeoutMs: 15_000 }) : null;
     add(gv && gv.code === 0 ? 'PASS' : 'FAIL', 'git', gv && gv.code === 0 ? `${gv.out.trim()} at ${gitPath}` : 'not found on PATH or under Program Files\\Git');
     add(DEPS.level, 'node_modules', DEPS.detail);
+    const wtl = gitPath ? run(gitPath, ['-C', ROOT, 'worktree', 'list', '--porcelain'], { timeoutMs: 15_000 }) : null;
+    const wtv = worktreeLinksVerdict(wtl && wtl.code === 0 ? wtl.out : '');
+    add(wtv.level, 'worktree node_modules', wtv.detail);
 
     // harness
     const pj = readJson(path.join(ROOT, 'harness', '.claude-plugin', 'plugin.json'));

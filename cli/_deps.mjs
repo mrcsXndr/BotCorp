@@ -34,3 +34,24 @@ export function depsVerdict(root) {
   const effect = missing.some((d) => CLI_DEPS.includes(d)) ? '; bot.yaml cannot be parsed, so the daemon skips every bot' : '';
   return { level: 'FAIL', missing, detail: `${what}${cant}${effect}. ${fix}` };
 }
+
+// porcelain = `git worktree list --porcelain` of the checkout; its first entry is
+// the main (live) worktree. A worktree whose node_modules is a junction/symlink
+// into the live node_modules shares it, and a `git worktree remove` through that
+// link once emptied the live checkout's node_modules.
+export function worktreeLinksVerdict(porcelain) {
+  const trees = String(porcelain || '').split(/\r?\n/).filter((l) => l.startsWith('worktree ')).map((l) => path.resolve(l.slice(9)));
+  if (!trees.length) return { level: 'INFO', detail: 'not a git checkout (no worktrees listed)' };
+  const norm = (p) => (process.platform === 'win32' ? p.toLowerCase() : p);
+  const liveNm = norm(path.join(trees[0], 'node_modules'));
+  const bad = [];
+  for (const wt of trees.slice(1)) {
+    const nm = path.join(wt, 'node_modules');
+    let target;
+    try { if (!fs.lstatSync(nm).isSymbolicLink()) continue; target = path.resolve(wt, fs.readlinkSync(nm)); } catch { continue; }
+    const t = norm(target);
+    if (t === liveNm || t.startsWith(liveNm + path.sep)) bad.push(`${nm} -> ${target}`);
+  }
+  if (!bad.length) return { level: 'PASS', detail: `${trees.length - 1} other worktree(s), none links into ${path.join(trees[0], 'node_modules')}` };
+  return { level: 'FAIL', detail: `${bad.join('; ')} links into the live node_modules (a worktree remove through it empties the live checkout). Fix: cmd /c rmdir "<worktree>\\node_modules" (removes only the link), then npm ci in that worktree` };
+}

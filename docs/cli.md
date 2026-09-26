@@ -602,6 +602,11 @@ logins, `--no-tg-probe` the Telegram slot probe.
   with a wiped `node_modules` every command answers with that fix and
   `doctor` prints this one check; the daemon's log then reads
   `bot.yaml unreadable: MODULE_NOT_FOUND '<package>'`;
+- `worktree node_modules`: FAIL when another git worktree of the checkout has
+  a `node_modules` that is a junction or symlink into the main (live)
+  worktree's `node_modules`; a `git worktree remove` through that link empties
+  the live one (fix: `cmd /c rmdir` of the link, then `npm ci` in that
+  worktree);
 - `harness/.claude-plugin/plugin.json` readable; `claude plugin validate
   harness --strict` passes;
 - `python` / `pwsh` / `git` are reported with the absolute path they resolved
