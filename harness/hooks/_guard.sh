@@ -21,6 +21,14 @@
 HOOK_NAME="${1:-}"
 HOOK_MODULE="${2:-}"
 
+# Opt-in trace (BotCorp's Claude Code gate, check 3): one line per hook Claude
+# Code ran, before any gate below can skip it.
+if [ "${BOT_HOOK_TRACE:-}" = "1" ]; then
+  _trace_dir="${BOT_HOME:-${CLAUDE_PROJECT_DIR:-$PWD}}/memory/metrics"
+  { mkdir -p "$_trace_dir" && printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$HOOK_NAME" >> "$_trace_dir/hook-trace.log"; } 2>/dev/null
+  unset _trace_dir
+fi
+
 case ",${BOT_DISABLED_HOOKS:-}," in
   *",${HOOK_NAME},"*) exit 0 ;;
 esac

@@ -159,6 +159,24 @@ def test_lib_missing_pinned_exe_falls_back(tmp_path):
     assert _same(_node("m.resolveClaude()", b["env"]), b["native"])
 
 
+# --- hook trace (the gate's check 3) ---------------------------------------------------------
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash not on PATH")
+def test_hook_trace_opt_in(tmp_path):
+    home = tmp_path / "bot"
+    home.mkdir()
+    env = {**os.environ, "BOT_HOME": str(home), "BOT_MODULES": "", "BOT_TG_MUTE": "1", "CLAUDE_PLUGIN_ROOT": str(ASSEMBLY / "harness")}
+    env.pop("BOT_HOOK_TRACE", None)
+    hook = str(ASSEMBLY / "harness" / "hooks" / "play-sound.sh")   # module-gated off here: the trace still records that it fired
+    trace = home / "memory" / "metrics" / "hook-trace.log"
+    r = subprocess.run(["bash", hook], input="{}", capture_output=True, text=True, env=env, timeout=30)
+    assert r.returncode == 0, r.stderr
+    assert not trace.exists()
+    r = subprocess.run(["bash", hook], input="{}", capture_output=True, text=True, env={**env, "BOT_HOOK_TRACE": "1"}, timeout=30)
+    assert r.returncode == 0, r.stderr
+    lines = trace.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ play-sound", lines[0]), lines
+
+
 # --- the python resolvers ------------------------------------------------------------------
 def test_python_resolvers_take_the_env_exe_first(tmp_path, monkeypatch):
     import alert_triage
