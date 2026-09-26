@@ -3,8 +3,9 @@
 #
 # What this hook does:
 #   1. Parse the Claude Code UserPromptSubmit JSON payload from stdin.
-#   2. TG SLASH-COMMAND INTERCEPT — /status /journal /timeline /compact /tasks
-#      /costs /update /help are handled by tools/v2/tg_commands.py and blocked
+#   2. TG SLASH-COMMAND INTERCEPT — a local "/cmd" prompt, or a Telegram
+#      message whose body is a read-only command (/status /journal /timeline
+#      /board /costs /help), is handled by tools/v2/tg_commands.py and blocked
 #      from the main thread (exit 2). The reply goes straight back to Telegram.
 #   3. INBOUND SIZE GUARD — stash huge pastes and redirect the bot's attention
 #      instead of polluting context inline.
@@ -75,9 +76,18 @@ PROMPT_REAL="$PROMPT"
 # countered on every prompt, so the hook states the working path each time.
 # Matches both channel-tag spellings the plugin has shipped.
 REPLY_NUDGE=""
+TG_BODY=""
 case "$PROMPT_REAL" in
   *'<channel source="telegram"'*|*'<channel source="plugin:telegram:telegram"'*)
     printf '%s' "$PROMPT_REAL" | "$PY" "$HARNESS/tools/tg/tg_log.py" ingest >/dev/null 2>&1 || true
+    # Body of the Telegram <channel> element, for the slash intercept below. Only
+    # when the prompt carries exactly one: the intercept blocks the whole prompt,
+    # which would drop every other message batched into it.
+    TG_BODY=$(printf '%s' "$PROMPT_REAL" | "$PY" -c '
+import re, sys
+m = re.findall(r"<channel\s+source=\"(?:plugin:telegram:)?telegram\"[^>]*>(.*?)</channel>", sys.stdin.read(), re.DOTALL)
+sys.stdout.write(m[0].strip() if len(m) == 1 else "")
+' 2>/dev/null || true)
     # Last tag in the prompt = the message being answered (a batched prompt
     # can carry several).
     TG_CHAT_ID=$(printf '%s' "$PROMPT_REAL" | grep -o 'chat_id="[^"]*"' | tail -1 | sed 's/chat_id="\(.*\)"/\1/')
@@ -101,15 +111,29 @@ esac
 # main thread. tg_commands.py exit codes: 0=handled, 1=not-a-cmd,
 # 2=handled-with-error. REPLY_TO (inbound TG message_id for threading) was
 # extracted in the parse above.
-FIRST_CHAR="${PROMPT_REAL:0:1}"
-if [ "$FIRST_CHAR" = "/" ]; then
+#
+# From Telegram only an explicit read-only allowlist is intercepted: a command
+# that mutates or restarts (/compact, /update, /board move|set|sync|poll, a
+# bot-local command) passes through to the model, so a Telegram message can
+# never restart the bot through this hook.
+CMD_TEXT=""
+if [ "${PROMPT_REAL:0:1}" = "/" ]; then
+  CMD_TEXT="$PROMPT_REAL"
+elif [ "${TG_BODY:0:1}" = "/" ]; then
+  read -r TG_CMD TG_ARG1 _ <<< "$TG_BODY"
+  case "${TG_CMD,,}" in
+    /status|/journal|/timeline|/costs|/help) CMD_TEXT="$TG_BODY" ;;
+    /board) case "${TG_ARG1,,}" in ""|show|render|list|help) CMD_TEXT="$TG_BODY" ;; esac ;;
+  esac
+fi
+if [ -n "$CMD_TEXT" ]; then
   # Prompt goes via STDIN ('-'): on Windows/Git Bash, MSYS converts a
   # leading-slash argv ("/help") into a Windows path, which would break the
   # intercept. stdin is never path-converted.
-  CMD_RC=$(printf '%s' "$PROMPT_REAL" | "$PY" "$HARNESS/tools/v2/tg_commands.py" - "$REPLY_TO" >/dev/null 2>&1; echo $?)
+  CMD_RC=$(printf '%s' "$CMD_TEXT" | "$PY" "$HARNESS/tools/v2/tg_commands.py" - "$REPLY_TO" >/dev/null 2>&1; echo $?)
   if [ "$CMD_RC" = "0" ] || [ "$CMD_RC" = "2" ]; then
-    "$PY" "$HARNESS/tools/v2/journal.py" append "$SESSION_ID" action "tg-command handled: ${PROMPT_REAL:0:80}" >/dev/null 2>&1 || true
-    echo "[tg_commands] handled $PROMPT_REAL — reply sent to TG, blocking main thread" >&2
+    "$PY" "$HARNESS/tools/v2/journal.py" append "$SESSION_ID" action "tg-command handled: ${CMD_TEXT:0:80}" >/dev/null 2>&1 || true
+    echo "[tg_commands] handled $CMD_TEXT — reply sent to TG, blocking main thread" >&2
     exit 2
   fi
 fi
