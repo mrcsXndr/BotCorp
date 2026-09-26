@@ -533,6 +533,19 @@ if ($Test) {
         $s = ConvertTo-CcState (Read-CcState)
         $c = $s.candidate
         if (-not $c -or "$($c.status)" -notin @('staged', 'failed', 'testing')) { Log "nothing to test (candidate: $(if ($c) { "$($c.version) $($c.status)" } else { 'none' }))"; exit 0 }
+        if ("$($c.status)" -eq 'testing') {
+            # We hold the lock, so the run that set `testing` is gone: it died
+            # mid-test. That counts as a failed attempt (a second death rejects),
+            # so a build that kills the gate can neither loop nor stay stuck.
+            $o = Get-CcTestOutcome -State $s -Checks @() -Now (Now)
+            $o.State.candidate['detail'] = "the gate run died mid-test ($($o.State.candidate.detail))"
+            if (-not (Save-Cc $o.State)) { exit 1 }
+            if ($o.Action -eq 'reject') {
+                Log "candidate $($c.version) REJECTED: its gate run died twice"
+                Send-CcRejectNotice -Candidate $o.State.candidate -Pinned "$($o.State.pinned.version)"
+            } else { Log "candidate $($c.version): its last gate run died mid-test (attempt 1 of 2, retried in an hour)" }
+            exit 0
+        }
         if ($ChecksFile) { $checks = @(Get-Content -LiteralPath $ChecksFile -Raw | ConvertFrom-Json) }
         else {
             $why = Get-CcCanaryProblem

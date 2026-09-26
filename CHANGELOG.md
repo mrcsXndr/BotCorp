@@ -23,7 +23,8 @@ update untested.
   (`cc.ps1 -Test`, detached from the tick): launch, version and status
   parse, hooks, inbox delivery, resume, the Telegram poller, statusline
   numbers, clean teardown. A second failure rejects the version and tells a
-  human once.
+  human once. A gate run that dies mid-test counts as a failed attempt, so
+  a candidate never sticks in `testing`.
 - **Bots roll onto the pin between turns only**: idle, with a fresh
   breakpoint or the job record awaiting its next prompt, no inbox drainer,
   at most once per 30 min. The tick no longer runs `update_restart.py

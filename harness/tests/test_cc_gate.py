@@ -336,6 +336,29 @@ def test_second_failure_rejects_and_alerts_once(box, tmp_path):
 
 
 @needs_builds
+def test_a_gate_run_that_died_counts_as_a_failed_attempt(box):
+    """A candidate left `testing` (its gate run died: no lock holder) is recorded as a
+    failed attempt, without driving the canary; a second death rejects it, so a
+    build that kills the gate can neither loop nor stay stuck in `testing`."""
+    b = _staged(box)
+    home = _bot(b, "alpha")
+    alerts = home / "memory" / "metrics" / "alerts.log"
+    for attempt, status in ((1, "failed"), (2, "rejected")):
+        st = _state(b)
+        st["candidate"]["status"] = "testing"
+        _write_state(b, st)
+        r = _cc(b, "-Test")
+        assert r.returncode == 0, r.stdout + r.stderr
+        c = _state(b)["candidate"]
+        assert c["status"] == status and c["attempts"] == attempt, c
+        assert "died" in c["detail"], c["detail"]
+    st = _state(b)
+    assert st["rejected"] == [V2] and st["pinned"]["version"] == V1
+    lines = [ln for ln in alerts.read_text(encoding="utf-8-sig").splitlines() if ln.strip()]
+    assert len(lines) == 1 and V2 in lines[0]
+
+
+@needs_builds
 def test_test_refuses_without_canary(box):
     b = _staged(box)
     r = _cc(b, "-Test")   # no _canary at all
@@ -505,6 +528,8 @@ def test_cc_roll_gate(obs, bp, drainer, last_roll, pin, expected):
     ({"status": "failed", "attempts": 0, "tested_at": "2026-09-26T10:00:00Z"}, False, True),   # the canary was not ready
     ({"status": "rejected", "attempts": 2, "tested_at": "2026-09-26T10:00:00Z"}, False, False),
     ({"status": "promoted", "attempts": 0}, False, False),
+    ({"status": "testing", "attempts": 0}, False, True),                                        # its gate run died mid-test
+    ({"status": "testing", "attempts": 0}, True, False),                                        # its gate run is still going
     (None, False, False),
 ])
 def test_cc_test_due(cand, lock, expected):

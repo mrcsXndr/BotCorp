@@ -573,12 +573,14 @@ function Get-CcTestDue {
     # Does the tick start a gate run (cc.ps1 -Test, detached)? Not while one
     # holds cc.lock; yes for a staged candidate, and for a failed one with an
     # attempt left once its last run is $RetryMin old (a candidate whose canary
-    # was not ready failed with attempts 0 and is retried the same way).
+    # was not ready failed with attempts 0 and is retried the same way). A
+    # candidate still `testing` with no lock holder lost its gate run: due at
+    # once, so -Test records that death as a failed attempt.
     param($State, [bool]$LockLive, [datetime]$Now = (Get-Date), [double]$RetryMin = 55)
     if ($LockLive) { return $false }
     $c = (ConvertTo-CcState $State).candidate
     if (-not $c) { return $false }
-    if ("$($c.status)" -eq 'staged') { return $true }
+    if ("$($c.status)" -in @('staged', 'testing')) { return $true }
     if ("$($c.status)" -ne 'failed' -or [int]$c.attempts -ge 2) { return $false }
     $t = $(if ($c.tested_at) { ConvertTo-UtcTime $c.tested_at } else { [datetime]::MinValue })
     return ($t -eq [datetime]::MinValue) -or (($Now.ToUniversalTime() - $t).TotalMinutes -ge $RetryMin)
