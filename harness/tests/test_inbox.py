@@ -296,6 +296,59 @@ def test_send_refuses_bad_input(box, args, stdin, err):
     assert not (box["rt"] / "state" / box["name"] / "inbox.jsonl").exists()
 
 
+def _free_port() -> int:
+    import socket
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def test_the_cockpit_send_route(box):
+    # stopped (no state file): the message is queued, then fails at once
+    import urllib.error
+    import urllib.request
+    _yaml(box, "bg")
+    xss = '<img src=x onerror=alert(1)> [x](javascript:alert(1)) </code>'
+    port = _free_port()
+    srv = subprocess.Popen(["node", str(ASSEMBLY / "cockpit" / "server.mjs"), "--port", str(port)], cwd=str(ASSEMBLY), env=box["env"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=subprocess.CREATE_NO_WINDOW)
+    box["procs"].append(srv)
+    base = f"http://127.0.0.1:{port}"
+    deadline = time.time() + 60
+    while True:
+        try:
+            urllib.request.urlopen(base + "/healthz", timeout=5).read()
+            break
+        except OSError:
+            assert time.time() < deadline and srv.poll() is None, "cockpit did not come up"
+            time.sleep(0.5)
+    cookie = urllib.request.urlopen(base + "/", timeout=30).headers["Set-Cookie"].split(";")[0]
+
+    def call(method, path, body=None):
+        req = urllib.request.Request(base + path, method=method, headers={"Cookie": cookie, "Content-Type": "application/json"},
+                                     data=json.dumps(body).encode() if body is not None else None)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            return e.code, json.loads(e.read())
+
+    code, item = call("POST", f"/api/bots/{box['name']}/send", {"text": xss})
+    assert code == 200 and item["status"] == "queued" and item["id"], item
+    assert call("POST", f"/api/bots/{box['name']}/send", {"text": "  "})[0] == 400
+    assert call("POST", f"/api/bots/{box['name']}/send", {})[0] == 400
+    assert call("POST", "/api/bots/no-such-bot/send", {"text": "hi"})[0] == 404
+    rows = _wait_for(lambda: (lambda r: r if r and r[-1]["status"] == "failed" else None)(call("GET", f"/api/bots/{box['name']}/inbox")[1]), 30)
+    assert rows[-1]["id"] == item["id"] and "session stopped" in rows[-1]["detail"]
+    assert "text" not in rows[-1] and rows[-1]["source"] == "cockpit"
+    stored = json.loads((box["rt"] / "state" / box["name"] / "inbox.jsonl").read_text(encoding="utf-8").splitlines()[0])
+    assert stored["text"] == xss, "queued exactly as typed"
+    audit = [json.loads(ln) for ln in (box["rt"] / "state" / "cockpit-audit.jsonl").read_text(encoding="utf-8").splitlines()]
+    sends = [a for a in audit if a["path"].endswith("/send")]
+    assert len(sends) == 4 and sends[0]["inbox_id"] == item["id"] and sends[0]["result"] == 200 and sends[0]["bot"] == box["name"], sends
+    assert "onerror" not in json.dumps(audit), "the audit never carries the text"
+
+
 def test_the_tick_kicks_a_queue_nobody_drains(box, tmp_path):
     _yaml(box, "bg")
     p = subprocess.Popen([sys.executable, "-c", ""])

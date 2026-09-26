@@ -100,7 +100,8 @@ caller (either mode) appends one line to
 bot, result}`, where `path` has no query string, `bot` is the `/api/bots/<name>`
 segment or `null`, and `result` is the HTTP status (`aborted` if the client
 hung up). Bodies are never recorded, so a vault value or a passphrase cannot
-reach it. A request refused before identification (a bad Host or Origin, no
+reach it. A chat send adds `inbox_id`, the id of the queued message, never its
+text. A request refused before identification (a bad Host or Origin, no
 valid JWT) is not logged.
 
 Caps: `express.json` 8 MB (413 above), paste files 8 MB decoded and 10 per
@@ -195,6 +196,7 @@ never spawns a session itself, attached or not.
 | Pairing state | `pair <bot> --list --json` -> `{policy, allowFrom, pending:[{code, senderId, chatId, age_s, expires_in_s}]}` |
 | Approve / deny a Telegram sender | `pair <bot> <senderId>` / `pair <bot> --deny <senderId>` (CLI writes `allowFrom`, `approved/<senderId>` or the deny record, `bot.yaml`) — never from a chat message, only here or in the terminal |
 | Releases panel | `GET /api/updates` reads `<BOTCORP_HOME>/state/updates.json`; Apply/Skip = `update --apply <tag>` / `update --skip <tag>` |
+| Chat send | `POST /api/bots/:name/send {text}` -> `send <bot> --source cockpit --json` (text on stdin); the composer then polls `GET /api/bots/:name/inbox`, which reads the last 50 items of `<BOTCORP_HOME>/state/<bot>/inbox.jsonl` without their text |
 | Runs drawer | reads `<BOTCORP_HOME>/state/<bot>/runs.jsonl` tail (read-only) |
 | New chat: account list | `GET /api/accounts` -> `accounts list --json` |
 | New chat: recent folders | `GET /api/chat/recent` reads `<BOTCORP_HOME>/state/chat-recent.json` |
@@ -216,8 +218,13 @@ CLI results come back as `{ok, code, out, err}`; `out`/`err` are truncated to
 - Key row: Esc, Ctrl+C, Ctrl+L, Mode, Tab, Enter, arrows, +file. The Mode key
   sends `\x1b[Z` (Shift+Tab); `MODE_KEY_SEQ` at the top of `app.js` is the one
   constant to flip to `\x1bm` (Alt+M) if ConPTY does not deliver Shift+Tab.
-- Multi-line text (chat box, or a terminal paste containing a newline) is
-  sent as ONE bracketed paste (`\x1b[200~ ... \x1b[201~`), then `\r`.
+- The chat box does not type into the socket: it queues the message in the
+  bot's inbox (`botcorp send`, see `docs/cli.md`), which types it once the
+  session is idle. Each sent message shows a status line under it (sending,
+  queued, held, delivered, expired, not delivered, with the reason), rendered
+  with `textContent` only (`public/inbox.js`), like the message itself.
+- A terminal paste containing a newline is sent as ONE bracketed paste
+  (`\x1b[200~ ... \x1b[201~`), then `\r`.
 - Image / file paste, drop, or +file: `POST /api/bots/:name/paste` stores it at
   `%TEMP%/botcorp-paste/<bot>/paste-<ms>.<ext>`; the client types
   `@<forward-slash path> ` with no Enter.

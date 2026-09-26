@@ -12,7 +12,9 @@ cockpit/tests/chat-render.test.mjs locks:
   not render;
 - the header chips (cockpit/chatstatus.mjs) read status.json, bot.yaml,
   session-env/launch-env and .claude.json, and say why when a value is missing;
-- statusline.js records the session's effort in status.json.
+- statusline.js records the session's effort in status.json;
+- the composer's sent message and its inbox status line (cockpit/public/inbox.js)
+  render every XSS payload as text, on a DOM that refuses innerHTML.
 """
 from __future__ import annotations
 
@@ -36,5 +38,5 @@ def test_cockpit_chat_render_suite():
     passed = re.search(r"^# pass (\d+)$", out, re.M)
     failed = re.search(r"^# fail (\d+)$", out, re.M)
     # zero collected is a suite error, not a pass
-    assert passed and int(passed.group(1)) >= 19, out
+    assert passed and int(passed.group(1)) >= 24, out
     assert failed and int(failed.group(1)) == 0, out

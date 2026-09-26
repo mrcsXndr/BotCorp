@@ -841,7 +841,8 @@ Prints the command summary.
 `secrets set <bot> <key>` (value on stdin), `secrets unlock <bot>`
 (passphrase on stdin), `status <bot> --json` (lock state for the vault
 drawer), `pair <bot> <senderId>`, `pair <bot> --list --json`, `pair <bot>
---deny <senderId>`, `update [--json]`, `update --apply|--skip <tag>`. Output
+--deny <senderId>`, `update [--json]`, `update --apply|--skip <tag>`,
+`send <bot> --source cockpit --json` (message on stdin). Output
 is truncated to 4 KB and scrubbed of token shapes before it reaches the
 browser (`cockpit/cli.mjs`).
 

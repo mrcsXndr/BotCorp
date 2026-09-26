@@ -21,7 +21,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const state = {
   bots: [], selected: null, term: null, fit: null, ws: null, wsGen: 0,
   view: window.innerWidth <= 700 ? 'chat' : 'chat', drawer: null,
-  reconnectDelay: 1000, reconnectTimer: null, pendingUser: null, chatFile: null,
+  reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null,
   lastAuthUrl: '', linkIntent: '',
 };
 let settings = { copyOnSelect: false };
@@ -458,7 +458,7 @@ el('vtChat').onclick = () => setView('chat');
 el('vtTerm').onclick = () => setView('term');
 
 function resetChat() {
-  state.pendingUser = null; state.chatFile = null; state.status = null;
+  state.sent = []; state.chatFile = null; state.status = null;
   el('msgs').innerHTML = '<div class="cempty">Loading the conversation</div>';
   renderStats();
 }
@@ -591,34 +591,64 @@ function addTranscript(box, turn) {
 function onChatPush(msg) {
   const box = el('msgs');
   if (msg.available === false) { box.innerHTML = `<div class="cempty err">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
-  if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.pendingUser = null; return; }
+  if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.sent = []; return; }
   if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; return; }
   if (msg.initial) box.innerHTML = '';
   const ph = box.querySelector('.cempty');
   if (ph && msg.turns.length) ph.remove();
   const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
   for (const turn of msg.turns) {
-    if (turn.role === 'user' && state.pendingUser && turn.text.trim() === state.pendingUser) { state.pendingUser = null; continue; }
+    // A message sent from here reaching the transcript: its bubble moves to
+    // where the session took it instead of rendering twice.
+    const mine = turn.role === 'user' && state.sent.find((s) => !s.seen && s.text === turn.text.trim());
+    if (mine) { mine.seen = true; box.appendChild(mine.node); continue; }
     if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
     box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
   if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
 }
 
-function sendChat() {
+// Chat send goes through the bot's inbox (POST /send -> `botcorp send`): it is
+// typed into the session once the session is idle, and its status line follows
+// it (queued, held, delivered, expired, not delivered).
+async function sendChat() {
   const ta = el('chatInput');
   const text = ta.value.replace(/\s+$/, '');
-  if (!text) return;
-  if (!state.ws || state.ws.readyState !== 1) { toast('not attached: start the bot first', true); return; }
+  const name = state.selected;
+  if (!text || !name) return;
   const box = el('msgs');
   box.querySelector('.cempty')?.remove();
-  state.pendingUser = text.trim();
-  box.appendChild(bubble({ role: 'user', text }));
+  const s = { text: text.trim(), id: null, st: 'sending', seen: false, ...window.CockpitInbox.sentBubble(document, text) };
+  state.sent.push(s);
+  box.appendChild(s.node);
   box.scrollTop = box.scrollHeight;
-  sendInput(bracketed(text));
-  sendInput('\r');
   ta.value = '';
   ta.style.height = 'auto';
+  try {
+    const it = await api('POST', `/api/bots/${encodeURIComponent(name)}/send`, { text });
+    s.id = it.id;
+    s.st = window.CockpitInbox.setStatus(s.status, it);
+    pollInbox();
+  } catch (e) { s.st = window.CockpitInbox.setStatus(s.status, { status: 'failed', detail: e.message }); }
+}
+
+// Refreshes the status line of every sent message still open, while one is.
+let inboxTimer = null;
+function pollInbox() {
+  clearTimeout(inboxTimer);
+  const name = state.selected;
+  if (!name || !state.sent.some((s) => s.id && !window.CockpitInbox.TERMINAL.includes(s.st))) return;
+  inboxTimer = setTimeout(async () => {
+    try {
+      const rows = await api('GET', `/api/bots/${encodeURIComponent(name)}/inbox`);
+      if (name !== state.selected) return;
+      for (const s of state.sent) {
+        const r = rows.find((x) => x.id === s.id);
+        if (r) s.st = window.CockpitInbox.setStatus(s.status, r);
+      }
+    } catch {}
+    pollInbox();
+  }, 2000);
 }
 el('chatSend').onclick = sendChat;
 el('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });

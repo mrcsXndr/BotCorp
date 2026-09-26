@@ -41,6 +41,7 @@ import * as engine from './engine.mjs';
 import * as updates from './updates.mjs';
 import * as chatLaunch from './chat-launch.mjs';
 import { runCli } from './cli.mjs';
+import * as inbox from '../core/inbox.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
 
@@ -75,7 +76,8 @@ function auditOnClose(req, res) {
   const p = req.path.slice(0, 200);
   const bot = /^\/api\/bots\/([^/]+)/.exec(p)?.[1] || null;
   res.on('close', () => {
-    const line = JSON.stringify({ ts: new Date().toISOString(), identity: req.identity, method: req.method, path: p, bot, result: res.writableFinished ? res.statusCode : 'aborted' });
+    // res.locals.audit: what a route adds (a chat send: its inbox id, never its text)
+    const line = JSON.stringify({ ts: new Date().toISOString(), identity: req.identity, method: req.method, path: p, bot, result: res.writableFinished ? res.statusCode : 'aborted', ...res.locals.audit });
     fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true })
       .then(() => fsp.appendFile(AUDIT_LOG, line + '\n'))
       .catch((e) => console.error(`[cockpit] audit write failed: ${e.message}`));
@@ -176,6 +178,24 @@ app.get('/api/bots/:name/sessions', withBot(async (_req, res, bot) => res.json(a
 app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
   const after = Math.max(0, parseInt(req.query.after, 10) || 0);
   res.json(await chat.chatState(bot, after));
+}));
+// Chat send: queued in the bot's inbox by `botcorp send` (the text on stdin,
+// never argv), which types it once the session is idle. The response is the
+// queued item; the composer follows it through GET /inbox.
+app.post('/api/bots/:name/send', withBot(async (req, res, bot) => {
+  const text = req.body?.text;
+  if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'empty message' });
+  if (Buffer.byteLength(text) > inbox.MAX_TEXT_BYTES) return res.status(413).json({ error: `message too large (${inbox.MAX_TEXT_BYTES / 1024} KB max)` });
+  const r = await runCli(['send', bot.name, '--source', 'cockpit', '--json'], { stdin: text });
+  let item = null;
+  try { item = JSON.parse(r.out); } catch {}
+  if (r.code !== 0 || !item || !item.id) return res.status(502).json({ error: (r.err || r.out || `send exited ${r.code}`).trim() });
+  res.locals.audit = { inbox_id: item.id };
+  res.json(item);
+}));
+// The last 50 messages' status, without their text.
+app.get('/api/bots/:name/inbox', withBot(async (_req, res, bot) => {
+  res.json(inbox.readInbox(bot.name).slice(-50).map(({ id, source, at, status, detail, status_at }) => ({ id, source, at, status, detail, status_at })));
 }));
 app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
   res.json({ declared: bot.automations, ...(await bots.automationRuns(bot.name)) });

@@ -374,3 +374,53 @@ test('statusline.js records the session effort in status.json', () => {
   const st = JSON.parse(fs.readFileSync(path.join(cfgHome, 'botcorp', 'status.json'), 'utf-8'));
   assert.deepEqual(st.effort, { level: 'xhigh' });
 });
+
+// ---- the composer's sent messages (public/inbox.js) ---------------------------------------
+// A DOM that refuses innerHTML: a renderer that parses markup at all fails here.
+function stubDoc() {
+  const make = (tag) => {
+    const n = { tagName: tag, className: '', title: '', children: [], text: '' };
+    n.appendChild = (c) => { n.children.push(c); return c; };
+    Object.defineProperty(n, 'textContent', { get: () => n.text + n.children.map((c) => c.textContent).join(''), set: (v) => { n.text = String(v); n.children = []; } });
+    Object.defineProperty(n, 'innerHTML', { get: () => { throw new Error('innerHTML read'); }, set: () => { throw new Error('innerHTML assigned'); } });
+    return n;
+  };
+  return { createElement: make };
+}
+// What the browser would serialize the stub tree to.
+const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const serialize = (n) => `<${n.tagName}${n.className ? ` class="${escHtml(n.className)}"` : ''}>${escHtml(n.text)}${n.children.map(serialize).join('')}</${n.tagName}>`;
+const ib = {};
+vm.createContext(ib);
+vm.runInContext(fs.readFileSync(path.join(COCKPIT, 'public', 'inbox.js'), 'utf-8'), ib);
+const { sentBubble, setStatus } = ib.CockpitInbox;
+
+test('a sent message and its status render every payload as text', () => {
+  for (const p of PAYLOADS) {
+    const { node, status } = sentBubble(stubDoc(), p);
+    assert.equal(node.children[0].textContent, p, 'the text comes back exactly as typed');
+    for (const st of ['queued', 'held', 'delivered', 'expired', 'failed']) {
+      setStatus(status, { status: st, detail: `session blocked on '${p}'` });
+      assert.equal(status.title, `session blocked on '${p}'`);
+      assert.doesNotThrow(() => assertSafe(serialize(node)), `payload ${JSON.stringify(p)} as ${st}`);
+    }
+  }
+});
+
+test('positive control: a renderer that uses innerHTML fails the stub DOM', () => {
+  const naive = (doc, text) => { const n = doc.createElement('div'); n.innerHTML = `<div>${text}</div>`; return n; };
+  assert.throws(() => naive(stubDoc(), PAYLOADS[0]), /innerHTML assigned/);
+});
+
+test('status line: the label, the why for held/expired/failed, an unknown status reads failed', () => {
+  const { status } = sentBubble(stubDoc(), 'hi');
+  assert.equal(status.textContent, 'sending');
+  assert.equal(setStatus(status, { status: 'queued', detail: '' }), 'queued');
+  assert.equal(status.className, 'ist queued');
+  setStatus(status, { status: 'delivered', detail: 'via the running attach host; user turn confirmed in the transcript' });
+  assert.equal(status.textContent, 'delivered');
+  setStatus(status, { status: 'held', detail: "session blocked on 'login required'" });
+  assert.equal(status.textContent, "held: session blocked on 'login required'");
+  assert.equal(setStatus(status, { status: '<b>x</b>', detail: 'odd' }), 'failed');
+  assert.equal(status.className, 'ist failed');
+});
