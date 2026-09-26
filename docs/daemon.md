@@ -477,7 +477,8 @@ Test seam: `BOTCORP_FAKE_NOW=<ISO>` overrides "now" for scheduling decisions
 only (automations due/next_due, the account block check). Log stamps, process
 ages and file mtimes stay real, so it can never make a live process look dead.
 `BOTCORP_PTY_COMMAND` is pty-host's own seam (runs a command instead of
-launch.ps1).
+launch.ps1). `BOTCORP_DAEMON_MUTEX` renames the tick's mutex (default
+`Global\BotCorpDaemon`) so a test tick never collides with a live daemon.
 
 ## Harness update (admin-applied, never automatic)
 

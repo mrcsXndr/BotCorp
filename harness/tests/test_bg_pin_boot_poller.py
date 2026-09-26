@@ -211,6 +211,7 @@ def repo_bot(tmp_path):
     env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
     env["BOTCORP_HOME"] = str(rt)
     env["BOTCORP_BOTS_DIR"] = str(tmp_path / "bots")
+    env["BOTCORP_DAEMON_MUTEX"] = f"Global\\BotCorpDaemon-test-{secrets.token_hex(8)}"   # never the live daemon's mutex
     yield name, home, rt, env
 
 

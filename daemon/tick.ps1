@@ -666,7 +666,8 @@ function Invoke-BotTick {
 }
 
 # --- single instance ---------------------------------------------------------------
-$mutex = New-Object System.Threading.Mutex($false, 'Global\BotCorpDaemon')
+$mutexName = if ($env:BOTCORP_DAEMON_MUTEX) { $env:BOTCORP_DAEMON_MUTEX } else { 'Global\BotCorpDaemon' }
+$mutex = New-Object System.Threading.Mutex($false, $mutexName)
 $haveMutex = $false
 try { $haveMutex = $mutex.WaitOne(0) }
 catch [System.Threading.AbandonedMutexException] { $haveMutex = $true }
