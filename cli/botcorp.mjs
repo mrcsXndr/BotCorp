@@ -39,8 +39,8 @@ const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs')
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
 const {
-  ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
-  botHome, configDir, botYamlPath, botExists, listBots, listFixtureBots,
+  ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
+  botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, runClaude, resolvePython, sleep,
@@ -72,10 +72,11 @@ function parseArgs(argv) {
 function out(line = '') { process.stdout.write(line + '\n'); }
 function outJson(obj) { process.stdout.write(JSON.stringify(obj, null, 2) + '\n'); }
 
-function requireBot(name) {
+// `re` = HAND_NAME_RE for the verbs that also take a '_' fixture.
+function requireBot(name, re = NAME_RE) {
   if (!name) usage('bot name required');
-  if (!NAME_RE.test(name)) usage(`bad bot name '${name}' (lowercase, digits, hyphens; max 32)`);
-  if (!botExists(name)) fail(`no bot '${name}' (no ${botYamlPath(name)})`);
+  if (!re.test(name)) usage(`bad bot name '${name}' (lowercase, digits, hyphens; max 32)`);
+  if (!fs.existsSync(botYamlPath(name))) fail(`no bot '${name}' (no ${botYamlPath(name)})`);
   return name;
 }
 
@@ -751,18 +752,21 @@ function mintLaunchNonce(bot) {
   return nonce;
 }
 
-async function startBot(bot, fresh, debug = false) {
+// dryRun: launch.ps1 -DryRun (bg) prints the exe, argv and masked env; nothing
+// is launched, no nonce minted, the paused marker kept.
+async function startBot(bot, fresh, debug = false, dryRun = false) {
   // The daemon skips cold-starting a paused bot; an explicit start un-pauses it.
-  try { fs.unlinkSync(pausedPath(bot)); } catch {}
+  if (!dryRun) try { fs.unlinkSync(pausedPath(bot)); } catch {}
   const lock = vaultLockState(bot);
   if (lock.locked) fail(`${bot}: vault is LOCKED (operator lock, not unlocked since boot) - a launch now would run without secrets. Unlock first: botcorp secrets unlock ${bot} (or the cockpit)`);
   if (sessionKind(bot) === 'bg') {
     const st = botState(bot);
     if (st.bg_id && pidAlive(Number(st.claude_pid))) fail(`${bot} is already running (background session ${st.bg_id}, pid ${st.claude_pid}); use restart`);
-    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : []), ...(debug ? ['-DebugLog'] : [])];
-    const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000, env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
+    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : []), ...(debug ? ['-DebugLog'] : []), ...(dryRun ? ['-DryRun'] : [])];
+    const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000, env: dryRun ? null : { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
     for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
     if (r.code !== 0) fail(`start: launch.ps1 -Bg exited ${r.code}`);
+    if (dryRun) { out(`start: ${bot} (dry-run) nothing launched`); return 0; }
     const after = botState(bot);
     out(`started ${bot}: background session ${after.bg_id || '?'} (session_id ${after.session_id || '?'}, pid ${after.claude_pid || '?'}); attach: claude attach ${after.bg_id || '<id>'} (elevated) or the cockpit`);
     return 0;
@@ -770,6 +774,7 @@ async function startBot(bot, fresh, debug = false) {
   const live = ptyLive(bot);
   if (live) fail(`${bot} is already running (pty host pid ${live.pid}, pty pid ${live.ptyPid}); use restart`);
   if (debug) out('start: --debug applies to bg bots; a pty bot takes bot.yaml harness.debug: true (botcorp config set <bot> harness.debug true)');
+  if (dryRun) { out(`start: ${bot} (dry-run) would run ${PTY_HOST} --bot ${bot} --botcorp ${ROOT} ${fresh ? '--fresh' : '--continue'}; nothing launched`); return 0; }
   // pty-host passes its environment to the pwsh running launch.ps1 inside the pty.
   const pid = spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, fresh ? '--fresh' : '--continue'], { env: { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
   const deadline = Date.now() + 10_000;
@@ -824,11 +829,11 @@ function stopBot(bot) {
   return before;
 }
 
-async function cmdStart({ pos, flags }) { return startBot(requireBot(pos[1]), !!flags.fresh, !!flags.debug); }
-async function cmdStop({ pos }) { stopBot(requireBot(pos[1])); return 0; }
+async function cmdStart({ pos, flags }) { return startBot(requireBot(pos[1], HAND_NAME_RE), !!flags.fresh, !!flags.debug, !!flags['dry-run']); }
+async function cmdStop({ pos }) { stopBot(requireBot(pos[1], HAND_NAME_RE)); return 0; }
 
 async function cmdRestart({ pos, flags }) {
-  const bot = requireBot(pos[1]);
+  const bot = requireBot(pos[1], HAND_NAME_RE);
   const before = stopBot(bot);
   if (before) {
     const deadline = Date.now() + 10_000;
@@ -958,7 +963,7 @@ function cmdStatus({ pos, flags }) {
 function cmdObserve({ pos, flags }) {
   if (pos[1] && flags.all) usage('observe: <bot> or --all, not both');
   if (!pos[1] && !flags.all) usage('observe: <bot> or --all');
-  const names = pos[1] ? [requireBot(pos[1])] : listBots();
+  const names = pos[1] ? [requireBot(pos[1], HAND_NAME_RE)] : listBots();
   const all = observeAll(names, { roster: !!flags.roster });
   if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
   if (!all.length) out('observe: no bots under bots/ (botcorp new)');

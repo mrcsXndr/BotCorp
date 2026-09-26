@@ -66,7 +66,8 @@ $ErrorActionPreference = 'Continue'
 
 if ($Continue -and $Fresh) { Write-Host 'launch: -Continue and -Fresh are mutually exclusive.' -ForegroundColor Red; exit 1 }
 if ($Bg -and $InPty) { Write-Host 'launch: -Bg and -InPty are mutually exclusive (a bg session has no pty of ours).' -ForegroundColor Red; exit 1 }
-if ($Bot -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { Write-Host "launch: bad bot name '$Bot'" -ForegroundColor Red; exit 1 }
+# a leading '_' = a shipped fixture started by hand (the tick's Get-BotList never lists one)
+if ($Bot -notmatch '^_?[a-z0-9][a-z0-9-]{0,31}$') { Write-Host "launch: bad bot name '$Bot'" -ForegroundColor Red; exit 1 }
 
 # _common.ps1 gives the Claude Code specifics (Resolve-ClaudeExe, Get-ClaudeEnv,
 # Get-ClaudeArgv), the bg helpers and the paths; it exports BOTCORP_HOME.

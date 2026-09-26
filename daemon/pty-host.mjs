@@ -60,7 +60,7 @@ const require = createRequire(import.meta.url);
 
 const MAX_SCROLLBACK = 200_000;       // chars kept for late attachers
 const MAX_INPUT_FRAME = 1024 * 1024;  // per-frame input cap
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+const NAME_RE = /^_?[a-z0-9][a-z0-9-]{0,31}$/;   // '_' = a shipped fixture, started by hand
 
 const BOTCORP_HOME = process.env.BOTCORP_HOME || path.join(os.homedir(), '.botcorp');
 const STATE_DIR = path.join(BOTCORP_HOME, 'state');
