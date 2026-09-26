@@ -757,6 +757,15 @@ async function loadUpdates() {
     box.querySelectorAll('[data-apply]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.apply, 'apply'); });
     box.querySelectorAll('[data-skip]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.skip, 'skip'); });
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+  try { box.insertAdjacentHTML('afterbegin', `<p class="hint">${esc(ccLine(await api('GET', '/api/cc')))}</p>`); } catch { /* the releases stand alone */ }
+}
+// "Claude Code 2.1.283 pinned · candidate 2.1.284 failed" (botcorp cc status for the rest)
+function ccLine(c) {
+  if (!c.pinned) return 'Claude Code: not pinned yet';
+  const k = c.candidate;
+  const failed = k && (k.checks || []).find((x) => x.result === 'FAIL');
+  const cand = !k ? '' : k.status === 'rejected' && failed ? ` · candidate ${k.version} rejected: check ${failed.n}` : ` · candidate ${k.version} ${k.status}`;
+  return `Claude Code ${c.pinned.version} pinned${cand}`;
 }
 async function updateAction(tag, action) {
   try {

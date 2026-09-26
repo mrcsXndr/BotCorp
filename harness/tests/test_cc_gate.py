@@ -18,7 +18,8 @@ resolvers). This file covers how the pin moves:
   it replaced;
 - observe reports the Claude Code a bot runs (cc_version, cc_exe), and the tick
   rolls a bot onto the pin only between turns (Get-CcRollAction), starts a gate
-  run when one is due (Get-CcTestDue), and never runs update_restart.py.
+  run when one is due (Get-CcTestDue), and never runs update_restart.py;
+- `botcorp cc status`, doctor and the cockpit's GET /api/cc report the pin.
 
 The global install is simulated with private copies of the three real (signed)
 builds in ~/.local/share/claude/versions, read once per session and never
@@ -659,6 +660,35 @@ def test_doctor_cc_autoupdater_row(tmp_path):
     assert rows["cc autoupdater"]["level"] == "WARN" and "beta" in rows["cc autoupdater"]["detail"] and "alpha" not in rows["cc autoupdater"]["detail"]
     (b["bots"] / "beta" / ".claude" / "settings.json").write_text(json.dumps({"env": {"DISABLE_AUTOUPDATER": "1"}}), encoding="utf-8")
     assert _doctor(b)["cc autoupdater"]["level"] == "PASS"
+
+
+def test_api_cc_returns_pin(tmp_path):
+    import socket
+    import urllib.request
+    b = _cli_box(tmp_path)
+    _cli_bot(b, "alpha", alive=False)
+    with socket.socket() as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+    srv = subprocess.Popen(["node", str(ASSEMBLY / "cockpit" / "server.mjs"), "--port", str(port)], cwd=str(ASSEMBLY), env=b["env"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        base = f"http://127.0.0.1:{port}"
+        deadline = time.time() + 60
+        while True:
+            try:
+                urllib.request.urlopen(base + "/healthz", timeout=5).read()
+                break
+            except OSError:
+                assert time.time() < deadline and srv.poll() is None, "cockpit did not come up"
+                time.sleep(0.5)
+        cookie = urllib.request.urlopen(base + "/", timeout=30).headers["Set-Cookie"].split(";")[0]
+        r = urllib.request.urlopen(urllib.request.Request(base + "/api/cc", headers={"Cookie": cookie}), timeout=60)
+        st = json.loads(r.read())
+    finally:
+        subprocess.run(["taskkill", "/PID", str(srv.pid), "/T", "/F"], capture_output=True)
+    assert r.status == 200 and st["pinned"]["version"] == "2.1.283" and st["candidate"]["status"] == "failed"
+    assert [x["bot"] for x in st["bots"]] == ["alpha"] and st["bots"][0]["on_pin"] is None
 
 
 def test_update_restart_refuses_when_pinned(tmp_path):

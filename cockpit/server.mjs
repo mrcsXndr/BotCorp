@@ -42,6 +42,7 @@ import * as updates from './updates.mjs';
 import * as chatLaunch from './chat-launch.mjs';
 import { runCli } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
+import { ccStatus } from '../core/cc.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
 
@@ -223,6 +224,8 @@ app.get('/api/bots/:name/secrets/audit', withBot(async (req, res, bot) => res.js
 // CLI same as every other write path (lifecycle() above is already generic).
 const RELEASE_TAG_RE = /^[A-Za-z0-9._-]{1,40}$/;
 app.get('/api/updates', wrap(async (_req, res) => res.json(await updates.listUpdates())));
+// The Claude Code pin (botcorp cc status --json), each bot as of its last tick. Read-only.
+app.get('/api/cc', wrap(async (_req, res) => res.json(ccStatus())));
 app.post('/api/updates/:tag/apply', wrap((req, res) => {
   if (!RELEASE_TAG_RE.test(req.params.tag)) return res.status(400).json({ error: 'bad tag' });
   return lifecycle(res, ['update', '--apply', req.params.tag]);
