@@ -3,6 +3,44 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+The inbox (R2): one queue per bot, the one way text reaches a session.
+
+- **`botcorp send <bot> [--wait] [--ttl 30m] [--source ...] [--json] [text]`**
+  (text on stdin when none is given) queues a message in
+  `state/<bot>/inbox.jsonl`. A detached drainer, one per bot, types the
+  messages in order, each only while observe says the session is `idle`,
+  and confirms each by its user turn reaching the transcript within 30 s
+  (a typed `/name` also matches Claude Code's namespaced
+  `<command-name>/plugin:name</command-name>`). Each message ends
+  `delivered`, `expired` (its ttl, 30 min by default, ran out while it
+  waited) or `failed` (the session is stopped, the transport did not come
+  up, the turn never showed up; never retyped). While the session is
+  `blocked` it is `held`. `botcorp inbox <bot> [list|kick|drain]` shows the
+  queue without the text. The daemon tick restarts a drainer for a queue
+  nobody drains.
+- **Attach hosts stay up**: for a bg session the drainer starts one
+  `pty-host --attach` and leaves it up for the next message and the cockpit
+  terminal. It exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) with no
+  client; the session keeps running.
+- **Cockpit chat sends through the inbox**: `POST /api/bots/:name/send`
+  runs `botcorp send`; each sent message shows a status line (queued, held,
+  delivered, expired, not delivered, with the reason), refreshed from
+  `GET /api/bots/:name/inbox`. The message and the status line render as
+  text only. The audit line of a send carries the inbox id, never the text.
+  The composer no longer needs the terminal socket attached.
+- **Prompt automations deliver through the inbox** (`send --wait`, ttl half
+  the run's timeout, 15 s to 5 min); `sent` means delivered. `daemon/inject.mjs`
+  is removed.
+- **`_` fixtures by hand**: `botcorp start|stop|restart|send|observe` accept
+  a `_`-prefixed folder such as `bots/_canary`, and `start --dry-run` prints
+  the launch without running it. The daemon still never supervises them.
+
+Upgrading: nothing to migrate. A chat message now waits for the session to
+be idle (quiet for 5 min, or a declared breakpoint) instead of being typed
+at once.
+
 ## v0.3.0
 
 One state model and one observer (R1).
