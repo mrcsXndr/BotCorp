@@ -36,6 +36,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
 }
 const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
+const { observeAll } = await import('../core/observe.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, botExists, listBots, listFixtureBots,
@@ -936,6 +937,19 @@ function cmdStatus({ pos, flags }) {
   if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
   if (!all.length) out('status: no bots under bots/ (botcorp new)');
   all.forEach(printStatus);
+  return 0;
+}
+
+// Read-only: what each session is doing now (core/observe.mjs). --roster also
+// asks `claude agents --json` (the daemon tick passes it).
+function cmdObserve({ pos, flags }) {
+  if (pos[1] && flags.all) usage('observe: <bot> or --all, not both');
+  if (!pos[1] && !flags.all) usage('observe: <bot> or --all');
+  const names = pos[1] ? [requireBot(pos[1])] : listBots();
+  const all = observeAll(names, { roster: !!flags.roster });
+  if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
+  if (!all.length) out('observe: no bots under bots/ (botcorp new)');
+  for (const o of all) out(`${o.bot.padEnd(16)} ${o.activity.padEnd(8)} alive=${o.alive} poller=${o.poller ?? '-'} bg=${o.bg_id ?? '-'}${o.blocked ? ` blocked="${o.blocked.needs}"` : ''}${o.quiet_s !== null ? ` quiet=${o.quiet_s}s` : ''}`);
   return 0;
 }
 
@@ -2423,6 +2437,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>
   start <bot> [--fresh] [--debug] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
+  observe <bot>|--all [--json] [--roster]                               (read-only: alive, activity idle|working|blocked|down|unknown, poller)
   automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
@@ -2439,7 +2454,7 @@ const COMMANDS = {
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject,
-  start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, automations: cmdAutomations,
+  start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   update: cmdUpdate, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
   help: () => { out(HELP); return 0; },
 };
