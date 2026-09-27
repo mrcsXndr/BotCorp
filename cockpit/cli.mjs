@@ -38,16 +38,18 @@ export function cliEnv(env = process.env) {
 
 // Run the CLI; never throws. { code, out, err, timedOut }. `stdin` (a string)
 // is written and closed - used for secret values so they never appear in argv.
-export function runCli(args, { stdin = null, timeoutMs = 60_000 } = {}) {
+// `maxOut` raises the stdout cap for the `--json` reads (a tools scan is tens of KB).
+export function runCli(args, { stdin = null, timeoutMs = 60_000, maxOut = 4096 } = {}) {
+  const cap = Math.max(MAX_CAPTURE, maxOut);
   return new Promise((resolve) => {
     let out = '', err = '', done = false, timedOut = false;
-    const finish = (code) => { if (!done) { done = true; resolve({ code, out: scrub(out).slice(0, 4096), err: scrub(err).slice(0, 4096), timedOut }); } };
+    const finish = (code) => { if (!done) { done = true; resolve({ code, out: scrub(out).slice(0, maxOut), err: scrub(err).slice(0, 4096), timedOut }); } };
     let child;
     try {
       child = spawn(process.execPath, [CLI, ...args], { cwd: BOTCORP_ROOT, env: cliEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) { return resolve({ code: -1, out: '', err: String(e.message || e), timedOut: false }); }
     const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch {} finish(-2); }, timeoutMs);
-    child.stdout.on('data', (d) => { if (out.length < MAX_CAPTURE) out += d; });
+    child.stdout.on('data', (d) => { if (out.length < cap) out += d; });
     child.stderr.on('data', (d) => { if (err.length < MAX_CAPTURE) err += d; });
     child.on('error', (e) => { clearTimeout(timer); err += String(e.message || e); finish(-1); });
     child.on('close', (code) => { clearTimeout(timer); finish(code ?? 0); });
@@ -56,4 +58,11 @@ export function runCli(args, { stdin = null, timeoutMs = 60_000 } = {}) {
       else child.stdin.end();
     } catch {}
   });
+}
+
+// A `--json` read through the CLI: the parsed stdout, or `fallback` on any failure.
+export async function cliJson(args, fallback = null) {
+  const r = await runCli(args, { maxOut: 4 * 1024 * 1024 });
+  if (r.code !== 0) return fallback;
+  try { return JSON.parse(r.out); } catch { return fallback; }
 }

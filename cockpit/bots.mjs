@@ -117,7 +117,8 @@ export async function getBot(name) {
     remoteControl: !!modules.remote_control,
     modules,
     capabilities: cfg.capabilities || null,
-    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false })) : [],
+    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false, secrets: Array.isArray(a?.secrets) ? a.secrets.map(String) : [] })) : [],
+    tools: Array.isArray(cfg.tools) ? cfg.tools.length : null,   // null = no registry (bot.yaml has no tools:)
     home,
     configDir: configDir(name),
     yamlError,
@@ -151,6 +152,13 @@ export async function listBots() {
     .map((e) => e.name);
   const bots = await Promise.all(names.map(getBot));
   return bots.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+// The daemon's per-automation state (daemon/automations.ps1): {<name>: {next_due,
+// last_run, last_exit, last_result, failure_streak, ...}}; {} before its first run.
+export async function automationState(name) {
+  const st = await readJson(path.join(STATE_DIR, name, 'automations.json'));
+  return st && typeof st === 'object' && !Array.isArray(st) ? st : {};
 }
 
 // Read-only tail of the daemon's run records for a bot.

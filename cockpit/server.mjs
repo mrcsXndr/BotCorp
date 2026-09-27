@@ -24,6 +24,7 @@
 //   * Every mutating /api call from an identified caller appends one line to
 //     <BOTCORP_HOME>/state/cockpit-audit.jsonl (never a body or a secret).
 
+import crypto from 'node:crypto';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -40,7 +41,8 @@ import * as chat from './chat.mjs';
 import * as engine from './engine.mjs';
 import * as updates from './updates.mjs';
 import * as chatLaunch from './chat-launch.mjs';
-import { runCli } from './cli.mjs';
+import * as attention from './attention.mjs';
+import { runCli, cliJson } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
 import { ccStatus } from '../core/cc.mjs';
 import { bridge } from './ptybridge.mjs';
@@ -199,7 +201,77 @@ app.get('/api/bots/:name/inbox', withBot(async (_req, res, bot) => {
   res.json(inbox.readInbox(bot.name).slice(-50).map(({ id, source, at, status, detail, status_at }) => ({ id, source, at, status, detail, status_at })));
 }));
 app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
-  res.json({ declared: bot.automations, ...(await bots.automationRuns(bot.name)) });
+  res.json({ declared: bot.automations, state: await bots.automationState(bot.name), ...(await bots.automationRuns(bot.name)) });
+}));
+
+// ---- operator decisions: approvals, automations, the tools registry ------------
+// Every write is a CLI verb (runCli) and one audit line. A change that WIDENS
+// what a bot may do (approve, enable/resume a job, register a tool) is the one
+// decision a bot must never make for itself: behind Access the verified
+// identity is the check; on loopback any local process can mint a session
+// cookie (a bot's curl too), so those routes also need the per-boot approval
+// token this server prints to the terminal that started it.
+const APPROVE_TOKEN = ACCESS ? null : crypto.randomBytes(16).toString('hex');
+function operatorGate(req, res) {
+  if (!APPROVE_TOKEN) return true;
+  const got = String(req.headers['x-approve-token'] || '');
+  if (got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN))) return true;
+  res.status(403).json({ error: 'needs the approval token this cockpit printed at start (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
+  return false;
+}
+async function decided(res, args, audit) {
+  res.locals.audit = audit;
+  const r = await runCli(args);
+  attention.invalidate();
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, timedOut: r.timedOut, out: r.out, err: r.err });
+}
+const APPROVAL_ID_RE = /^[A-Za-z0-9_-]{1,40}$/;
+const AUTO_NAME_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
+app.get('/api/attention', wrap(async (_req, res) => res.json(await attention.collectAttention())));
+app.get('/api/usage', wrap(async (_req, res) => res.json(await attention.usageOverview())));
+app.get('/api/approvals', wrap(async (_req, res) => {
+  const pending = await cliJson(['approvals', '--json'], null);
+  if (!Array.isArray(pending)) return res.status(502).json({ error: 'approvals --json failed' });
+  res.json({ pending, recent: await attention.recentDecisions(20) });
+}));
+app.post('/api/bots/:name/approvals/:id/:decision', withBot(async (req, res, bot) => {
+  const { id, decision } = req.params;
+  if (!APPROVAL_ID_RE.test(id) || !['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'bad approval id or decision' });
+  if (!operatorGate(req, res)) return;
+  const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? ['--reason', req.body.reason.trim().slice(0, 200)] : [];
+  return decided(res, [decision, bot.name, id, '--by', req.identity, ...(decision === 'reject' ? reason : [])], { approval: id, decision });
+}));
+
+app.post('/api/bots/:name/automations/:auto/:action', withBot(async (req, res, bot) => {
+  const { auto, action } = req.params;
+  if (!AUTO_NAME_RE.test(auto) || !['run', 'pause', 'resume', 'enable', 'disable'].includes(action)) return res.status(400).json({ error: 'bad automation or action' });
+  if (!bot.automations.some((a) => a.name === auto)) return res.status(404).json({ error: 'no such automation' });
+  if ((action === 'resume' || action === 'enable') && !operatorGate(req, res)) return;
+  return decided(res, ['automations', bot.name, action, auto], { automation: auto, action });
+}));
+
+app.get('/api/bots/:name/tools', withBot(async (_req, res, bot) => {
+  const scan = await cliJson(['tools', bot.name, 'scan', '--json'], null);
+  if (!scan) return res.status(502).json({ error: 'tools scan failed' });
+  res.json(scan);
+}));
+const TOOL_KINDS = ['cli', 'monitor', 'integration', 'lib'];
+app.post('/api/bots/:name/tools/register', withBot(async (req, res, bot) => {
+  const { name, path: p, kind, purpose, secrets } = req.body || {};
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/.test(name || '') || typeof p !== 'string' || !p || p.length > 256 || /[\r\n\0]/.test(p) || !TOOL_KINDS.includes(kind)) {
+    return res.status(400).json({ error: 'register needs name (slug), path and kind (cli|monitor|integration|lib)' });
+  }
+  if (!operatorGate(req, res)) return;
+  const args = ['tools', bot.name, 'register', '--name', name, '--path', p, '--kind', kind];
+  if (typeof purpose === 'string' && purpose.trim()) args.push('--purpose', purpose.trim().slice(0, 200));
+  if (Array.isArray(secrets) && secrets.length) args.push('--secrets', secrets.map(String).filter((s) => /^[a-z][a-z0-9_]*$/.test(s)).join(','));
+  return decided(res, args, { tool: name, action: 'register' });
+}));
+app.post('/api/bots/:name/tools/retire', withBot(async (req, res, bot) => {
+  const target = req.body?.target;
+  if (typeof target !== 'string' || !target || target.length > 256 || /[\r\n\0]/.test(target) || target.startsWith('-')) return res.status(400).json({ error: 'retire needs a tool name or path' });
+  return decided(res, ['tools', bot.name, 'retire', target, '--by', req.identity], { tool: target, action: 'retire' });
 }));
 
 app.get('/api/bots/:name/pairing', withBot(async (_req, res, bot) => res.json(await pairing.pairingState(bot.name))));
@@ -316,4 +388,5 @@ server.on('upgrade', async (req, socket, head) => {
 server.listen(PORT, HOST, () => {
   console.log(`[cockpit] http://${HOST}:${PORT}  bots=${bots.BOTS_DIR}  runtime=${bots.BOTCORP_HOME}`);
   console.log(`[cockpit] auth: ${ACCESS ? `Cloudflare Access (team ${accessCfg.team}, jwks ${ACCESS.jwksFile ? 'file' : 'fetch'})` : 'loopback session cookie'}`);
+  if (APPROVE_TOKEN) console.log(`[cockpit] approval token (this boot): ${APPROVE_TOKEN}`);
 });
