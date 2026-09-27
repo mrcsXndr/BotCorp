@@ -272,7 +272,7 @@ export function toolShimText(rel, botcorpRoot) {
   ].join('\n');
 }
 
-function isShim(file) {
+export function isShim(file) {
   let lines;
   try { lines = fs.readFileSync(file, 'utf-8').split(/\r?\n/, 2); } catch { return null; }
   return lines[0] === SHIM_MARKER || (lines[0].startsWith('#!') && lines[1] === SHIM_MARKER);

@@ -42,7 +42,7 @@ const { ccStatus, botCc, fileSha256 } = await import('../core/cc.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
-  CliError, fail, usage, requireOperator,
+  CliError, fail, usage, requireOperator, isOperatorContext,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
@@ -50,8 +50,9 @@ const {
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
+const { scanTools, listExecutables, retireFiles, covers, isGlob } = await import('./tools.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -702,10 +703,12 @@ function entryText({ op = 'set', path: p, value }) {
 
 // Queue a widening change, apply anything else. -> the CLI exit code.
 //   op set: segs = the dotted path; append/remove: segs = [<LIST_KEYS key>]
-function queueOrApply(bot, { op = 'set', segs, value, flags }) {
+//   direct: the verb applies straight away from the operator's own env
+//   (tools register, automations enable); only a bot's call is queued.
+function queueOrApply(bot, { op = 'set', segs, value, flags, direct = false }) {
   const p = segs.join('.');
   const shown = entryText({ op, path: p, value });
-  const why = isWidening(loadBotYaml(botYamlPath(bot)), segs, value, op);
+  const why = direct && isOperatorContext() ? null : isWidening(loadBotYaml(botYamlPath(bot)), segs, value, op);
   if (why) {
     const entry = { id: crypto.randomBytes(3).toString('hex'), ts: new Date().toISOString(), op, path: p, value, requested_by: requestedBy(flags), reason: why };
     const q = readApprovals(bot);
@@ -854,6 +857,77 @@ function cmdApprovals({ flags }) {
   for (const r of rows) out(`${r.bot}  ${r.id}  ${r.at}  ${r.diff}  by ${r.requested_by}  (${r.why})`);
   out(`approvals: ${rows.length} pending (botcorp approve <bot> <id> | reject <bot> <id>)`);
   return 0;
+}
+
+// ---- tools: the capability registry (cli/tools.mjs) ------------------------------------
+const TOOLS_USAGE = 'tools <bot> scan [--json] [--proposal <file>] | tools <bot> register --file <proposal> | '
+  + 'tools <bot> register --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b] | '
+  + 'tools <bot> retire <name|path> [--by <who>]';
+
+function cmdTools({ pos, flags }) {
+  const [, bot, action, ...rest] = pos;
+  requireBot(bot);
+  const home = botHome(bot);
+  const cfg = loadBotYaml(botYamlPath(bot));
+  const tools = Array.isArray(cfg.tools) ? cfg.tools.filter(isObj) : [];
+  const val = (k) => (flags[k] && flags[k] !== true ? String(flags[k]) : null);
+
+  if (action === 'scan') {
+    const r = scanTools(home, cfg);
+    const proposalFile = val('proposal') && path.resolve(val('proposal'));
+    if (proposalFile) writeTextAtomic(proposalFile, dumpYaml({ bot, generated_at: new Date().toISOString(), tools: r.proposal.tools, orphans: r.proposal.orphans }));
+    if (flags.json) { outJson({ bot, ...r }); return 0; }
+    out(`tools: ${bot} registry ${r.registry}, ${r.executables.length} executables, ${r.registered.length} entries`);
+    out(`  unregistered ${r.unregistered.length}, missing ${r.missing.length}, unused ${r.unused.length}`);
+    for (const n of r.missing) out(`  missing: ${n}`);
+    out(`proposal: ${r.proposal.tools.length} entries, ${r.proposal.orphans.length} orphans`);
+    for (const e of r.proposal.tools) out(`  ${e.kind.padEnd(11)} ${e.name}  ${e.path}`);
+    for (const o of r.proposal.orphans) out(`  orphan      ${o}`);
+    if (proposalFile) out(`proposal written: ${proposalFile} (botcorp tools ${bot} register --file <it>)`);
+    return 0;
+  }
+
+  if (action === 'register') {
+    let entries;
+    if (val('file')) {
+      const doc = parseYaml(fs.readFileSync(path.resolve(val('file')), 'utf-8'));
+      if (!Array.isArray(doc.tools)) usage('tools register --file: the file has no tools: list');
+      entries = doc.tools;
+    } else {
+      if (!val('name') || !val('path') || !val('kind')) usage(TOOLS_USAGE);
+      const e = { name: val('name'), path: val('path'), kind: val('kind') };
+      if (val('purpose')) e.purpose = val('purpose');
+      if (val('secrets')) e.secrets = val('secrets').split(',').map((s) => s.trim()).filter(Boolean);
+      entries = [e];
+    }
+    const have = new Set(tools.map((t) => String(t.name)));
+    const fresh = entries.filter((e) => !(isObj(e) && have.has(String(e.name))));
+    for (const e of entries) if (!fresh.includes(e)) out(`already registered: ${e.name}`);
+    if (!fresh.length) { out(`tools: ${bot} nothing new to register`); return 0; }
+    return queueOrApply(bot, { op: 'append', segs: ['tools'], value: fresh, flags, direct: true });
+  }
+
+  if (action === 'retire') {
+    const target = rest.join(' ').trim().replace(/\\/g, '/').replace(/^\.\//, '');
+    if (!target) usage(TOOLS_USAGE);
+    const exes = listExecutables(home);
+    const entry = tools.find((t) => String(t.name) === target) || tools.find((t) => !isGlob(t.path) && covers(t, target));
+    const rels = entry ? exes.filter((r) => covers(entry, r)) : exes.filter((r) => r.toLowerCase() === target.toLowerCase());
+    if (!entry && !rels.length) fail(`tools retire: no tools entry or executable '${target}' in ${bot}`);
+    if (rels.length) {
+      let rec;
+      try { rec = retireFiles({ botHome: home, bot, runtime: BOTCORP_HOME, rels, name: entry ? String(entry.name) : null, by: val('by') || requestedBy(flags) }); }
+      catch (e) { fail(e.message); }
+      out(`retired ${rels.length} file(s) -> ${rec.dest}`);
+    }
+    if (entry) {
+      applyListOp(bot, 'tools', 'remove', String(entry.name));
+      out(`tools: ${bot} entry ${entry.name} removed`);
+      doSync(bot);
+    }
+    return 0;
+  }
+  usage(TOOLS_USAGE);
 }
 
 // ---- start / stop / restart (daemon/pty-host.mjs) ---------------------------------------
@@ -2705,6 +2779,9 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approvals [--json]   (every bot's pending widening changes, with a diff and why)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env)
+  tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
+  tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
+      (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
@@ -2727,7 +2804,7 @@ const COMMANDS = {
   new: cmdNew, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
-  secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals,
+  secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals, tools: cmdTools,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   send: cmdSend, inbox: cmdInbox,
   update: cmdUpdate, cc: cmdCc, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
