@@ -371,6 +371,14 @@ if ($cfg._context_window) {
 }
 $py = Resolve-Python
 if (Test-Path $py) { $childEnv['BOT_PYTHON'] = $py }
+# Python's folder (+ Scripts) first on the session's PATH: a bare `python` from
+# the session's PowerShell otherwise reaches the Store stub (exit 49).
+$sessionPath = $env:PATH
+if ([IO.Path]::IsPathRooted($py) -and (Test-Path $py)) {
+    $pyDir = Split-Path $py -Parent
+    $sessionPath = Add-PathDir -PathEnv (Add-PathDir -PathEnv $sessionPath -Dir (Join-Path $pyDir 'Scripts')) -Dir $pyDir
+    $childEnv['PATH'] = $sessionPath
+}
 # OpenTelemetry to the local sink (prompts/tool details stay redacted: no OTEL_LOG_* gates).
 $otelState = Join-Path $StateDir 'otel.json'
 if (($modules -contains 'telemetry') -and (Test-Path $otelState)) {
@@ -389,7 +397,7 @@ if (($modules -contains 'telemetry') -and (Test-Path $otelState)) {
 # first on the PATH the session gets, and with it the daemon that keeps that env.
 $bun = Resolve-BunExe -Override "$($cfg.harness.bun_path)" -PathEnv $env:PATH -UserProfile $env:USERPROFILE
 if ($bun.Path) {
-    $childEnv['PATH'] = Add-PathDir -PathEnv $env:PATH -Dir (Split-Path $bun.Path -Parent)
+    $childEnv['PATH'] = Add-PathDir -PathEnv $sessionPath -Dir (Split-Path $bun.Path -Parent)
     if ($hasTgMod) { Write-LaunchLog "bun: $($bun.Path) ($($bun.Source); its folder is first on the session's PATH)" }
 } elseif ($hasTgMod) {
     Write-LaunchLog "bun: NOT FOUND (harness.bun_path$(if ($cfg.harness.bun_path) { " '$($cfg.harness.bun_path)' is not a file" } else { ' unset' }), PATH, %USERPROFILE%\.bun\bin) -> the Telegram plugin cannot start ('bun' is not recognized): install bun or set harness.bun_path"

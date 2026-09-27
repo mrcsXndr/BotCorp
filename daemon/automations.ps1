@@ -201,9 +201,18 @@ function Invoke-AutomationJob {
         BOT_MODULES = (@($job.modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
         GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
     }
+    # Python for the job: BOT_PYTHON, and its folder (+ Scripts) first on PATH so
+    # a bare `python` never reaches the Store stub (exit 49).
+    $pyExe = Resolve-Python
+    $envMap['BOT_PYTHON'] = $pyExe
+    if ([IO.Path]::IsPathRooted($pyExe)) {
+        $pyDir = Split-Path $pyExe -Parent
+        $envMap['PATH'] = Add-PathDir -PathEnv (Add-PathDir -PathEnv $env:PATH -Dir (Join-Path $pyDir 'Scripts')) -Dir $pyDir
+    }
     # kind: prompt runs `botcorp send`; the prompt goes on its stdin, never on the command line.
+    # A command gets ${PY} (quoted), ${HARNESS} and ${BOTCORP} expanded (harness/automations.yaml).
     $isPrompt = ("$($a.kind)" -eq 'prompt')
-    $command = "$($a.command)"
+    $command = "$($a.command)".Replace('${PY}', "`"$pyExe`"").Replace('${HARNESS}', $Harness).Replace('${BOTCORP}', $BotCorp)
     if ($isPrompt) {
         $ttlS = [int][Math]::Min(300, [Math]::Max(15, [Math]::Floor($timeoutMin * 30)))
         $command = "`"$(Resolve-Node)`" `"$(Join-Path $BotCorp 'cli\botcorp.mjs')`" send $Bot --wait --source automation --ttl ${ttlS}s"
