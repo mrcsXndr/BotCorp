@@ -109,7 +109,8 @@ function docSources(botHome) {
 // The env names a declared vault key reaches a process as.
 const SESSION_NAMES = { oauth_token: 'CLAUDE_CODE_OAUTH_TOKEN', telegram_token: 'TELEGRAM_BOT_TOKEN' };
 const envNames = (k) => [k.toUpperCase(), SESSION_NAMES[k]].filter(Boolean);
-const SECRET_NAME_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|BEARER|CREDENTIAL|API_KEY|ACCESS_KEY|_KEY$)/;
+// TOKEN(?!S): *_TOKENS is a count (MAX_CONTEXT_TOKENS), not a token.
+const SECRET_NAME_RE = /(TOKEN(?!S)|SECRET|PASSWORD|PASSWD|BEARER|CREDENTIAL|API_KEY|ACCESS_KEY|_KEY$)/;
 const ENV_READ_RES = [
   /os\.environ\[\s*['"]([A-Za-z_]\w*)['"]\s*\]/g,
   /os\.environ\.get\(\s*['"]([A-Za-z_]\w*)['"]/g,

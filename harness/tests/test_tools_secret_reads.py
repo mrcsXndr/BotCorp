@@ -42,6 +42,8 @@ def _reads(text: str, declared: list) -> list:
     ("print('MAIL_TOKEN is set')", ["mail_token"], ["MAIL_TOKEN"]),            # a declared key by name
     ("env CLAUDE_CODE_OAUTH_TOKEN", ["oauth_token"], ["CLAUDE_CODE_OAUTH_TOKEN", "OAUTH_TOKEN"]),
     ("print('MAIL_TOKEN')", [], []),                                           # undeclared and no env read
+    ('os.environ.get("MAX_CONTEXT_TOKENS")', [], []),                          # a token COUNT, not a token
+    ('os.environ.get("AUTH_TOKEN_FILE")', [], ["AUTH_TOKEN_FILE"]),            # a path to one still counts
 ])
 def test_secret_reads(text, declared, want):
     assert _reads(text, declared) == want
