@@ -97,6 +97,15 @@ def test_broken_python_fails_closed(tmp_path, bot_home):
     assert "could not parse" in proc.stderr
 
 
+# (l) v0.7.3: the cockpit's owner-only token file is the operator's, not a bot's
+def test_blocks_the_cockpit_approve_token_file(tmp_path, bot_home):
+    env = base_env(tmp_path, bot_home)
+    for ti in ({"file_path": "D:\\rt\\.botcorp\\state\\cockpit-approve-token"},
+               {"command": "cat ~/.botcorp/state/cockpit-approve-token"}):
+        proc = _run(env, ti)
+        assert proc.returncode == 2 and "cockpit-approve-token" in proc.stderr
+
+
 # (k) positive control for (i)/(j): a valid payload with nothing to inspect stays silent
 def test_valid_payload_without_paths_is_silent(tmp_path, bot_home):
     env = base_env(tmp_path, bot_home)

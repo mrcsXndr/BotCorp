@@ -517,7 +517,7 @@
   <div class="modal-bg sheet" id="tokenBg">
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
       <h2 id="tokenTitle">Approval token</h2>
-      <p class="hint">On loopback, a change that widens what a bot may do needs the token this cockpit printed when it started (<code>[cockpit] approval token</code>). It stays in this tab only. Without it, <code>botcorp approve &lt;bot&gt; &lt;id&gt;</code> in your terminal does the same.</p>
+      <p class="hint">On loopback, a change that widens what a bot may do needs the token this cockpit printed when it started (<code>[cockpit] approval token</code>), also in the owner-only file <code>~/.botcorp/state/cockpit-approve-token</code>. It stays in this tab only. Without it, <code>botcorp approve &lt;bot&gt; &lt;id&gt;</code> in your terminal does the same.</p>
       <div class="field"><input id="tokenInput" class="grow" type="password" placeholder="approval token" autocomplete="off" /></div>
       <div class="err" id="tokenErr"></div>
       <div class="modal-foot"><button class="btn" id="tokenCancel">Cancel</button><button class="btn primary" id="tokenSave">Use token</button></div>

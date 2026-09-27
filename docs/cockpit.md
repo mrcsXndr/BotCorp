@@ -210,7 +210,10 @@ Operator-gated routes: approve / reject, automation resume / enable, tools
 register, the account switch, pair approve, vault set and release Apply /
 Skip. Behind Cloudflare Access the verified identity is the check; on
 loopback they also need the per-boot approval token (`X-Approve-Token`), or
-they answer 403 `{need: "approve-token"}` and the page asks for it once.
+they answer 403 `{need: "approve-token"}` and the page asks for it once. The
+cockpit prints the token at start and also writes it to
+`<BOTCORP_HOME>/state/cockpit-approve-token`, readable by the operator's
+account only, so a cockpit the daemon started (no terminal) is usable too.
 
 ## The page
 

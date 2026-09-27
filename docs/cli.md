@@ -1005,7 +1005,8 @@ the browser (`cockpit/cli.mjs`). Every cockpit POST is audited to
 `<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume, enable,
 register, the account switch, pair, a secret set and a release Apply/Skip
 need the operator: Cloudflare Access when the cockpit is exposed,
-else the per-boot approval token the cockpit prints at start
+else the per-boot approval token the cockpit prints at start and writes to
+the owner-only `<BOTCORP_HOME>/state/cockpit-approve-token`
 (`X-Approve-Token`), or they answer 403.
 
 ## Notes

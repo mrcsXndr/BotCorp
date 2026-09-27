@@ -34,6 +34,7 @@ import express from 'express';
 import { WebSocketServer } from 'ws';
 
 import * as bots from './bots.mjs';
+import { restrictToUser } from '../core/acl.mjs';
 import * as vault from './vault.mjs';
 import * as pairing from './pairing.mjs';
 import * as history from './history.mjs';
@@ -213,11 +214,23 @@ app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
 // cookie (a bot's curl too), so those routes also need the per-boot approval
 // token this server prints to the terminal that started it.
 const APPROVE_TOKEN = ACCESS ? null : crypto.randomBytes(16).toString('hex');
+// A cockpit the daemon started has no terminal to print to, so the token also
+// goes to an owner-only file (the ACL is set before the rename makes it visible).
+const APPROVE_TOKEN_FILE = path.join(bots.STATE_DIR, 'cockpit-approve-token');
+if (APPROVE_TOKEN) {
+  try {
+    await fsp.mkdir(bots.STATE_DIR, { recursive: true });
+    const tmp = `${APPROVE_TOKEN_FILE}.tmp`;
+    await fsp.writeFile(tmp, `${APPROVE_TOKEN}\n`, { encoding: 'utf-8', mode: 0o600 });
+    restrictToUser(tmp);
+    await fsp.rename(tmp, APPROVE_TOKEN_FILE);
+  } catch (e) { console.log(`[cockpit] could not write ${APPROVE_TOKEN_FILE}: ${e.message}`); }
+}
 function operatorGate(req, res) {
   if (!APPROVE_TOKEN) return true;
   const got = String(req.headers['x-approve-token'] || '');
   if (got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN))) return true;
-  res.status(403).json({ error: 'needs the approval token this cockpit printed at start (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
+  res.status(403).json({ error: 'needs the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
   return false;
 }
 async function decided(res, args, audit) {
@@ -408,4 +421,5 @@ server.listen(PORT, HOST, () => {
   console.log(`[cockpit] http://${HOST}:${PORT}  bots=${bots.BOTS_DIR}  runtime=${bots.BOTCORP_HOME}`);
   console.log(`[cockpit] auth: ${ACCESS ? `Cloudflare Access (team ${accessCfg.team}, jwks ${ACCESS.jwksFile ? 'file' : 'fetch'})` : 'loopback session cookie'}`);
   if (APPROVE_TOKEN) console.log(`[cockpit] approval token (this boot): ${APPROVE_TOKEN}`);
+  if (APPROVE_TOKEN) console.log(`[cockpit] the same token, owner-only: ${APPROVE_TOKEN_FILE}`);
 });

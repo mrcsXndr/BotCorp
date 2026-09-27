@@ -62,6 +62,9 @@ elif printf '%s\n' "$T_N" | grep -qE 'protecteddata'; then
   BLOCKED=1; MATCHED="ProtectedData (the DPAPI API)"
 elif printf '%s\n' "$T_N" | grep -qE 'secret-access\.jsonl'; then
   BLOCKED=1; MATCHED="secret-access.jsonl (the secrets audit log)"
+elif printf '%s\n' "$T_N" | grep -qE 'cockpit-approve-token'; then
+  # owner-only, but a bot runs as the same user: its tool calls must not reach it
+  BLOCKED=1; MATCHED="cockpit-approve-token (the cockpit's operator token)"
 fi
 
 [ "$BLOCKED" = "1" ] || exit 0

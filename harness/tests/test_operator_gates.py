@@ -15,6 +15,7 @@ Every run uses a temp BOTCORP_HOME / BOTCORP_BOTS_DIR, never the real runtime.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -205,3 +206,23 @@ def test_cockpit_secret_set_with_the_token_stores_it(cockpit):
     c, rt, bots = cockpit
     code, body = c.call("PUT", "/api/bots/t/secrets/api_key", {"value": FAKE}, token=True)
     assert code == 200 and body == {"key": "api_key", "ok": True}, body
+
+
+# ---- the token also lands in an owner-only file (a daemon-started cockpit has no terminal) ----
+
+@needs_node
+def test_cockpit_writes_its_token_to_an_owner_only_file(cockpit):
+    c, rt, bots = cockpit
+    f = rt / "state" / "cockpit-approve-token"
+    assert f.read_text(encoding="utf-8").strip() == c.token
+    assert not (rt / "state" / "cockpit-approve-token.tmp").exists()
+    c.token = f.read_text(encoding="utf-8").strip()
+    code, body = c.call("POST", "/api/bots/t/pair", {"senderId": "12345"}, token=True)
+    assert code == 200 and body["ok"], body
+    if sys.platform == "win32":
+        acl = subprocess.run(["icacls", str(f)], capture_output=True, text=True).stdout
+        aces = [l.strip().removeprefix(str(f)).strip() for l in acl.splitlines()[:-1] if l.strip()]
+        assert len(aces) == 1 and "(I)" not in aces[0], acl
+        assert aces[0].lower().split(":")[0].endswith("\\" + os.environ["USERNAME"].lower()), acl
+    else:
+        assert (f.stat().st_mode & 0o777) == 0o600

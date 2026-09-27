@@ -53,10 +53,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { WebSocketServer } from 'ws';
 import { botHome as botHomeOf } from '../core/paths.mjs';
+import { restrictToUser } from '../core/acl.mjs';
 
 const require = createRequire(import.meta.url);
 
@@ -108,19 +109,6 @@ function resolveShell() {
     try { if (c && fs.existsSync(c)) return { file: c, args: [] }; } catch {}
   }
   return { file: process.env.ComSpec || path.join(sysRoot, 'System32', 'cmd.exe'), args: [] };
-}
-
-// Best-effort "0600": strip inheritance and grant only the current user. On
-// Windows `mode: 0o600` is a no-op, so the ACL is the only real protection.
-function restrictToUser(file) {
-  if (process.platform !== 'win32') { try { fs.chmodSync(file, 0o600); } catch {} return; }
-  const user = process.env.USERNAME;
-  if (!user) return;
-  const sysRoot = process.env.SystemRoot || 'C:\\Windows';
-  const icacls = path.join(sysRoot, 'System32', 'icacls.exe');
-  try {
-    execFileSync(icacls, [file, '/inheritance:r', '/grant:r', `${user}:F`], { stdio: 'ignore', windowsHide: true, timeout: 10_000 });
-  } catch { /* best effort */ }
 }
 
 function treeKill(pid) {
