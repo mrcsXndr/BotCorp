@@ -296,7 +296,8 @@ function echoPs(r) {
 
 async function cmdAccounts({ pos, flags }) {
   const [, action, id] = pos;
-  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed');
+  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>]');
+  if (action === 'use') return accountsUse(id, pos[3], flags);
   if (action === 'list') {
     if (!flags.json) return echoPs(accountsPs(['-Action', 'list']));
     const r = accountsListJson();
@@ -312,8 +313,46 @@ async function cmdAccounts({ pos, flags }) {
     const extra = [...(flags.label ? ['-Label', String(flags.label)] : []), ...(flags.plan ? ['-Plan', String(flags.plan)] : [])];
     return echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
   }
-  if (action === 'remove') return echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
+  if (action === 'remove') {
+    const users = listBots().filter((b) => { try { return loadRawYaml(b).account === id; } catch { return false; } });
+    if (users.length) fail(`accounts remove: ${id} is the account of ${users.join(', ')} (botcorp accounts use <bot> none first)`, 2);
+    return echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
+  }
   usage(`accounts: unknown action '${action}'`);
+}
+
+// `accounts use <bot> <id|none>`: bot.yaml `account` only. The tick rolls the
+// session onto it at the next idle turn boundary; nothing signals the session.
+function accountsUse(bot, id, flags) {
+  requireOperator('accounts use');
+  requireBot(bot);
+  if (!id || !(id === 'none' || NAME_RE.test(id))) usage('accounts use <bot> <id|none> [--by <who>]');
+  let last4 = '';
+  if (id !== 'none') {
+    const list = accountsListJson();
+    if (!list.ok) fail(list.err);
+    const row = list.rows.find((r) => r.id === id);
+    if (!row || !row.masked) fail(`accounts use: no account '${id}' with a token (botcorp accounts list)`, 2);
+    const c = checkAccountToken(row);
+    if (!c.ok) fail(`accounts use: account ${id} failed its token check: ${c.detail}`, 2);
+    last4 = String(row.masked).slice(-4);
+  }
+  const raw = loadRawYaml(bot);
+  const from = raw.account ?? null;
+  if (id === 'none') delete raw.account; else raw.account = id;
+  writeValidated(bot, raw, 'accounts use');
+  const by = decidedBy(flags);
+  try {
+    const f = path.join(BOTCORP_HOME, 'logs', bot, 'accounts.log');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), by, from, to: id === 'none' ? null : id }) + '\n');
+  } catch {}
+  doSync(bot);
+  out(`accounts: ${bot} account ${from ?? 'none'} -> ${id} (by ${by})`);
+  out(id === 'none'
+    ? `applies at the next idle turn boundary; confirm with: botcorp status ${bot} --json (session_env.oauth_last4 = the bot's own vault token)`
+    : `applies at the next idle turn boundary; confirm with: botcorp status ${bot} --json (session_env.oauth_last4 = ${last4})`);
+  return 0;
 }
 
 // ---- chat: a plain interactive claude for an account, in its own WT tab (daemon/chat.ps1) ----
@@ -601,6 +640,7 @@ function isWidening(cfg, segs, value, op = 'set') {
   }
   if (p === 'secrets') return listOf(value).some((k) => !listOf(cfg.secrets).includes(k)) ? 'declares a new vault secret' : null;
   if (p === 'harness.tools_registry') return cfg.harness.tools_registry === 'enforce' && value === 'warn' ? 'relaxes the tools registry enforce -> warn' : null;
+  if (p === 'account') return (value ?? null) !== (cfg.account ?? null) ? 'switches the Claude account' : null;
   if (segs[0] === 'automations' && segs[2] === 'enabled' && segs.length === 3) {
     const el = findElem(cfg.automations, segs[1]);
     return value === true && el && el.enabled === false ? `enables automation ${el.name}` : null;
@@ -2420,29 +2460,33 @@ function trayRunEntries() {
 // account's config dir with the token in the child env only, cached 24 h by
 // the vault fingerprint (never the token) in <rt>/state/account-checks.json.
 const ACCOUNT_CHECK_TTL_MS = 24 * 3600 * 1000;
+// One `accounts list --json` row -> { level: PASS|WARN|FAIL, ok, detail }.
+function checkAccountToken(a) {
+  if (!a.masked) return { level: 'WARN', ok: false, detail: 'no token in the vault (botcorp accounts add)' };
+  const cacheFile = path.join(STATE_DIR, 'account-checks.json');
+  const cache = readJson(cacheFile) || {};
+  const c = a.fp && cache[a.fp];
+  if (c && Date.now() - Date.parse(c.at || 0) < ACCOUNT_CHECK_TTL_MS) return { level: c.ok ? 'PASS' : 'FAIL', ok: !!c.ok, detail: `${c.detail} (cached ${humanAge(Date.now() - Date.parse(c.at))} ago)` };
+  const tok = accountsPs(['-Action', 'get', '-Id', a.id, '-IAmTheLauncher']);
+  if (tok.code !== 0 || !tok.out) return { level: 'FAIL', ok: false, detail: 'vault unreadable (re-enter with botcorp accounts add)' };
+  const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok.out, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
+  try { fs.mkdirSync(a.config_dir, { recursive: true }); } catch {}
+  const r = runClaude(['-p', 'Reply with the single word ok.', '--model', 'claude-haiku-4-5-20251001', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
+  let ok = false, detail = '';
+  try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}`; }
+  catch { detail = r.timedOut ? 'timed out after 90 s' : `exit ${r.code}: ${scrub((r.err || r.out).trim()).split(/\r?\n/)[0].slice(0, 120)}`; }
+  if (a.fp) { cache[a.fp] = { ok, at: new Date().toISOString(), detail }; try { writeJsonAtomic(cacheFile, cache); } catch {} }
+  return { level: ok ? 'PASS' : 'FAIL', ok, detail };
+}
+
 function accountTokenChecks(add) {
   const list = accountsListJson();
   if (!list.ok) { add('WARN', 'accounts', `accounts list failed: ${list.err.slice(0, 160)}`, 'accounts'); return; }
   if (!list.rows.length) { add('INFO', 'accounts', 'none (botcorp accounts add <id> | seed)', 'accounts'); return; }
-  const cacheFile = path.join(STATE_DIR, 'account-checks.json');
-  const cache = readJson(cacheFile) || {};
-  let dirty = false;
   for (const a of list.rows) {
-    if (!a.masked) { add('WARN', `account ${a.id}: token`, 'no token in the vault (botcorp accounts add)', 'accounts'); continue; }
-    const c = a.fp && cache[a.fp];
-    if (c && Date.now() - Date.parse(c.at || 0) < ACCOUNT_CHECK_TTL_MS) { add(c.ok ? 'PASS' : 'FAIL', `account ${a.id}: token`, `${c.detail} (cached ${humanAge(Date.now() - Date.parse(c.at))} ago)`, 'accounts'); continue; }
-    const tok = accountsPs(['-Action', 'get', '-Id', a.id, '-IAmTheLauncher']);
-    if (tok.code !== 0 || !tok.out) { add('FAIL', `account ${a.id}: token`, 'vault unreadable (re-enter with botcorp accounts add)', 'accounts'); continue; }
-    const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok.out, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
-    try { fs.mkdirSync(a.config_dir, { recursive: true }); } catch {}
-    const r = runClaude(['-p', 'Reply with the single word ok.', '--model', 'claude-haiku-4-5-20251001', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
-    let ok = false, detail = '';
-    try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}`; }
-    catch { detail = r.timedOut ? 'timed out after 90 s' : `exit ${r.code}: ${scrub((r.err || r.out).trim()).split(/\r?\n/)[0].slice(0, 120)}`; }
-    if (a.fp) { cache[a.fp] = { ok, at: new Date().toISOString(), detail }; dirty = true; }
-    add(ok ? 'PASS' : 'FAIL', `account ${a.id}: token`, detail, 'accounts');
+    const c = checkAccountToken(a);
+    add(c.level, `account ${a.id}: token`, c.detail, 'accounts');
   }
-  if (dirty) { try { writeJsonAtomic(cacheFile, cache); } catch {} }
 }
 
 async function cmdDoctor({ flags }) {

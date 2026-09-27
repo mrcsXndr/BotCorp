@@ -67,6 +67,10 @@ export const DEFAULTS = {
   // TELEGRAM_BOT_TOKEN with modules.telegram on, any other key -> its UPPERCASE
   // name, e.g. hub_token -> HUB_TOKEN). automations[].secrets must be a subset.
   secrets: ['oauth_token', 'telegram_token'],
+  // The Claude account (<rt>/accounts/<id>) the session runs on instead of the
+  // bot's own vault oauth_token. null = the bot's own token. `botcorp accounts
+  // use` sets it; the tick rolls the session onto it at the next idle turn.
+  account: null,
   // The capability registry: every executable under tools/ and scripts/ the bot
   // runs, one entry each ({name, path, kind: cli|monitor|integration|lib,
   // purpose, secrets, owner}; a glob path only for lib|cli). null = registry
@@ -134,6 +138,8 @@ export function validate(cfg) {
   }
   const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
+  // The id shape only: an existence check here would make `accounts remove` stop the bot from launching.
+  if (cfg.account !== null && !(typeof cfg.account === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(cfg.account))) errs.push(`account: an account id ([a-z0-9][a-z0-9-]*, max 32) or null (got ${JSON.stringify(cfg.account)})`);
   if (!['warn', 'enforce'].includes(cfg.harness.tools_registry)) errs.push(`harness.tools_registry: warn | enforce (got ${JSON.stringify(cfg.harness.tools_registry)})`);
   if (cfg.tools !== null && !Array.isArray(cfg.tools)) errs.push('tools: must be a list (or absent: registry off)');
   const toolNames = new Set();
