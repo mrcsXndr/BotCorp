@@ -920,7 +920,9 @@ logins, `--no-tg-probe` the Telegram slot probe.
 - `account <id>: token` — a 1-turn `claude -p` on `claude-haiku-4-5-20251001`
   run under that account's config dir with its vault token in the env; PASS /
   FAIL / INFO, cached 24 h in `~/.botcorp/state/account-checks.json` keyed by
-  the token's fingerprint (never the token itself);
+  the token's fingerprint (never the token itself). From a bot session
+  (`BOT_NAME` set) a cache miss is WARN `not checked from a bot session` and
+  nothing is cached: the vault hands a bot a mask, not the token;
 - cockpit: `GET http://127.0.0.1:<port>/healthz` (WARN when down;
   `COCKPIT_PORT`, default 4477); `cockpit exposure: loopback-only (no
   <BOTCORP_HOME>/access.json)` or `exposed via Access team=<t>`; without the

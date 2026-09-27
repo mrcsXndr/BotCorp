@@ -3,6 +3,15 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.2
+
+- **Doctor no longer fails an account's token check from a bot session.** The
+  vault gives a bot a mask instead of the token, so the live check there was a
+  false 401 that also cached a FAIL for 24 h, and `accounts use` (and the
+  cockpit's Switch account) refuse an account whose check failed. From a bot
+  session a cache miss is now a WARN and nothing is cached. A failed check
+  also names the HTTP status.
+
 ## v0.7.1
 
 - **The registry scan no longer counts a `*_TOKENS` variable as a secret

@@ -2503,13 +2503,17 @@ function checkAccountToken(a) {
   const cache = readJson(cacheFile) || {};
   const c = a.fp && cache[a.fp];
   if (c && Date.now() - Date.parse(c.at || 0) < ACCOUNT_CHECK_TTL_MS) return { level: c.ok ? 'PASS' : 'FAIL', ok: !!c.ok, detail: `${c.detail} (cached ${humanAge(Date.now() - Date.parse(c.at))} ago)` };
+  // A bot session never gets the token (the vault hands it a mask), so a live
+  // check there fails with a 401 and would cache that FAIL, which then blocks
+  // `accounts use` for 24 h. Leave it to the operator.
+  if (process.env.BOT_NAME) return { level: 'WARN', ok: false, detail: 'not checked from a bot session (run botcorp doctor as the operator)' };
   const tok = accountsPs(['-Action', 'get', '-Id', a.id, '-IAmTheLauncher']);
   if (tok.code !== 0 || !tok.out) return { level: 'FAIL', ok: false, detail: 'vault unreadable (re-enter with botcorp accounts add)' };
   const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok.out, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
   try { fs.mkdirSync(a.config_dir, { recursive: true }); } catch {}
   const r = runClaude(['-p', 'Reply with the single word ok.', '--model', 'claude-haiku-4-5-20251001', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
   let ok = false, detail = '';
-  try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}`; }
+  try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}${j && j.api_error_status ? ` (HTTP ${j.api_error_status})` : ''}`; }
   catch { detail = r.timedOut ? 'timed out after 90 s' : `exit ${r.code}: ${scrub((r.err || r.out).trim()).split(/\r?\n/)[0].slice(0, 120)}`; }
   if (a.fp) { cache[a.fp] = { ok, at: new Date().toISOString(), detail }; try { writeJsonAtomic(cacheFile, cache); } catch {} }
   return { level: ok ? 'PASS' : 'FAIL', ok, detail };

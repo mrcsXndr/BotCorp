@@ -101,6 +101,17 @@ def test_a_failed_token_check_is_exit_2_with_no_writes(ubox):
     assert _yaml(bots) == before
 
 
+def test_doctor_from_a_bot_never_runs_or_caches_the_token_check(ubox):
+    """A bot gets a masked token from the vault, so a live check there is a false 401
+    whose cached FAIL would block `accounts use` for 24 h."""
+    rt, bots, env, _ = ubox
+    (rt / "state" / "account-checks.json").unlink()
+    r = cli({**env, "BOT_NAME": "x"}, "doctor", "--no-tg-probe", "--json", timeout=300)
+    row = {c["name"]: c for c in json.loads(r.stdout)}["account acc1: token"]
+    assert row["level"] == "WARN" and "bot session" in row["detail"], row
+    assert not (rt / "state" / "account-checks.json").exists()
+
+
 def test_use_none_deletes_the_key(ubox):
     rt, bots, env, _ = ubox
     assert cli(env, "accounts", "use", "fx", "acc1").returncode == 0
