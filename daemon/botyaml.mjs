@@ -43,6 +43,7 @@ export const DEFAULTS = {
     resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart, botcorp start|restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
+    tools_registry: 'warn',         // warn | enforce: how doctor grades an executable no `tools:` entry covers
     modules: {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
       alert_triage: false, hub: false, janitor: true /* | 'report' */, remote_control: false,
@@ -66,6 +67,11 @@ export const DEFAULTS = {
   // TELEGRAM_BOT_TOKEN with modules.telegram on, any other key -> its UPPERCASE
   // name, e.g. hub_token -> HUB_TOKEN). automations[].secrets must be a subset.
   secrets: ['oauth_token', 'telegram_token'],
+  // The capability registry: every executable under tools/ and scripts/ the bot
+  // runs, one entry each ({name, path, kind: cli|monitor|integration|lib,
+  // purpose, secrets, owner}; a glob path only for lib|cli). null = registry
+  // off: doctor shows no tools-* rows (`botcorp tools <bot> scan` seeds it).
+  tools: null,
   // lock: none (DPAPI only; unattended reboots) | operator (the vault key is
   // held only under the operator passphrase; after a reboot the bot stays
   // `locked` until `botcorp secrets unlock` / the cockpit; docs/secrets.md)
@@ -128,6 +134,24 @@ export function validate(cfg) {
   }
   const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
+  if (!['warn', 'enforce'].includes(cfg.harness.tools_registry)) errs.push(`harness.tools_registry: warn | enforce (got ${JSON.stringify(cfg.harness.tools_registry)})`);
+  if (cfg.tools !== null && !Array.isArray(cfg.tools)) errs.push('tools: must be a list (or absent: registry off)');
+  const toolNames = new Set();
+  for (const [i, t] of (Array.isArray(cfg.tools) ? cfg.tools : []).entries()) {
+    if (!isObj(t)) { errs.push(`tools[${i}]: must be a mapping`); continue; }
+    if (!t.name || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(String(t.name))) errs.push(`tools[${i}].name: slug required`);
+    else if (toolNames.has(String(t.name))) errs.push(`tools[${i}].name: duplicate '${t.name}'`);
+    else toolNames.add(String(t.name));
+    if (!['cli', 'monitor', 'integration', 'lib'].includes(t.kind)) errs.push(`tools[${i}].kind: cli | monitor | integration | lib (got ${JSON.stringify(t.kind)})`);
+    if (typeof t.path !== 'string' || !t.path.trim()) errs.push(`tools[${i}].path: required`);
+    else if (/^([\\/]|[a-zA-Z]:)/.test(t.path) || t.path.split(/[\\/]/).includes('..')) errs.push(`tools[${i}].path: relative to the bot folder, no '..' (got ${JSON.stringify(t.path)})`);
+    else if (/[*?[]/.test(t.path) && !['lib', 'cli'].includes(t.kind)) errs.push(`tools[${i}].path: a glob only for kind lib | cli (got ${JSON.stringify(t.path)} as ${t.kind})`);
+    if (t.secrets !== undefined) {
+      const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
+      const extra = (Array.isArray(t.secrets) ? t.secrets.map(String) : [String(t.secrets)]).filter((k) => !declared.has(k));
+      if (extra.length) errs.push(`tools[${i}].secrets: ${extra.join(', ')} not declared in the bot's secrets: list`);
+    }
+  }
   if (!isObj(cfg.vault) || !(cfg.vault.lock === null || ['none', 'operator'].includes(cfg.vault.lock))) errs.push(`vault.lock: none | operator (null = the host default; got ${JSON.stringify(cfg.vault && cfg.vault.lock)})`);
   if (!isObj(cfg.harness.modules)) errs.push('harness.modules: must be a mapping');
   else if (![true, false, 'report'].includes(cfg.harness.modules.janitor)) errs.push(`harness.modules.janitor: true | false | report (got ${JSON.stringify(cfg.harness.modules.janitor)})`);
