@@ -419,6 +419,29 @@ if ($Clean) {
   } catch {}
 }
 
+# --- session snapshot retention: memory/sessions/<stamp>.md > 7d -------------
+# session_summarize.py (Stop / PreCompact) writes one snapshot per turn and
+# nothing reads the old ones. Only those top-level YYYY-MM-DD_HHMMSS.md files,
+# aged by the stamp in the name (a clone resets mtimes); never a
+# memory/sessions/<id>/ folder (journal + timeline). Only under -Clean.
+function Remove-OldSessionSnapshots {
+  param([string]$Dir, [int]$Days = 7, [datetime]$Now = (Get-Date))
+  $n = 0
+  foreach ($f in @(Get-ChildItem -LiteralPath $Dir -Filter '*.md' -File -EA SilentlyContinue)) {
+    if ($f.Name -notmatch '^(\d{4}-\d{2}-\d{2}_\d{6})\.md$') { continue }
+    $at = [datetime]::MinValue
+    if (-not [datetime]::TryParseExact($Matches[1], 'yyyy-MM-dd_HHmmss', [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$at)) { continue }
+    if ($at -lt $Now.AddDays(-$Days)) { Remove-Item -LiteralPath $f.FullName -Force -EA SilentlyContinue; $n++ }
+  }
+  return $n
+}
+if ($Clean) {
+  try {
+    $n = Remove-OldSessionSnapshots -Dir (Join-Path $BotHome 'memory\sessions')
+    if ($n -gt 0) { $actions += "pruned $n session snapshots >7d" }
+  } catch {}
+}
+
 # --- janitor audit trail -----------------------------------------------------
 # A reap that no longer alerts must not become invisible: the caller often
 # sends this script's JSON to Out-Null, so without this line a successful
