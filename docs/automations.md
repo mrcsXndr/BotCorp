@@ -117,7 +117,8 @@ gated there is dropped until the next fire instead of being retried.
   grouped (`cmd /d /s /c "(<command>) > <log> 2>&1"`) so every part of a
   chained `a & b` / `a && b` reaches the log; the exit code is the group's
   (its last command's). An unquoted `)` in the command ends the group early:
-  quote it.
+  quote it. Before that, `${PY}` becomes the quoted python path, `${HARNESS}`
+  `<BotCorp>/harness` and `${BOTCORP}` the checkout root.
 - env = the bot env (`BOT_HOME`, `BOT_NAME`, `BOT_MODULES`, `BOTCORP_HOME`,
   `CLAUDE_CONFIG_DIR`, `CLAUDE_PLUGIN_ROOT`, `PYTHONIOENCODING`) plus
   `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, and every key listed in

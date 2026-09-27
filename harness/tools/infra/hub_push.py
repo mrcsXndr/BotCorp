@@ -457,6 +457,20 @@ def _post(url: str, token: str, payload: dict) -> dict | None:
         return None
 
 
+def _refresh_subagent_rollup() -> None:
+    """subagents.csv (subagent_usd_7d) is otherwise written only at session
+    end, which a days-long session rarely reaches: refresh it from
+    telemetry.db before building the usage payload."""
+    try:
+        cm = Path(__file__).resolve().parents[1] / "v2" / "cost_meter.py"
+        r = subprocess.run([sys.executable, str(cm), "--rollup"], capture_output=True, text=True,
+                           timeout=60, cwd=str(instance_root()))
+        if r.returncode != 0:
+            print(f"[hub_push] subagent rollup exit={r.returncode} (fail-open)", file=sys.stderr)
+    except Exception as e:
+        print(f"[hub_push] subagent rollup failed (fail-open): {e!r}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     try:
         if not module_enabled("hub"):
@@ -477,6 +491,8 @@ def main(argv: list[str]) -> int:
             print(f"[hub_push] throttled (interval_s={interval_s}); skipping", file=sys.stderr)
             return 0
 
+        if module_enabled("telemetry"):
+            _refresh_subagent_rollup()
         payloads = [build_bots_payload(), build_activity_payload(), build_usage_payload()]
 
         if dry_run:

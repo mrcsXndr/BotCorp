@@ -116,11 +116,11 @@ checkout's `user.name/email`, else `botcorp <botcorp@users.noreply.github.com>`)
 `[memory]`); one commit `backup <iso>` when something changed; `git push -u
 origin HEAD:main` bounded 120 s with `GIT_TERMINAL_PROMPT=0`,
 `GCM_INTERACTIVE=never`, `credential.interactive=never` (a credential prompt
-is never answered: use a token URL or a stored credential). The daemon can
-run it on a cadence: `harness/automations.yaml` may carry a `backup`
-automation gated by `module: backup` (the module counts as enabled exactly
-when `git_remote` is set; `daemon/botyaml.mjs enabledModules` adds `backup`
-to `BOT_MODULES` then).
+is never answered: use a token URL or a stored credential). To run it on a
+cadence, declare a job in the bot's `bot.yaml` `automations:` with the
+command `node ${BOTCORP}/cli/botcorp.mjs backup <bot>` (docs/automations.md).
+The module counts as enabled exactly when `git_remote` is set
+(`daemon/botyaml.mjs enabledModules` adds `backup` to `BOT_MODULES` then).
 
 Between backups, the `auto_commit` Stop hook pushes too, once `backup` is in
 the session's `BOT_MODULES` (a launch after `git_remote` was set): it commits

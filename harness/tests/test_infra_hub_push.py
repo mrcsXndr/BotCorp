@@ -128,6 +128,36 @@ def test_no_hub_url_configured_is_a_noop(tmp_path, monkeypatch):
     assert posted == []
 
 
+def _telemetry_with_one_subagent_hour(tmp_path):
+    import sqlite3
+    from datetime import datetime, timezone
+    db = tmp_path / "botcorp_home" / "state" / "tmphub" / "telemetry.db"
+    db.parent.mkdir(parents=True)
+    con = sqlite3.connect(str(db))
+    con.execute("CREATE TABLE rollup_hourly (hour TEXT, session_id TEXT, agent_type TEXT, model TEXT, "
+                "n_requests INTEGER, in_tok INTEGER, out_tok INTEGER, cache_tok INTEGER, usd REAL)")
+    con.execute("INSERT INTO rollup_hourly VALUES (?,?,?,?,?,?,?,?,?)",
+                (datetime.now(timezone.utc).strftime("%Y-%m-%dT%H"), "s1", "Explore", "m", 3, 10, 20, 0, 1.25))
+    con.commit()
+    con.close()
+
+
+# v0.7.3: the telemetry rollup's only reader is this push, so it runs here
+# (it was declared in harness/automations.yaml, which nothing ever loaded).
+def test_push_refreshes_the_subagent_rollup_when_telemetry_is_on(isolated, tmp_path, monkeypatch):
+    _telemetry_with_one_subagent_hour(tmp_path)
+    monkeypatch.setenv("BOT_MODULES", "cost_meter,hub,telemetry")
+    assert hp.main(["hub_push.py", "--dry-run"]) == 0
+    assert (isolated / "memory" / "metrics" / "subagents.csv").exists()
+    assert hp.build_usage_payload()["subagent_usd_7d"] == 1.25
+
+
+def test_push_leaves_the_rollup_alone_when_telemetry_is_off(isolated, tmp_path):
+    _telemetry_with_one_subagent_hour(tmp_path)
+    assert hp.main(["hub_push.py", "--dry-run"]) == 0
+    assert not (isolated / "memory" / "metrics" / "subagents.csv").exists()
+
+
 def test_hub_module_disabled_is_a_noop(isolated, monkeypatch):
     monkeypatch.setenv("BOT_MODULES", "cost_meter")  # no 'hub'
     posted = []

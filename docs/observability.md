@@ -82,8 +82,9 @@ Per bot, enforced by the sink every 10 minutes and once at startup:
   batches (with `PRAGMA incremental_vacuum` after each batch) until back
   under the cap; what was dropped is logged to stderr as one line
 
-`subagents.jsonl` and `runs.jsonl` retention (90 days / 14 days-or-50MB) is
-the automation scheduler's job, not the sink's — see `harness/automations.yaml`.
+`runs.jsonl` is not the sink's either: the automation scheduler
+(`daemon/automations.ps1`) rotates it at 10 MB, keeping one previous file.
+Nothing trims `subagents.jsonl` yet.
 
 ## `cost_meter.py`
 
@@ -101,7 +102,9 @@ the automation scheduler's job, not the sink's — see `harness/automations.yaml
   never block session end).
 - `--rollup`: refreshes `memory/metrics/subagents.csv` from the last 2 days
   of `rollup_hourly`, across every session — the safety net for a session
-  whose own Stop hook never ran (crash, kill -9).
+  whose own Stop hook never ran (crash, kill -9) or has not ended yet.
+  `hub_push.py` runs it before each push when the `telemetry` module is on
+  (`subagent_usd_7d` is built from that file).
 
 ## Cockpit / hub surfaces
 

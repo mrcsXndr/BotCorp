@@ -212,7 +212,7 @@ function Invoke-AutomationJob {
         $envMap['PATH'] = Add-PathDir -PathEnv (Add-PathDir -PathEnv $env:PATH -Dir (Join-Path $pyDir 'Scripts')) -Dir $pyDir
     }
     # kind: prompt runs `botcorp send`; the prompt goes on its stdin, never on the command line.
-    # A command gets ${PY} (quoted), ${HARNESS} and ${BOTCORP} expanded (harness/automations.yaml).
+    # A command gets ${PY} (quoted), ${HARNESS} and ${BOTCORP} expanded.
     $isPrompt = ("$($a.kind)" -eq 'prompt')
     $command = "$($a.command)".Replace('${PY}', "`"$pyExe`"").Replace('${HARNESS}', $Harness).Replace('${BOTCORP}', $BotCorp)
     if ($isPrompt) {
