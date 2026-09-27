@@ -20,6 +20,13 @@ Purpose: how to choose and invoke tools safely — external writes need a human 
 ## Custom tools
 If the operator asks to use a "custom tool": list `tools/`, confirm which one, execute it. Don't invent a tool that isn't there.
 
+## Capability registry (bot.yaml `tools:`)
+When `bot.yaml` has a `tools:` list, it is the record of every executable under `tools/` and `scripts/`. `botcorp tools <bot> scan` shows what it covers; the doctor grades the gaps (`harness.tools_registry`: warn | enforce).
+- **Register every executable you add in the same turn:** `botcorp tools <bot> register --name <n> --path <p> --kind cli|lib|monitor|integration --purpose "<what it does>"`. The `tools-nudge` hook prints this line when you write an unregistered one.
+- **A new external integration** (it uses a secret or writes to a system outside the box) is `kind: integration`. That registration waits for the operator's approval; don't work around the queue.
+- **Retire dead scripts, don't leave them behind:** `botcorp tools <bot> retire <name|path>` moves the files to the runtime and drops the entry.
+- **A new job is an `automations:` entry,** never a loose loop, cron or scheduled task.
+
 ## Secrets & Credentials
 - Bot-specific credentials (OAuth tokens, API keys, bot tokens) live in `.env` / `.vault` — never in a tracked file.
 - **Never commit** secret files (they belong in `.gitignore`).
