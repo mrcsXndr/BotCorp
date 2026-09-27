@@ -4,8 +4,9 @@
 # included — a bot never has a reason to reach into vault files) or the
 # secrets CLI's mutating verbs.
 #
-# FAIL-CLOSED for the things it names (exit 2 blocks the tool call and feeds
-# the message back to the model); everything else is a silent exit 0.
+# FAIL-CLOSED for the things it names and for a payload it cannot parse (exit
+# 2 blocks the tool call and feeds the message back to the model); everything
+# else is a silent exit 0.
 
 set -uo pipefail
 . "$(dirname "$0")/_guard.sh" vault-guard
@@ -35,8 +36,13 @@ try:
                     parts.append(str(fp))
     print('\n'.join(parts))
 except Exception:
-    pass
-" <<<"$PAYLOAD" 2>/dev/null) || exit 0
+    sys.exit(3)
+" <<<"$PAYLOAD" 2>/dev/null)
+RC=$?
+if [ "$RC" -ne 0 ]; then
+  echo "BLOCKED: vault-guard could not parse this tool call (exit $RC from $PY), so it cannot rule out a vault access; it fails closed. If that python is missing or the Store stub, point BOT_PYTHON at a real interpreter." >&2
+  exit 2
+fi
 [ -n "$T" ] || exit 0
 
 # Normalise backslashes to forward slashes and lowercase for a

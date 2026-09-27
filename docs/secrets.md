@@ -188,7 +188,8 @@ with no vault entry, or a vault entry that's present but undeclared).
 `harness/hooks/vault-guard.sh` is a `PreToolUse` hook matched on
 `Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`. It fails CLOSED for
 what it names (exit 2, tool call blocked, the message fed back to the model)
-and is silent (exit 0) for everything else. It blocks any tool input whose
+and for a payload it cannot parse (bad JSON, or no working python), and is
+silent (exit 0) for everything else. It blocks any tool input whose
 path/pattern/command mentions: a `.vault` directory; `secrets.ps1` /
 `vault.ps1` / `accounts.ps1`; `botcorp secrets get|unlock|lock|import-bundle|
 export-bundle|migrate`; the DPAPI `ProtectedData` API; or
