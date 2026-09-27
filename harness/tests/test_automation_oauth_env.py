@@ -59,3 +59,48 @@ def test_jobs_never_see_a_foreign_account(oauth_bot):
     assert _last_log(rt, name, "plain") == "[%CLAUDE_CODE_OAUTH_TOKEN%][%OAUTH_TOKEN%][%ANTHROPIC_API_KEY%]"
     assert _last_log(rt, name, "mine") == "[mine][mine][%ANTHROPIC_API_KEY%]"
     assert {r["automation"]: r["exit"] for r in _runs(rt, name)} == {"plain": 0, "mine": 0}
+
+
+ACCT = "value-for-tests-acct-A1b2"
+
+
+def _account_bot(name, home, rt, env):
+    """bot.yaml account: acc1 + a job declaring oauth_token; the bot vault holds 'mine', the account ACCT."""
+    (home / "bot.yaml").write_text(
+        f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n"
+        f"secrets: [oauth_token]\naccount: acc1\nautomations:\n  - name: mine\n{JOB}    secrets: [oauth_token]\n",
+        encoding="utf-8")
+    seed = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command",
+                           f". '{VAULT}'; [void](Set-VaultSecret -BotHome '{home}' -Bot '{name}' -Key 'oauth_token' -Value 'mine'); 'seeded'"],
+                          capture_output=True, text=True, timeout=120, env=env)
+    assert seed.returncode == 0 and "seeded" in seed.stdout, seed.stderr
+    r = subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "accounts", "add", "acc1"], input=ACCT + "\n",
+                       capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def _unreadable_lines(rt, name):
+    f = rt / "logs" / name / "daemon.log"
+    return [ln for ln in f.read_text(encoding="utf-8-sig").splitlines() if "unreadable" in ln] if f.exists() else []
+
+
+@needs_win
+def test_a_job_oauth_token_follows_the_account(oauth_bot):
+    name, home, rt, env = oauth_bot
+    _account_bot(name, home, rt, env)
+    _run_now(name, env, "mine")
+    _wait_runs(rt, name, 1)
+    assert _last_log(rt, name, "mine") == f"[{ACCT}][{ACCT}][%ANTHROPIC_API_KEY%]"
+    assert _unreadable_lines(rt, name) == []
+
+
+@needs_win
+def test_an_unreadable_account_gives_the_job_the_bot_token(oauth_bot):
+    name, home, rt, env = oauth_bot
+    _account_bot(name, home, rt, env)
+    (rt / "accounts" / "acc1" / "account.json").unlink()
+    _run_now(name, env, "mine")
+    _wait_runs(rt, name, 1)
+    assert _last_log(rt, name, "mine") == "[mine][mine][%ANTHROPIC_API_KEY%]"
+    lines = _unreadable_lines(rt, name)
+    assert len(lines) == 1 and "account acc1 unreadable -> bot's oauth_token" in lines[0], lines
