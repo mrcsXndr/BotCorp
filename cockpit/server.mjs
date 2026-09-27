@@ -206,7 +206,8 @@ app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
 
 // ---- operator decisions: approvals, automations, the tools registry ------------
 // Every write is a CLI verb (runCli) and one audit line. A change that WIDENS
-// what a bot may do (approve, enable/resume a job, register a tool) is the one
+// what a bot may do (approve, enable/resume a job, register a tool, switch an
+// account, pair a sender, set a secret, apply/skip a release) is the one
 // decision a bot must never make for itself: behind Access the verified
 // identity is the check; on loopback any local process can mint a session
 // cookie (a bot's curl too), so those routes also need the per-boot approval
@@ -285,11 +286,17 @@ app.post('/api/bots/:name/account', withBot(async (req, res, bot) => {
 }));
 
 app.get('/api/bots/:name/pairing', withBot(async (_req, res, bot) => res.json(await pairing.pairingState(bot.name))));
-app.post('/api/bots/:name/pair', withBot(async (req, res, bot) => res.json(await pairing.approve(bot.name, req.body?.senderId))));
+app.post('/api/bots/:name/pair', withBot(async (req, res, bot) => {
+  if (!operatorGate(req, res)) return;
+  res.json(await pairing.approve(bot.name, req.body?.senderId));
+}));
 app.post('/api/bots/:name/pair/deny', withBot(async (req, res, bot) => res.json(await pairing.deny(bot.name, req.body?.senderId))));
 
 app.get('/api/bots/:name/secrets', withBot(async (_req, res, bot) => res.json(await vault.listSecrets(bot.name))));
-app.put('/api/bots/:name/secrets/:key', withBot(async (req, res, bot) => res.json(await vault.setSecret(bot.name, req.params.key, req.body?.value))));
+app.put('/api/bots/:name/secrets/:key', withBot(async (req, res, bot) => {
+  if (!operatorGate(req, res)) return;
+  res.json(await vault.setSecret(bot.name, req.params.key, req.body?.value));
+}));
 // Operator lock: state is read through the CLI; unlock pipes the passphrase
 // to `secrets unlock` on stdin. Only here (behind Access when exposed) or in
 // the terminal - never from a chat message.
@@ -310,10 +317,12 @@ app.get('/api/updates', wrap(async (_req, res) => res.json(await updates.listUpd
 app.get('/api/cc', wrap(async (_req, res) => res.json(ccStatus())));
 app.post('/api/updates/:tag/apply', wrap((req, res) => {
   if (!RELEASE_TAG_RE.test(req.params.tag)) return res.status(400).json({ error: 'bad tag' });
+  if (!operatorGate(req, res)) return;
   return lifecycle(res, ['update', '--apply', req.params.tag]);
 }));
 app.post('/api/updates/:tag/skip', wrap((req, res) => {
   if (!RELEASE_TAG_RE.test(req.params.tag)) return res.status(400).json({ error: 'bad tag' });
+  if (!operatorGate(req, res)) return;
   return lifecycle(res, ['update', '--skip', req.params.tag]);
 }));
 

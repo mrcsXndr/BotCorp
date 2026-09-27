@@ -9,7 +9,11 @@ first (`pwsh` 7 for the vault and the scheduled-task checks).
 Conventions:
 
 - Exit codes: `0` ok, `1` error, `2` usage, `3` duplicate Telegram token, or
-  an operator-only verb (`approve`, `reject`) run from inside a bot session.
+  an operator-only verb run from inside a bot session (`BOT_NAME` or
+  `CLAUDECODE` in the env): `approve`, `reject`, `accounts add|remove|seed|use`,
+  `secrets set|delete` (for any bot), `pair <bot> <senderId>`, `cockpit
+  expose|unexpose`, `update --apply|--skip`, `cc rollback`, and any verb given
+  `--requested-by`. They change nothing when they refuse.
 - Plain text, one fact per line. Read commands take `--json` and print objects.
 - A secret is never on a command line and never printed: values go in on
   STDIN (or a hidden prompt) and come out masked (`****last4`).
@@ -220,7 +224,8 @@ automation's environment as their UPPERCASE name when listed in
 `automations[].secrets`. `list` is masked (`****last4`,
 `unreadable` for a blob this account cannot decrypt); `--json` rows are
 `{key, masked, fp, updated_at}`, no value field. Exit 3 = another bot's vault
-holds the same Telegram token (one poller per token).
+holds the same Telegram token (one poller per token), or `set`/`delete` run
+from a bot session (operator-only, for every bot including its own).
 
 ```
 echo <token> | botcorp secrets set bot-1 telegram
@@ -308,7 +313,8 @@ returns `{policy, allowFrom: [...], pending: [{code, senderId, chatId, age_s,
 expires_in_s}]}` (plus `present`/`file`). `--deny <senderId>` removes that
 sender's pending codes (a missing sender is reported, not an error). The
 plugin stores no username and BotCorp never runs its own `getUpdates` to
-fetch one (it would 409 the live poller).
+fetch one (it would 409 the live poller). `pair <bot> <senderId>` is
+operator-only (exit 3 from a bot session); `--list` and `--deny` stay open.
 
 Policies: `pairing` (default) hands an unknown sender a one-time code and
 keeps the entry in `pending` until the operator approves it here; the
@@ -331,6 +337,8 @@ config_dir, updated_at}` per account (masked = `****last4` or empty).
 that already holds an `oauth_token` (id = the bot's name, re-encrypted
 in-process into the account vault's own entropy; accounts that already exist
 are left alone). `remove` refuses while a bot's `account:` names the account.
+`add`, `remove` and `seed` are operator-only (exit 3 from a bot session);
+`list` stays open.
 
 ### `accounts use <bot> <id|none> [--by <who>]`
 
@@ -431,7 +439,8 @@ command prints `queued for operator approval: botcorp approve <bot> <id>`:
 | `harness.tools_registry` | `enforce` -> `warn` |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
-`operator:<user>` (`--requested-by` overrides). Every queue/approve/reject is
+`operator:<user>` (`--requested-by` overrides it from the operator's env and
+is refused, exit 3, inside a bot session). Every queue/approve/reject is
 appended to `<BOTCORP_HOME>/logs/<bot>/approvals.log`.
 
 ### `approvals [--json]`
@@ -712,7 +721,8 @@ plain-language notes: What changed / Why / Value to you. `update` lists them
 with those notes; `--apply <tag>` sets `status: apply_requested` (the daemon
 applies it at each bot's next safe restart, smoke test and automatic rollback
 kept) and `--skip <tag>` sets `skipped`; both stamp `decided_at` /
-`decided_by` and refuse from inside a bot session (`BOT_NAME` set). The CLI
+`decided_by` and refuse, exit 3, from inside a bot session (`BOT_NAME` or
+`CLAUDECODE` set; the cockpit's Apply/Skip needs its approval token). The CLI
 never applies anything itself. `--check` shells to `daemon/update.ps1
 -Check` to record new releases now.
 
@@ -729,8 +739,8 @@ not running or nothing tells); the cockpit's `GET /api/cc` returns the same,
 each bot as of its last tick. `botcorp cc test` runs `daemon/cc.ps1 -Check`
 then `-Test` in the foreground (the canary run takes minutes).
 `botcorp cc rollback` moves the pin to the newest kept previous version (or
-`--to <version>`) and rejects the one it replaced; refused from inside a bot
-session (`BOT_NAME` set).
+`--to <version>`) and rejects the one it replaced; refused, exit 3, from
+inside a bot session (`BOT_NAME` or `CLAUDECODE` set).
 
 ### `install [--s4u] [--unregister] [--dry-run]`
 
@@ -764,7 +774,7 @@ every request, fail-closed; `cockpit/access.mjs`). `expose` prints that
 consequence and writes nothing without `--yes` (exit 1); `unexpose` deletes
 the file. Per-bot `integrations.access` only records which Access app a bot
 expects (`doctor` cross-checks it against the machine file). Restart the
-cockpit after either.
+cockpit after either. Both are operator-only (exit 3 from a bot session).
 
 ### `suggest <bot> --topic <t> [--lesson <file>] [--dry-run]`
 
@@ -967,7 +977,7 @@ Prints the command summary.
 | `BOTCORP_PTY_COMMAND` | pty-host test seam: `start` hosts this command line instead of `launch.ps1` (tests only) |
 | `BOTCORP_ATTACH_IDLE_MIN` | minutes an attach host (`pty-host --attach`) stays up with no client (default 15) |
 | `BOTCORP_INBOX_POLL_MS` | how often the inbox drainer re-observes a session that is not idle yet (default 10000) |
-| `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; `update --apply/--skip` refuses when it is set |
+| `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; every operator-only verb refuses (exit 3) when it or `CLAUDECODE` is set |
 | `CLOUDFLARE_API_TOKEN` | `doctor`'s Workers Builds trigger check (`integrations.cloudflare`); env only, the daemon injects it |
 | `BOTCORP_DEBUG` | print stack traces for unexpected errors |
 
@@ -986,8 +996,9 @@ run|pause|resume|enable|disable <name>`, `tools <bot> scan --json`,
 <name|path> --by <identity>`. Output is truncated to 4 KB (a `--json` read the
 cockpit parses may reach 4 MB) and scrubbed of token shapes before it reaches
 the browser (`cockpit/cli.mjs`). Every cockpit POST is audited to
-`<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume and
-register need the operator: Cloudflare Access when the cockpit is exposed,
+`<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume, enable,
+register, the account switch, pair, a secret set and a release Apply/Skip
+need the operator: Cloudflare Access when the cockpit is exposed,
 else the per-boot approval token the cockpit prints at start
 (`X-Approve-Token`), or they answer 403.
 

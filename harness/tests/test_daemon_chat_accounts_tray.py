@@ -37,9 +37,11 @@ def _pwsh(script: str, *args: str) -> subprocess.CompletedProcess:
 
 
 def _cli(*args: str, stdin: str | None = None) -> subprocess.CompletedProcess:
+    # the operator's env: accounts add|remove|seed refuse inside a bot session
+    env = {k: v for k, v in os.environ.items() if k not in ("BOT_NAME", "CLAUDECODE")}
     return subprocess.run(
         ["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), *args],
-        capture_output=True, text=True, timeout=120, cwd=ASSEMBLY, input=stdin,
+        capture_output=True, text=True, timeout=120, cwd=ASSEMBLY, input=stdin, env=env,
     )
 
 

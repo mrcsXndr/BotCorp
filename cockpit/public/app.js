@@ -234,7 +234,7 @@ async function renderDrawer(which) {
       el('secSave').onclick = async () => {
         el('secErr').textContent = '';
         try {
-          await api('PUT', `/api/bots/${b.name}/secrets/${encodeURIComponent(el('secKey').value.trim())}`, { value: el('secVal').value });
+          await operatorApi('PUT', `/api/bots/${b.name}/secrets/${encodeURIComponent(el('secKey').value.trim())}`, { value: el('secVal').value });
           el('secVal').value = '';
           toast('secret stored');
           renderDrawer('vault');
@@ -358,7 +358,7 @@ async function approve(bot, senderId) {
   const errBox = el('pairErr');
   if (errBox) errBox.textContent = '';
   try {
-    await api('POST', `/api/bots/${bot}/pair`, { senderId });
+    await operatorApi('POST', `/api/bots/${bot}/pair`, { senderId });
     toast(`approved ${senderId}`);
     renderDrawer('pairing');
   } catch (e) { if (errBox) errBox.textContent = e.message; else toast(e.message, true); }
@@ -843,7 +843,7 @@ function ccLine(c) {
 }
 async function updateAction(tag, action) {
   try {
-    const r = await api('POST', `/api/updates/${encodeURIComponent(tag)}/${action}`);
+    const r = await operatorApi('POST', `/api/updates/${encodeURIComponent(tag)}/${action}`);
     toast(r.ok ? `${action} ok` : `${action} failed (${r.code}): ${r.err || r.out}`, !r.ok);
   } catch (e) { toast(e.message, true); }
   loadUpdates();

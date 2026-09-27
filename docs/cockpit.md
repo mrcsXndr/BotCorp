@@ -206,6 +206,12 @@ never spawns a session itself, attached or not.
 CLI results come back as `{ok, code, out, err}`; `out`/`err` are truncated to
 4 KB and scrubbed of token shapes before they reach the browser.
 
+Operator-gated routes: approve / reject, automation resume / enable, tools
+register, the account switch, pair approve, vault set and release Apply /
+Skip. Behind Cloudflare Access the verified identity is the check; on
+loopback they also need the per-boot approval token (`X-Approve-Token`), or
+they answer 403 `{need: "approve-token"}` and the page asks for it once.
+
 ## The page
 
 - Chat and Terminal are two views of ONE socket (`/term/<bot>`). The server

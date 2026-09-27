@@ -58,7 +58,9 @@ export class CliError extends Error {
 export function fail(message, code = 1) { throw new CliError(message, code); }
 export function usage(message) { throw new CliError(message, 2); }
 
-// The operator-only verbs (approve, reject) refuse inside a bot: the launcher
+// The operator-only verbs (approve, reject, accounts add|remove|seed|use,
+// secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip,
+// cc rollback, a --requested-by label) refuse inside a bot: the launcher
 // gives a session BOT_NAME, Claude Code sets CLAUDECODE. Defense in depth, not
 // a boundary (a bot runs as the same user); the cockpit's runCli strips both.
 export function isOperatorContext(env = process.env) { return !env.BOT_NAME && !env.CLAUDECODE; }

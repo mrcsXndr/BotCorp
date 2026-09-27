@@ -171,6 +171,7 @@ async function cmdSecrets({ pos, flags }) {
     if (r.err.trim()) process.stderr.write(r.err.trim() + '\n');
     return r.code;
   }
+  if (action === 'set' || action === 'delete') requireOperator(`secrets ${action}`);
   if (action === 'set') {
     if (!key) usage('secrets set <bot> <key>   (any key name, e.g. aws_secret_access_key; value on stdin, or a hidden prompt)');
     const value = await readSecretValue(`Value for ${bot}/${key} (hidden): `);
@@ -313,6 +314,7 @@ async function cmdAccounts({ pos, flags }) {
     outJson(r.rows);
     return 0;
   }
+  if (action === 'add' || action === 'remove' || action === 'seed') requireOperator(`accounts ${action}`);
   if (action === 'seed') return echoPs(accountsPs(['-Action', 'seed', ...(flags.json ? ['-Json'] : [])]));
   if (!id || !NAME_RE.test(id)) usage(`accounts ${action}: <id> required (lowercase, digits, hyphens; max 32)`);
   if (action === 'add') {
@@ -536,6 +538,7 @@ function cmdPair({ pos, flags }) {
     return 0;
   }
   if (!SENDER_RE.test(senderId)) usage('senderId must be a numeric Telegram id');
+  requireOperator('pair');
   const r = pairApply(bot, senderId);
   out(`pair: ${bot} allowFrom ${r.added ? 'added' : 'already had'} ${senderId}`);
   out(`pair: pending entries cleared: ${r.cleared}`);
@@ -724,7 +727,10 @@ function logApproval(bot, line) {
 }
 
 function requestedBy(flags) {
-  if (flags['requested-by']) return String(flags['requested-by']);
+  if (flags['requested-by']) {
+    requireOperator('--requested-by');
+    return String(flags['requested-by']);
+  }
   if (process.env.BOT_NAME) return `bot:${process.env.BOT_NAME}`;
   return `operator:${process.env.USERNAME || process.env.USER || 'unknown'}`;
 }
@@ -2073,8 +2079,8 @@ function cmdUpdate({ flags }) {
   if (flags.apply && flags.skip) usage('update: --apply <tag> or --skip <tag>, not both');
   const tag = flags.apply || flags.skip;
   if (tag) {
+    requireOperator(`update --${flags.apply ? 'apply' : 'skip'}`);
     const who = requestedBy(flags);
-    if (who.startsWith('bot:')) fail('update: apply/skip is an operator action; a bot session cannot decide a harness update');
     const u = readUpdates();
     const rel = u.releases.find((r) => r && String(r.tag) === String(tag));
     if (!rel) fail(`update: no release ${tag} in ${updatesPath()} (botcorp update lists them; --check records new ones)`);
@@ -2129,7 +2135,7 @@ function cmdCc({ pos, flags }) {
     return code || shellDaemonScript('cc.ps1', ['-Test'], 'cc test');
   }
   if (action === 'rollback') {
-    if (requestedBy(flags).startsWith('bot:')) fail('cc rollback: an operator action; a bot session cannot move the Claude Code pin');
+    requireOperator('cc rollback');
     return shellDaemonScript('cc.ps1', ['-Rollback', ...(flags.to ? ['-To', String(flags.to)] : [])], 'cc rollback');
   }
   usage('cc status [--json] | cc test | cc rollback [--to <version>]');
@@ -2167,6 +2173,7 @@ async function cmdInstall({ pos, flags }) {
 function cmdCockpit({ pos, flags }) {
   const action = pos[1];
   const file = path.join(BOTCORP_HOME, 'access.json');
+  if (action === 'expose' || action === 'unexpose') requireOperator(`cockpit ${action}`);
   if (action === 'expose') {
     const team = flags.team ? String(flags.team) : usage('cockpit expose --team <slug> --aud <aud> --yes');
     const aud = flags.aud ? String(flags.aud) : usage('cockpit expose --team <slug> --aud <aud> --yes');
@@ -2866,7 +2873,9 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   config add <bot> <automations|tools|secrets> <json entry|key> | config remove <bot> <automations|tools|secrets> <name|key>
   approvals [--json]   (every bot's pending widening changes, with a diff and why)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
-      (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env)
+      (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
+       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip,
+       cc rollback and --requested-by)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
