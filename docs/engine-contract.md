@@ -12,8 +12,8 @@ this public repo.
 
 | Zone | Paths | Tracked by this repo? | Who writes it |
 |---|---|---|---|
-| **BOTCORP (tracked, read-only to every bot)** | everything at the repo root not listed below — `harness/`, `cockpit/`, `daemon/`, `cli/`, `templates/`, `docs/`, `scripts/`, `.github/`, `bots/README.md`, `bots/_example/` | YES | upstream only, via a merged `suggest/*` PR (`docs/improvement-cycle.md`) |
-| **`bots/<name>/`** (a bot's own soul) | `bot.yaml`, `CLAUDE.md`, `memory/`, the bot's own `tools/`, `.claude/{rules,agents,skills,settings.local.json}` | NO (`bots/*` is whitelist-ignored — only `README.md` and `_example/` are re-included) | that bot, freely |
+| **BOTCORP (tracked, read-only to every bot)** | everything at the repo root not listed below — `harness/`, `cockpit/`, `daemon/`, `cli/`, `templates/`, `docs/`, `scripts/`, `.github/`, `bots/README.md`, `bots/_example/`, `bots/_canary/bot.yaml` | YES | upstream only, via a merged `suggest/*` PR (`docs/improvement-cycle.md`) |
+| **`bots/<name>/`** (a bot's own soul) | `bot.yaml`, `CLAUDE.md`, `memory/`, the bot's own `tools/`, `.claude/{rules,agents,skills,settings.local.json}` | NO (`bots/*` is whitelist-ignored — only `README.md`, `_example/` and `_canary/bot.yaml` are re-included) | that bot, freely |
 | **RUNTIME** | `bots/<name>/.claude-<name>/` (Claude Code's own config home), `bots/<name>/.vault/` (DPAPI secrets), `~/.botcorp/` (daemon state, logs, `access.json`, `tunnel.token`) | NO | the daemon, the CLI, and Claude Code itself |
 
 `bots/<name>/.claude/settings.json` sits in the middle: it is **generated**
@@ -45,9 +45,12 @@ project).
 4. **Git-backing a bot's memory is opt-in, and must never target the BotCorp
    origin.** A bot's folder is a plain gitignored directory, not a nested git
    repo, by default. The `backup.git_remote` module (`bot.yaml` `backup:
-   {git_remote: <url>}`), off by default, is the only path that versions
+   {git_remote: <url>}`), off by default, is the path that versions
    `memory/` — and it always points at the bot's OWN remote, never at this
-   repo. Moving a bot between machines goes through `botcorp export` /
+   repo. (The `memory_sync` module, also off by default, is the other one: on
+   Stop it commits `memory/`, pulls with rebase and pushes to `origin main`
+   whenever the bot folder is its own git repo whose origin is not BotCorp,
+   whatever `backup` says.) Moving a bot between machines goes through `botcorp export` /
    `botcorp import` instead (vault excluded; tokens re-entered on the new
    box) — see `docs/adopt-existing-bot.md`.
 5. **A pull conflicting with a local edit to a tracked file is the signal you
@@ -61,7 +64,7 @@ project).
 ## Active tripwires (defense in depth)
 
 - **Whitelist `.gitignore`** — `bots/*` then `!bots/README.md` /
-  `!bots/_example/` — a bot's state cannot be staged into this repo even by
+  `!bots/_example/` / `!bots/_canary/bot.yaml` — a bot's state cannot be staged into this repo even by
   a careless `git add -A`.
 - **`config-guard.sh`** (`PreToolUse` on `Edit|Write|MultiEdit|NotebookEdit`)
   — FAIL-CLOSED (exit 2): blocks a bot from directly editing its own
@@ -70,14 +73,17 @@ project).
   (`botcorp config set`, `botcorp secrets set`, the cockpit pairing panel)
   instead, so widening changes (new allow-listed sender, loosened policy, a
   new secret) can be gated on operator approval.
-- **`vault-guard.sh`** (`PreToolUse` on `Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`)
+- **`vault-guard.sh`** (`PreToolUse` on `Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit`; cannot be turned off with `hooks_disable`)
   — FAIL-CLOSED (exit 2): blocks any tool call that touches a bot vault
   (`.vault/`, any bot's — its own included), `secrets.ps1`/`vault.ps1`/
   `accounts.ps1`, the `ProtectedData` DPAPI API, the `secret-access.jsonl`
-  audit log, or the secrets CLI's mutating verbs (`botcorp secrets
+  audit log, the cockpit's `cockpit-approve-token` file, or the secrets CLI's mutating verbs (`botcorp secrets
   get|unlock|lock|import-bundle|export-bundle|migrate`); `secrets
   set|list|delete|audit` stay open since that's the operator flow.
-- **`core-guard.sh`** (`PostToolUse` on the same matcher) — warn-only: tells
+- **`operator-guard.sh`** (`PreToolUse` on `Bash|PowerShell`; cannot be
+  turned off with `hooks_disable` either) — FAIL-CLOSED (exit 2): blocks
+  `botcorp approve|reject|accounts use` in a command.
+- **`core-guard.sh`** (`PostToolUse` on `Edit|Write|MultiEdit|NotebookEdit`) — warn-only: tells
   the bot the moment it edits a TRACKED harness file outside a `suggest/*`
   branch, before the divergence becomes a silent one.
 - **pre-commit + CI secret scan** (`scripts/secret-scan.sh`) and
@@ -90,8 +96,8 @@ project).
 
 ## Why whitelist-gitignore instead of trust
 
-`bots/*` is ignored with explicit re-includes for the shipped example and
-README only. So even a careless `git add -A` from inside a BotCorp checkout
+`bots/*` is ignored with explicit re-includes for the shipped example, the
+README and the canary bot's `bot.yaml` only. So even a careless `git add -A` from inside a BotCorp checkout
 cannot stage a bot's identity, memory, vault, or config home. If a future
 change ships a new tracked file under `bots/`, it must be whitelisted in
 `.gitignore` in the same `suggest/*` PR — otherwise no bot ever receives it.

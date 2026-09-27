@@ -47,7 +47,7 @@ BotCorp/                     PUBLIC repo, ONE checkout per machine (e.g. C:\User
   cockpit/                    browser UI (express+ws+xterm) — attaches to pty-hosts, never owns one
   cli/botcorp.mjs             new | adopt | sync | secrets | pair | config | status | update | suggest | doctor
   templates/bot/               CLAUDE.md, bot.yaml, .gitignore, settings.local.json, tg-enable.settings.json
-  bots/                        GITIGNORED whitelist-style (only bots/README.md + bots/_example/ are tracked)
+  bots/                        GITIGNORED whitelist-style (only bots/README.md, bots/_example/ and bots/_canary/bot.yaml are tracked)
     <name>/                    = BOT_HOME, this bot's own private space
       bot.yaml  CLAUDE.md  memory/  tools/  .claude/{settings.json(generated), settings.local.json, rules/, agents/, skills/}
       .claude-<name>/          = CLAUDE_CONFIG_DIR (gitignored): Claude Code's own transcripts, plugin state, access.json
@@ -63,11 +63,11 @@ safety hooks. A bot opts into the rest through `bot.yaml`:
 
 | Catalogue | Entries | Opt in via |
 |---|---|---|
-| Hooks | session start/end, inbound-prompt guard, precompact extract + timeline, memory sync, cost meter, auto-commit, block-dialogs, config-guard, vault-guard, core-guard, stop-failure, notification, subagent start/stop | loaded from the plugin automatically; `bot.yaml` `harness.hooks_disable: [...]` turns any off |
+| Hooks | session start/end, inbound-prompt guard, precompact extract + timeline, memory sync, cost meter, auto-commit, block-dialogs, config-guard, vault-guard, operator-guard, core-guard, stop-failure, notification, subagent start/stop | loaded from the plugin automatically; `bot.yaml` `harness.hooks_disable: [...]` turns any off except vault-guard and operator-guard |
 | Agents | `planner`, `senior-coder`, `coder`, `one-shot`, `critic`, `fable` | all available; a same-named file in the bot's own `.claude/agents/` overrides one |
 | Skills | `review-artifact`, `morning`, `standup`, `weekly`, `tasks`, `notes`, `prd`, `launch` (+ the `/critic` command) | `harness.skills: all` or a list; the rest are hidden |
 | Modules | `telegram`, `board`, `cost_meter`, `usage_resume`, `alert_triage`, `hub`, `janitor`, `remote_control`, `lessons`, `debrief`, `auto_commit`, `memory_sync`, `sound`, `telemetry`, `backup` | `harness.modules.<x>: true` in `bot.yaml` → env for the launched session + which daemon ticks run for this bot |
-| Ticks / automations | board poll, worklist, janitor, hub push, harness-update check (records pending releases only — see Admin-gated harness updates below), plus any bot-declared job | per module, or declared directly under `bot.yaml` `automations:` — run by the one host daemon, with backoff, daily caps and idle-gating |
+| Ticks / automations | board poll, worklist, janitor, hub push, harness-update check (records pending releases only — see Admin-gated harness updates below), plus any bot-declared job | per module, or declared directly under `bot.yaml` `automations:` — run by the one host daemon, with backoff, daily caps and idle-gating; board poll, hub push and janitor run only on a tick that leaves the bot alone (a down or restarting bot skips them) |
 | Integrations | Telegram (the official Claude Code plugin), a GitHub Projects (v2) board, a generic status hub (`integrations.hub`, optional), Cloudflare Tunnel + Access for cockpit exposure (`integrations.access`, optional — loopback stays the default until you run `botcorp cockpit expose`), a bot's own tools for anything else | the matching `integrations.<x>` block in `bot.yaml`; credentials live in `.vault/`, never in the file itself |
 
 ## Moving a bot between machines

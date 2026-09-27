@@ -39,9 +39,11 @@
 # failed: ... | skipped: ...), state `last_result`.
 #
 # `botcorp automations pause` flips `enabled: false` in bot.yaml; this script
-# only honours it. -RunNow <name> queues one run now, respecting timeout_min but
-# not max_per_day (the cockpit's "Run now"). `botcorp automations <bot> run
-# <name>` queues the same thing in events/run-now.queue for the next pass.
+# only honours it. -RunNow <name> runs one now, respecting timeout_min but
+# not max_per_day. The cockpit's "Run now" and `botcorp automations <bot> run
+# <name>` instead queue it in events/run-now.queue for the next pass, which
+# still obeys max_per_day (and, like -RunNow, the account block, idle_gated
+# and enabled).
 #
 # Test seam: BOTCORP_FAKE_NOW=<ISO> overrides "now" for the schedule (due,
 # next_due, runs_today's date, run start/end stamps). Harmless when unset.

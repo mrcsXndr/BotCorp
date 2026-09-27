@@ -12,8 +12,8 @@ in-memory TaskList tool can't persist:
   - recent_activity (timeline)
   - notes (free-form)
 
-Each tick reads this file at startup → has perfect context regardless of
-session age. Each tick updates it before exiting via the Stop hook.
+A manual tool: no hook, tick or job calls it, so the file changes only when
+something runs this script (a bot's own automation can).
 
 Replaces the brittleness of "git log + grep + reasoning" with structured
 disk state.

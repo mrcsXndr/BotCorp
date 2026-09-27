@@ -10,12 +10,16 @@ keeps alive through `/healthz`.
 
 Two things it deliberately does NOT do:
 
-- **It has no liveness authority and never spawns a pty.** Sessions live in
-  `daemon/pty-host.mjs` (one process per bot); the cockpit attaches to them.
-  Closing the page, restarting or updating the cockpit never touches a session.
-- **It never changes state itself.** Every write goes through the CLI
-  (`node cli/botcorp.mjs ...`), so the daemon, the operator's terminal and the
-  cockpit share one implementation of each rule.
+- **It has no liveness authority and never spawns a pty.** A session is a
+  Claude Code background session (`harness.session: bg`, the default) or lives
+  in `daemon/pty-host.mjs` (`session: pty`, one process per bot); the cockpit
+  attaches to either. Closing the page, restarting or updating the cockpit
+  never touches a session.
+- **It never changes a bot's state itself.** Every bot or config write goes
+  through the CLI (`node cli/botcorp.mjs ...`), so the daemon, the operator's
+  terminal and the cockpit share one implementation of each rule. The server
+  writes only its own files: the audit log, paste uploads and the
+  approve-token file; it reads `updates.json` directly for the release list.
 
 ## Layout
 
@@ -176,7 +180,7 @@ restarts a dead one with `--continue`.
 
 ### Attach mode (background sessions)
 
-A bot's `harness.service` (`bot.yaml`, default `bg`) runs it as a background
+A bot's `harness.session` (`bot.yaml`, default `bg`) runs it as a background
 Claude Code session rather than one the pty-host owns outright. When
 `GET /api/bots/:name` reports `service: "bg"` and a `bg_id` in the daemon's
 own `state/<bot>.json`, the cockpit reads both defensively (either can be
@@ -220,7 +224,8 @@ account only, so a cockpit the daemon started (no terminal) is usable too.
 - Chat and Terminal are two views of ONE socket (`/term/<bot>`). The server
   bridges it to the pty-host and pushes `{t:'chat', ...}` turns on it (tailed
   from the transcript by byte cursor every 1.5 s), so the client polls nothing
-  per bot; only the bot list is a single 5 s poll.
+  per bot; only the bot list and the attention list (`/api/attention`) poll,
+  every 5 s each.
 - Reconnect with backoff (1 s doubling to 15 s) whenever the socket drops
   while the bot stays selected. A pty exit shows "Session exited with code N.
   Restart it?" with a Restart button.

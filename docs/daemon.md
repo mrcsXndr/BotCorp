@@ -48,15 +48,15 @@ never secrets:
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
-| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
+| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `pinned_bg_id` (the bg id BotCorp pinned), `session_blocked` (what a bg session waits on), `cc_roll_at` / `account_roll_at` (the last roll onto the Claude Code pin / the bot's account), `registry_scan_at`, `updated_at`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session; it exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no client |
 | `state/<bot>/inbox.jsonl`, `inbox.results.jsonl`, `inbox.drainer` | `botcorp send` + the inbox drainer (core/inbox.mjs) | the bot's message queue, each message's status changes, the live drainer's pid (docs/cli.md `send`) |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
 | `state/unlock/<bot>.key` | `botcorp secrets unlock` | the operator-lock unlock cache: the vault key, DPAPI-wrapped with entropy bound to the current boot time — dies with the boot, so an operator lock (`vault.lock: operator`) needs `unlock` again after every reboot |
 | `state/<bot>/automations.json`, `runs.jsonl`, `events/`, `jobs/` | automations.ps1 | see docs/automations.md |
 | `state/install.json` | install.ps1 | `{user_profile, user, logon_type, run_level, registered_at, botcorp_root, runtime_root, interval_min}` |
-| `state/daemon.json` | tick | `cockpit_pid`, `cockpit_started_at`, `update_check_at` |
-| `state/launch-request.json` | tick / restart.ps1 | `{bot, requested_at}` read by launch-visible.ps1 (ignored after 10 min) |
+| `state/daemon.json` | tick | `cockpit_pid`, `cockpit_started_at`, `update_check_at`, `cc_check_at` |
+| `state/launch-request.json` | tick / restart.ps1 | `{bot, requested_at, by}` read by launch-visible.ps1 (ignored after 10 min) |
 | `state/updates.json` | update.ps1 | `{checked_at, head, head_sha, releases:[{tag, sha, date, what[], why[], value[], status}]}`; status `pending` / `apply_requested` / `applied` / `skipped` / `failed` (+ `fail_reason`, `fail_detail`) |
 | `state/harness.json` | update.ps1 -Apply | `{tag, sha, channel, applied_at, schema, migrations}` |
 | `state/accounts.json` | usage tooling | `{"accounts":{"<account>":{"blocked_until":"<iso>","bots":[...]}}}` -> non-critical automations pause |
@@ -88,7 +88,7 @@ back as a claim:
 |---|---|---|
 | `desired` | launch.ps1 (running), stop.ps1 and `botcorp stop` (stopped) | `{state: running\|stopped, by, at}`: what the operator or the daemon asked for |
 | `launch` | vault.ps1 (attestation), launch.ps1 / restart.ps1 / tick (`Set-BotLaunchPhase`) | the attestation plus `{phase, phase_at, exit_code}`; `phase` is `starting`, `cold-starting`, `restarting`, `up`, `exited` or `locked` (the vault is operator-locked, see below) |
-| `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, awaiting_prompt, at, kind, claude_pid, session_id, quiet_s}` |
+| `observed` | tick (`botcorp observe --all --json`, every tick) | `core/observe.mjs`: `{bot, alive, activity, phase, poller, bg_id, blocked, awaiting_prompt, at, kind, claude_pid, session_id, quiet_s, cc_version, cc_exe}` |
 
 `activity` is what the session does: `down` (no live claude or pty-host),
 `blocked` (it waits on something nothing unattended answers: a login, a
@@ -116,9 +116,9 @@ v1 file into the blocks (idempotent: a second run changes no byte), and every
 `Write-BotState` converts on write as well (`ConvertTo-BotStateV2`). The
 state schema is versioned in each file (`schema: 2`), separately from
 `botcorp.json` `botYamlSchema`, which numbers the `bot.yaml` migrations in
-`harness/migrations/`. It is 2 since v0.6.0: the `tools:` list and
-`harness.tools_registry` are additive (absent = registry off, `warn`), so no
-migration script runs.
+`harness/migrations/`. It is 3 since v0.7.0 (2 since v0.6.0): the `tools:`
+list, `harness.tools_registry` and `account` are additive (absent = registry
+off, `warn`; no account = the bot's own login), so no migration script runs.
 
 ## Two session kinds (`bot.yaml` `harness.session`)
 
@@ -440,20 +440,27 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
   decision              not alive                                    -> cold-start (unless state/<bot>.paused or harness.service: manual)
                         alive + DEAD, launch older than LauncherGraceMin -> restart   (idle-gated)
                         alive + OWNED / UNKNOWN                      -> none
-                        none, bg bot running a Claude Code that is not the pin, Get-CcRollAction roll
-                                                                     -> restart onto the pin ("cc <from> -> <pin>")
                         cold-start/restart, vault operator-locked -> locked (state/<bot>.json launch.phase: locked;
                                     waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
                                     without secrets, a restart would throw away the ones the live session holds)
   guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
                         hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
-  isolated ticks        usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
+  every tick            usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
                         alert_triage: alert_triage.py scan [--session-busy] every BOT_TRIAGE_EVERY_MIN (30)
+  only when the decision is still none (a down, paused, locked or restarting bot skips all of these):
+                        cc roll: bg bot running a Claude Code that is not the pin, Get-CcRollAction roll
+                                 -> restart onto the pin ("cc <from> -> <pin>")
+                        account roll: the last launch attempted another account than bot.yaml `account:`,
+                                 Get-AccountRollAction roll -> restart onto it
                         board: gh_projects.py poll -> tg_send.py per queued card
                         hub:   tools/infra/hub_push.py when present
                         janitor: tools/infra/resource_monitor.ps1 -Clean once a day per bot
                                  (janitor: report -> the same scan WITHOUT -Clean; the log line names what it found)
-                        automations: daemon/automations.ps1 -Bot <name> (always)
+                        registry scan: botcorp tools <bot> scan once a day, bots with a `tools:` list only
+                        (these four run even when a cc/account roll was just decided)
+  late decisions        usage_resume wanted and still none -> restart / cold-start ("usage-limit window passed");
+                        a harness release applied this tick and still none + alive -> restart onto it
+  every tick            automations: daemon/automations.ps1 -Bot <name> (always)
                         inbox: a message waits in state/<bot>/inbox.jsonl and no drainer runs -> botcorp inbox <bot> kick
                                (a detached drainer; not on -DryRun)
   act                   start cap: MaxStartsPerWindow (3) ACTION=START lines per WindowMin (30) in logs/<bot>/daemon.log

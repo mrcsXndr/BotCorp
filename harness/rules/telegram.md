@@ -122,10 +122,12 @@ The inbound tag carries media as attributes, never in the text:
   - `.pdf` → `Read` with `pages` (over 10 pages, pages are required)
   - text/code/`.csv`/`.json`/`.md`/`.txt` → `Read` it
   - audio (`.oga .ogg .opus .mp3 .m4a .wav`; Telegram voice notes are `.oga`)
-    → `python tools/tg/transcribe.py <path>` (local faster-whisper, CPU int8,
-    `pip install faster-whisper`; `.oga` decodes via its bundled PyAV so no
-    ffmpeg is needed; exit 2 + the exact `pip install` line if it is not
-    installed — relay that line, don't guess). Treat the transcript as the
+    → `python tools/tg/transcribe.py <path>` (Groq `whisper-large-v3-turbo`
+    when `GROQ_API_KEY` is set in `.env`, which sends the audio to Groq;
+    local faster-whisper, CPU int8, when the key is absent or the Groq call
+    fails: `pip install faster-whisper`; `.oga` decodes via its bundled PyAV so
+    no ffmpeg is needed; exit 2 + the exact `pip install` line if neither
+    works — relay that line, don't guess). Treat the transcript as the
     message text.
   - anything else → report name/size/type back and ask what to do with it.
 - **After handling, log it** so history can find it later:

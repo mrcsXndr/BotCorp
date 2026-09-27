@@ -94,7 +94,7 @@ def _initial_template(session_id: str) -> str:
         "# Director's Journal",
         "",
         "> Live structured working memory. Append entries as the session progresses.",
-        "> Idempotent — duplicate appends within the same minute are skipped.",
+        "> Idempotent — an append whose text is already in its section is skipped.",
         "",
     ]
     for section in SECTION_ORDER:

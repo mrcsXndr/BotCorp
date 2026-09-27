@@ -13,7 +13,7 @@
 #            CHECK (records releases only), APPLY of an admin-requested release
 #            only when every bot is at a safe point (then the bots restart),
 #            hourly Claude Code check (daemon/cc.ps1: pin, stage, a detached
-#            gate run on _canary), per-bot janitor once a day.
+#            gate run on _canary).
 #   per bot: liveness. `harness.session: bg` (default): the bot is a Claude Code
 #            background session - `claude agents --json` (under the bot's
 #            CLAUDE_CONFIG_DIR) lists its id with a live pid, or the recorded
@@ -33,9 +33,12 @@
 #                                             marker or transcript quiet)
 #              alive + OWNED/UNKNOWN      -> nothing
 #            then the isolated per-bot ticks (each in its own try/catch, module
-#            gated): usage-limit resume, alert triage, the roll onto the
-#            Claude Code pin (between turns only), board
-#            poll, hub push, and the bot's automations (daemon/automations.ps1).
+#            gated): usage-limit resume and alert triage every tick; ONLY when
+#            the decision is still "nothing": the roll onto the Claude Code pin
+#            or the bot's account (between turns only), board poll, hub push,
+#            the daily janitor and the daily tools-registry scan; then the
+#            bot's automations (daemon/automations.ps1) and the inbox kick,
+#            every tick.
 #   guards:  session-0 stray sweep, launcher grace + hung-launcher kill,
 #            MaxStartsPerWindow cap (ACTION=START lines in the bot's log),
 #            hidden-session-0 -> visible migration when a user is logged in

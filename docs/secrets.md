@@ -139,7 +139,7 @@ What BotCorp enforces instead of an OS boundary it doesn't have:
   that bot's own session env, under its own env var name;
 - **the vault-guard tool hook** (`harness/hooks/vault-guard.sh`) - the
   boundary a bot session actually meets: it blocks every `Read` / `Glob` /
-  `Grep` / `Bash` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` call that
+  `Grep` / `Bash` / `PowerShell` / `Edit` / `Write` / `MultiEdit` / `NotebookEdit` call that
   touches a `.vault/` directory (any bot's, including its own), the
   `secrets.ps1` / `vault.ps1` / `accounts.ps1` scripts, the secrets CLI's
   mutating verbs, `ProtectedData`, or the audit log itself. `hooks_disable`
@@ -175,7 +175,7 @@ UPPERCASE form (`daemon/_common.ps1` `Get-SecretEnvName`):
 | anything else, e.g. `hub_token` | its UPPERCASE form, e.g. `HUB_TOKEN` |
 
 A vault key that exists but is NOT in `secrets:` is never decrypted for the
-launch; `bots/<name>/logs/<name>/launches.log` names it: `undeclared vault
+launch; `<BOTCORP_HOME>/logs/<name>/launches.log` names it: `undeclared vault
 key(s) NOT injected: <keys> (add to bot.yaml secrets: to inject)`.
 `automations[].secrets` must be a subset of the bot's own `secrets:` list -
 `daemon/botyaml.mjs`'s `--validate` rejects an automation that names a key
@@ -186,7 +186,7 @@ with no vault entry, or a vault entry that's present but undeclared).
 ### The vault-guard hook
 
 `harness/hooks/vault-guard.sh` is a `PreToolUse` hook matched on
-`Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`. It fails CLOSED for
+`Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit`. It fails CLOSED for
 what it names (exit 2, tool call blocked, the message fed back to the model)
 and for a payload it cannot parse (bad JSON, or no working python), and is
 silent (exit 0) for everything else. It blocks any tool input whose
@@ -195,8 +195,8 @@ path/pattern/command mentions: a `.vault` directory; `secrets.ps1` /
 export-bundle|migrate`; the DPAPI `ProtectedData` API; or
 `secret-access.jsonl`. `daemon/botyaml.mjs`'s `harness.hooks_disable` list is
 validated against the hooks that exist, and separately refuses `vault-guard`
-by name no matter what a bot's own config asks for - a bot can disable
-`play-sound`, not this.
+and `operator-guard` by name no matter what a bot's own config asks for - a
+bot can disable `play-sound`, not these.
 
 ### Audit log
 
@@ -208,8 +208,9 @@ succeeds:
 {"ts":"2026-09-25T00:00:00.0000000Z","bot":"demo","key":"oauth_token","reason":"launch","pid":12345,"ppid":6789,"ok":true}
 ```
 
-`reason` is one of `launch | automation | cli | list | export | doctor |
-unlock | import`; a failed decrypt still gets a line (`ok:false`) and rethrows.
+`reason` is one of `launch | automation | board | cli | list | export | doctor |
+unlock | import` (`board` is the daemon tick's `gh_token` decrypt for the
+board poll, which runs with no launch nonce); a failed decrypt still gets a line (`ok:false`) and rethrows.
 Never a value, never even a hash of one. Read it with:
 
 ```
@@ -274,7 +275,7 @@ failed), so it can never authorise a second decrypt.
 
 An unattested launch - `launch.ps1` run some other way - still runs, but
 WITHOUT secrets and without the Telegram poller, and says so in
-`bots/<bot>/logs/<bot>/launches.log`: `unattested launch: no secrets injected
+`<BOTCORP_HOME>/logs/<bot>/launches.log`: `unattested launch: no secrets injected
 (use botcorp start <bot>)`. `launch.ps1 -DryRun` prints `attested: yes` or
 `attested: NO (no secrets would be injected)`.
 
@@ -330,7 +331,7 @@ at once (drops the unlock cache) with no passphrase needed.
 
 **While locked:** `Get-VaultSecret` / `Set-VaultSecret` throw `vault: <bot>
 is locked` (audited `ok:false`); the daemon tick will not cold-start or
-restart the bot (`state/<bot>.json status: locked`, `daemon.log` logs `vault
+restart the bot (`state/<bot>.json` `launch.phase: locked`, `daemon.log` logs `vault
 LOCKED ...`); `botcorp start` refuses outright; `botcorp status` shows
 `vault: operator v2 LOCKED`; `botcorp doctor` WARNs `<bot>: vault lock`
 (also WARNing when `bot.yaml`'s `vault.lock` disagrees with the vault's
@@ -339,7 +340,7 @@ actual mode). The cockpit's vault drawer shows the lock state
 field that posts to `POST /api/bots/:name/unlock` - never from a chat
 message, and behind Cloudflare Access whenever the cockpit is exposed.
 
-Audit reasons are now `launch | automation | cli | list | export | doctor |
+Audit reasons are now `launch | automation | board | cli | list | export | doctor |
 unlock | import`. Windows Hello (as an alternative to typing a passphrase)
 is deferred. `bot.yaml`'s `vault.lock: null` currently means `none` - there
 is no host-wide default implemented (a per-machine default was considered

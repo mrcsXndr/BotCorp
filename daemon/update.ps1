@@ -31,8 +31,9 @@
 #   `git checkout --detach <from>`, status failed with the smoke tail, then a
 #   Ready card (gh_projects.py add "HARNESS UPDATE FAILED <tag>") for every bot
 #   whose board module is on, else a HUMAN: line in <BotHome>/memory/metrics/alerts.log.
-#   The cockpit is restarted onto the new code and /healthz is polled before the
-#   apply counts as a success. The tick (Invoke-UpdateApply) only calls this
+#   Then the cockpit is restarted onto the new code and /healthz polled for up
+#   to 25 s; a failed poll is only logged and never undoes the apply (the
+#   release is already marked applied). The tick (Invoke-UpdateApply) only calls this
 #   for a release with status apply_requested AND when every bot is at a safe
 #   point; afterwards the bots restart through the normal restart path.
 # Exit 0 = nothing to do / applied / recorded; 1 = check or apply failed.

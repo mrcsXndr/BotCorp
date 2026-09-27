@@ -16,8 +16,9 @@
 #   4. Pushes
 #   5. Reports what got rescued
 #
-# Designed to be called at the start of an autonomous-tick prompt. Idempotent.
-# Safe to run when there's nothing to rescue.
+# A manual tool: no hook, tick or job calls it (call it from a bot's own
+# automation or prompt if you want it). Idempotent. Safe to run when there's
+# nothing to rescue.
 #
 # Usage:
 #   bash tools/infra/orphan_rescue.sh                    # rescue the bot's own repo (+ BOT_RESCUE_REPOS)

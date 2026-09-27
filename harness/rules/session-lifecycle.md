@@ -13,13 +13,13 @@ breakpoint, DON'T roll.
 
 ## When to roll (ALL must hold)
 
-1. **Context large** — last-turn context tokens exceed `BOT_SESSION_ROLL_TOKENS`
-   (a reasonable default: 500,000). Resume-picker risk begins meaningfully
-   before that ceiling, so don't wait for the hard limit.
-2. **Idle** — the session journal/transcript has been quiet for `BOT_IDLE_MIN`
-   (default 5m): no turn in flight.
+1. **Context large** — last-turn context tokens are well into the hundreds of
+   thousands (around 500,000 is a reasonable line; the Director judges it,
+   nothing measures it for you). Resume-picker risk begins meaningfully
+   before the hard ceiling, so don't wait for it.
+2. **Idle** — no turn in flight.
 3. **No in-flight work** — no running subagents, no in-progress task, no build
-   the Director is actively watching, no fresh `.busy` marker.
+   the Director is actively watching.
 4. **Not mid-thread with the operator** — not waiting to answer a question that
    needs this session live *right now*. The journal captures the thread, so a
    roll is usually still fine — but don't roll in the middle of a
@@ -32,8 +32,9 @@ breakpoint, DON'T roll.
    (distils the journal; session-start re-injects it as "Last session").
 3. **TDL `## Open` updated** — every unfinished item has a status tag + the
    exact next step + blocker, so the fresh session resumes precisely.
-4. **Roll fresh** — drop `.claude/.botcorp_fresh_restart` (marker younger than
-   300s forces a NON-continue start), then trigger the restart script.
+4. **Roll fresh** — `botcorp restart <bot> --fresh` (it drops
+   `.claude/.botcorp_fresh_restart`; a marker younger than 300s forces a
+   NON-continue start).
    Session-start re-injects journal + timeline + last-session + TDL Open +
    recall. **Verify it landed:** the restart log must confirm a fresh start,
    and the next status footer must show a NEW session id — a roll is not done
@@ -45,8 +46,9 @@ running model.
 
 ## Who triggers it
 
-- **Manual (default)** — the Director decides at a breakpoint and runs the
-  checklist above. This is the safe, proven path.
+- **Manual (the only way)** — the Director decides at a breakpoint and runs the
+  checklist above. Nothing rolls a session on its own: there is no token
+  threshold and no automatic roll.
 - **Declared breakpoint** — an idle-transcript signal rarely holds during long
   autonomous work (the Director's own tool call is always the freshest
   transcript write, so it can never observe itself as idle). Instead the
@@ -54,15 +56,12 @@ running model.
   subagent running, no in-progress task and no build being watched, drop
   `.claude/.botcorp_breakpoint` as the **last action of the turn** and end the
   turn. For the next `BOT_BREAKPOINT_TTL_MIN` (30) minutes the daemon's
-  session-busy check treats the session as IDLE (a fresh `.busy` marker still
-  wins) and may act on it — an auto-restart, a deferred idle-gated heal, a
-  scheduled roll. A restart consumes the marker; a stale one is ignored. The
-  invariant holds because the Director only drops it when the turn is
-  genuinely over — never mid-task, never with work in flight.
-- **Auto (gated, opt-in)** — the daemon can initiate a graceful roll on its own
-  tick when all 4 conditions above hold, reusing the same idle-gate logic.
-  CONSERVATIVE: unsure ⇒ no roll; never acts on a session under
-  `BOT_IDLE_MIN`. Off by default until observed safe over real sessions.
+  session-busy check treats the session as IDLE and may act on it — a
+  deferred idle-gated heal, an update restart (`update_restart.py`, which
+  consumes the marker). Without a marker the daemon counts a session as idle
+  once its transcripts have been quiet for 5 minutes; a stale marker is
+  ignored. The invariant holds because the Director only drops it when the
+  turn is genuinely over — never mid-task, never with work in flight.
 
 ## Never kill a live session to "fix" it
 

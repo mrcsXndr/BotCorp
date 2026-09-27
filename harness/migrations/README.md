@@ -10,14 +10,16 @@ owns.
 
 `NNN-<slug>.ps1`, zero-padded, one number per schema bump —
 e.g. `002-rename-hooks-disable-key.ps1`. The number must match the
-`botYamlSchema` value it migrates a bot **onto**, so `botcorp update` can
-tell which migrations a given bot still needs by comparing its recorded
-schema version against `botcorp.json`.
+`botYamlSchema` value it migrates the bots **onto**, so `update.ps1 -Apply`
+can tell which migrations the machine still needs by comparing the schema
+recorded in `~/.botcorp/state/harness.json` against its number.
+
+(No migration exists yet: this folder holds only this README.)
 
 ## Idempotent, always
 
-A migration runs against every bot on the machine at `botcorp update -Apply`
-time, and must be safe to run twice: check the state it wants before
+A migration runs once per machine at `update.ps1 -Apply` time and has to
+handle every bot itself. It must be safe to run twice: check the state it wants before
 changing it, and no-op cleanly if the target state already holds. Bots are
 not guaranteed to migrate in lockstep — one bot mid-task keeps its old
 harness loaded until its own next restart (`docs/engine-contract.md` /
@@ -26,23 +28,25 @@ that's already several schema versions ahead of another.
 
 ## What a migration receives
 
-Each script is invoked per bot as:
+Each script is invoked once, with no arguments, from the BotCorp root:
 
 ```powershell
-pwsh -NoProfile -File harness/migrations/NNN-slug.ps1 -Bot <name> -BotHome <path>
+pwsh -NoProfile -NonInteractive -File harness/migrations/NNN-slug.ps1
 ```
 
-`-BotHome` is `bots/<name>/` — the migration touches only files under there
-(`bot.yaml`, that bot's `.claude/`, its `memory/`); it never touches the
-harness itself. After every migration in the range runs clean,
-`botcorp update` calls `botcorp sync <bot>` to regenerate `settings.json`
-from the now-current `bot.yaml`.
+with `BOTCORP_ROOT` (the checkout) and `BOTCORP_HOME` (`~/.botcorp`) in its
+environment, bounded by what is left of the apply's 3-minute budget. It finds
+the bots itself (`bots/<name>/`) and touches only files under them
+(`bot.yaml`, a bot's `.claude/`, its `memory/`); it never touches the harness
+itself. After the migrations, `update.ps1` runs `daemon/sync.mjs <bot>` for
+every bot to regenerate `settings.json` from the now-current `bot.yaml`.
 
 ## Gating
 
-`botcorp.json`'s `botYamlSchema` is the ceiling: `botcorp update -Apply` runs
-every migration numbered above a bot's last-recorded schema version and at or
-below the new `botYamlSchema`, in order, then stamps the new version into
-`~/.botcorp/state/<bot>.json`. A migration that throws stops the update for
-that bot and leaves its schema version unstamped, so the next `update -Apply`
-retries it rather than skipping ahead.
+`update.ps1 -Apply` runs, in name order, every migration numbered above the
+schema recorded in `~/.botcorp/state/harness.json`. There is no upper bound:
+a migration numbered above the new `botYamlSchema` runs too. A migration's
+exit code is only logged: a failure does not stop the update, and the apply
+still stamps `max(old schema, botYamlSchema)` into `harness.json`, so a
+failed migration is NOT retried by the next apply. Its exit code is in the
+daemon log (`update: migration <name>: exit=<n>`).

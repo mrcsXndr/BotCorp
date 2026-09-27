@@ -107,8 +107,12 @@ streak and the interval/cron schedule resumes from the end of that run.
 A `kind: prompt` entry has its own gates (see above), and a prompt that is
 gated there is dropped until the next fire instead of being retried.
 
-`-RunNow <name>` (the cockpit's "Run now") ignores the schedule and
-`max_per_day`, and still respects `timeout_min`. `-DryRun` logs what would run.
+The cockpit's "Run now" and `botcorp automations <bot> run <name>` only
+append the name to `events/run-now.queue`; the next pass runs it regardless
+of its schedule, but it still obeys `max_per_day`, the account usage block,
+`idle_gated` and `timeout_min`, and it is dropped when the job is disabled
+or still running. Only calling `automations.ps1 -RunNow <name>` directly also
+skips `max_per_day`. `-DryRun` logs what would run.
 
 ## How a run executes
 

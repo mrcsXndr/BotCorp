@@ -47,8 +47,10 @@ own probes.
   section 2 sets active hours / no-auto-restart-with-users; it cannot stop an
   unattended restart, so a reboot is a normal event, not an incident).
 - Toolchain on the reference host: pwsh 7.6.6, node 25.2.1, python 3.14.2,
-  claude 2.1.282 (2.1.281 at the first install; nothing pins a version,
-  `botcorp.json.minClaudeCode` is the only floor).
+  claude 2.1.282 (2.1.281 at the first install). Bots run the Claude Code
+  version the host pins (`daemon/cc.ps1`, `botcorp cc status|rollback`,
+  docs/daemon.md "Claude Code pin"); `botcorp.json.minClaudeCode` is the floor
+  doctor checks.
 - From a Scheduled Task the shell's PATH is not the user's: bare
   `powershell`, `python` and `curl.exe` spawned ENOENT there. Everything now
   resolves system binaries absolutely (`docs/cli.md` → `doctor`).

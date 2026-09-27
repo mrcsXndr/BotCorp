@@ -10,7 +10,7 @@ writer. Full command reference: `docs/cli.md`.
 botcorp new
 ```
 
-(or the cockpit's "New bot" form.) On a terminal it first shows the BotCorp
+(CLI only: the cockpit has no create form.) On a terminal it first shows the BotCorp
 feature catalogue as one numbered checklist, defaults pre-marked: modules,
 skills, agents and integrations (telegram, board, hub, backup), each with a
 one-line description. Toggle by number, Enter to accept; the choices that
@@ -27,7 +27,9 @@ config home). Everything else defaults: name
 What you get: `bots/<name>/` with `bot.yaml`, a generated
 `.claude/settings.json`, `CLAUDE.md`, `memory/`, the vault entry
 `oauth_token` (DPAPI, this Windows account on this machine only), and a
-running session hosted by `daemon/pty-host.mjs`. The folder is a plain
+running session: a Claude Code background session by default
+(`harness.session: bg`), or one hosted by `daemon/pty-host.mjs` with
+`harness.session: pty`. The folder is a plain
 folder, not a git repo: BotCorp's `.gitignore` keeps everything under
 `bots/` out of the public repo, and `.vault/` / `.claude-<name>/` never leave
 the machine. Open the cockpit (`npm run cockpit`, `http://127.0.0.1:4477`)
@@ -119,14 +121,20 @@ tool — `Read`/`Bash` included — from touching a vault or the secrets CLI's
 mutating verbs). Two classes of change:
 
 - **Applies immediately** (written, then `sync`; effective at the next
-  session roll): `model`, `effort`, `persona`, `harness.modules.*`,
-  `harness.hooks_disable`, `automations.<name>.enabled`, `suggest.*`,
+  session roll): `model`, `effort`, `persona`, `harness.modules.*` (except
+  `remote_control`), `harness.hooks_disable`, turning a job OFF
+  (`automations.<name>.enabled false`), `suggest.*`,
   `integrations.hub.interval_s`, and anything else that does not widen.
 - **Widening changes wait for you.** Adding to
   `integrations.telegram.allow_from`, loosening `dm_policy`
   (`disabled` -> `allowlist` -> `pairing`), `permissions: bypass`, turning on
-  `harness.modules.remote_control`, or adding a vault key to an automation's
-  `secrets` are queued in `<BOTCORP_HOME>/state/<name>.approvals.json` and NOT
+  `harness.modules.remote_control`, changing `account`, adding a vault key
+  (`secrets`) or adding one to an automation's `secrets`, adding an
+  automation, turning a job ON (`automations.<name>.enabled` false -> true),
+  adding a `tools:` entry that is an integration or carries secrets, or
+  relaxing `harness.tools_registry` from `enforce` to `warn` (the full table:
+  `docs/cli.md` `config set`)
+  are queued in `<BOTCORP_HOME>/state/<name>.approvals.json` and NOT
   applied. The bot sees `queued for operator approval: botcorp approve <name>
   <id>` and tells you. You decide:
 

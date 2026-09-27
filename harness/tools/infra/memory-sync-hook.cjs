@@ -5,6 +5,10 @@
  * Auto-syncs the bot's `memory/` directory across machines via the bot's own
  * git repo.
  *
+ * Registered on **Stop only** (harness/hooks/memory-sync.sh, gated by the
+ * `memory_sync` module, not by `backup`); the pull-only branch below
+ * (UserPromptSubmit / SessionStart) has no registration and never fires.
+ *
  * - **UserPromptSubmit**: pull-rebase from origin/main if remote is ahead.
  *   Catches up the local memory before the user's next turn.
  * - **Stop / SubagentStop**: if memory has uncommitted changes, commit + pull --rebase + push.

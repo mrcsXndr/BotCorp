@@ -132,8 +132,10 @@ the hook returns at once. It also runs on a clean tree, so a failed push is
 retried on the next Stop. No origin = no push (`botcorp backup <bot>` adds
 it). Each attempt appends `<ts> push <branch> ahead=<n> rc=<exit>` to
 `<BOTCORP_HOME>/state/<bot>/push.log`; doctor's `<bot>: unpushed commits`
-reads it. A bot without `backup.git_remote` is untouched: commits stay
-local, as before.
+reads it. A bot without `backup.git_remote` is untouched by this hook:
+commits stay local, as before. (The separate `memory_sync` module pushes
+`memory/` on Stop whenever the bot folder is its own repo, whatever `backup`
+says: docs/engine-contract.md rule 4.)
 
 ### `adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]`
 
@@ -145,9 +147,10 @@ left untouched. The copy drops `.git`, `.vault`, `.claude-*` config homes,
 along, so no token is ever migrated. Files that are byte-identical to a
 harness file (relative paths under `.claude/hooks`, `tools`, `.claude/agents`,
 `.claude/rules`, `.claude/skills`, `.claude/commands` compared with
-`harness/*`) are dropped as duplicates; anything the bot owns that overlaps a
-harness hook is moved into `.claude/settings.local.json` instead of staying a
-loose file. `bot.yaml` is written from what's found (model, effortLevel,
+`harness/*`) are dropped as duplicates; the hook entries of the old
+`.claude/settings.json` whose script is not a harness file are written into
+`.claude/settings.local.json` (only when that file has no `hooks` yet), since
+sync regenerates `settings.json`. `bot.yaml` is written from what's found (model, effortLevel,
 permissions mode; telegram on if a `tg-enable.settings.json` exists) when the
 folder doesn't already have one. Then it runs `sync` and seeds
 `<config home>/.claude.json`. `--config-dir <old CLAUDE_CONFIG_DIR>` copies
@@ -286,7 +289,7 @@ echo <passphrase> | botcorp secrets import-bundle bot-1 .\out\secrets.bundle.enc
 ### `secrets audit [bot] [--tail N] [--json]`
 
 Reads `<BOTCORP_HOME>/state/secret-access.jsonl`, one line per decrypt written
-by `daemon/vault.ps1`: `bot`, `key`, `reason` (`launch|automation|cli|list|
+by `daemon/vault.ps1`: `bot`, `key`, `reason` (`launch|automation|board|cli|list|
 export|doctor|unlock|import`), `pid`/`ppid`, `ok`, `ts` — never a value.
 Append-only; audit history outlives a bot, so this does not require the bot
 to still exist (no `requireBot` check). Prints the newest `--tail` lines
@@ -439,6 +442,7 @@ queues nothing and prints the pending entry's id (`already queued ...`):
 | `automations` (add) | always |
 | `tools` (add) | an entry is `kind: integration` or has `secrets` |
 | `harness.tools_registry` | `enforce` -> `warn` |
+| `account` | the value changes (switches the Claude account, `none` included) |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
 `operator:<user>` (`--requested-by` overrides it from the operator's env and
@@ -848,8 +852,9 @@ logins, `--no-tg-probe` the Telegram slot probe.
   `botcorp secrets acl <bot>` to fix it); `<bot>: vault isolation` — feeds
   the vault-guard hook a synthetic `Read` of a SIBLING bot's `.vault` and
   expects it to block (exit 2); FAIL if the hook lets it through or
-  `harness/hooks/hooks.json` does not register it for
-  `Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit`; `<bot>: secrets
+  `harness/hooks/hooks.json` has no `PreToolUse` group running it whose
+  matcher includes both `Read` and `Bash` (only those two are checked), WARN
+  when there is no bash to run the probe; `<bot>: secrets
   scope` — declared (`bot.yaml` `secrets:`) vs. present vault keys, WARN on
   either a declared key missing from the vault or a vault key that's present
   but undeclared (never decrypted at launch); `<bot>: vault lock` — PASS
@@ -927,18 +932,22 @@ logins, `--no-tg-probe` the Telegram slot probe.
   tag>/triggers` (10 s each), FAIL `git-connected Workers Builds trigger on
   <worker>: a push would double-deploy` when any trigger exists, INFO when
   unset or the token is absent, WARN `could not read` on any error;
-  `integrations.google.account` + a `token.json` in the bot folder: compared
-  through `harness/tools/google/google_workspace.py whoami` (10 s) when that
-  module is present, INFO `google account check needs the google tools
-  module` when it is not; `<bot>: tray` — `HKCU\...\Run\BotCorp-Tray-<bot>`
-  present when `harness.tray` is true (FAIL when it should be registered and
+  `integrations.google.account` + a `token.json` in the bot folder: the
+  `<bot>: google account` row above (a direct Drive call from the CLI, no
+  Python: the access token, refreshed once on a 401; 10 s per call): PASS /
+  FAIL on the email match, WARN when the email is unreadable, INFO when there
+  is no `token.json`; `<bot>: tray` — `HKCU\...\Run\BotCorp-Tray-<bot>`
+  present when `harness.tray` is true (WARN when it should be registered and
   isn't), INFO when the tray is off;
 - `account <id>: token` — a 1-turn `claude -p` on `claude-haiku-4-5-20251001`
   run under that account's config dir with its vault token in the env; PASS /
-  FAIL / INFO, cached 24 h in `~/.botcorp/state/account-checks.json` keyed by
-  the token's fingerprint (never the token itself). From a bot session
-  (`BOT_NAME` set) a cache miss is WARN `not checked from a bot session` and
-  nothing is cached: the vault hands a bot a mask, not the token;
+  FAIL, cached 24 h in `~/.botcorp/state/account-checks.json` keyed by
+  the token's fingerprint (never the token itself); FAIL too when the vault
+  cannot be read, WARN when the account has no token in the vault. From a bot
+  session (`BOT_NAME` set) a cache miss is WARN `not checked from a bot
+  session` and nothing is cached: the vault hands a bot a mask, not the token.
+  One `accounts` row instead: INFO when there are no accounts, WARN when
+  `accounts list` fails;
 - cockpit: `GET http://127.0.0.1:<port>/healthz` (WARN when down;
   `COCKPIT_PORT`, default 4477); `cockpit exposure: loopback-only (no
   <BOTCORP_HOME>/access.json)` or `exposed via Access team=<t>`; without the
@@ -993,7 +1002,8 @@ Prints the command summary.
 `secrets set <bot> <key>` (value on stdin), `secrets unlock <bot>`
 (passphrase on stdin), `status <bot> --json` (lock state for the vault
 drawer), `pair <bot> <senderId>`, `pair <bot> --list --json`, `pair <bot>
---deny <senderId>`, `update [--json]`, `update --apply|--skip <tag>`,
+--deny <senderId>`, `update --apply|--skip <tag>` (the release list itself is
+read straight from `<BOTCORP_HOME>/state/updates.json`, `cockpit/updates.mjs`),
 `send <bot> --source cockpit --json` (message on stdin), `approvals --json`,
 `approve|reject <bot> <id> --by <identity>`, `status --json` and `accounts
 list --json` (the attention list and usage), `automations <bot>
@@ -1001,7 +1011,7 @@ run|pause|resume|enable|disable <name>`, `tools <bot> scan --json`,
 `tools <bot> register --name ... --path ... --kind ...`, `tools <bot> retire
 <name|path> --by <identity>`. Output is truncated to 4 KB (a `--json` read the
 cockpit parses may reach 4 MB) and scrubbed of token shapes before it reaches
-the browser (`cockpit/cli.mjs`). Every cockpit POST is audited to
+the browser (`cockpit/cli.mjs`). Every cockpit POST, PUT, PATCH and DELETE is audited to
 `<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume, enable,
 register, the account switch, pair, a secret set and a release Apply/Skip
 need the operator: Cloudflare Access when the cockpit is exposed,
@@ -1015,8 +1025,10 @@ the owner-only `<BOTCORP_HOME>/state/cockpit-approve-token`
   `git init`, `doctor` does not expect one. `export`/`import` move a bot;
   the optional `backup:` module (and only it) creates a repo inside the
   folder for `memory/`.
-- `bot.yaml` round-trips through js-yaml on `pair`, `config set`, `approve`
-  and `import --as`: keys and values survive, comments do not. Keep the
+- `bot.yaml` round-trips through js-yaml on `pair`, `config set` and
+  `approve`: keys and values survive, comments do not. (`import --as` edits
+  only the `name:` line as text; it re-serializes only a file with no
+  top-level `name:` line.) Keep the
   explanations in `templates/bot/bot.yaml`, not in a bot's file.
 - The vault ceiling: "encrypted at rest" covers `.vault/secrets.json`.
   Anything Claude Code writes under the bot's own config home stays under
