@@ -11,7 +11,8 @@
 # is usage-blocked per <rt>/state/accounts.json), then runs it bounded by
 # timeout_min with a tree-kill on overrun. cwd = BOT_HOME; env = the bot env +
 # BOT_AUTOMATION=<name> + BOT_RUN_ID + the vault keys listed in `secrets:`
-# (decrypted in-process, for that run only, never on a command line).
+# (decrypted in-process, for that run only, never on a command line), minus
+# any inherited CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY.
 #
 # The daemon mutex is never held across a run: anything with timeout_min > 0.5
 # is spawned DETACHED as its own waiter (`-ExecJob <job file>`, internal) that
@@ -194,7 +195,8 @@ function Invoke-AutomationJob {
     try { $ld = Split-Path $logPath -Parent; if (-not (Test-Path $ld)) { New-Item -ItemType Directory -Force -Path $ld | Out-Null } } catch {}
 
     # env: bot env + run identity + vault secrets by name (Windows env names
-    # are case-insensitive; injected as the key upper-cased).
+    # are case-insensitive; injected as the key upper-cased, and also under the
+    # session's name when it differs: oauth_token -> CLAUDE_CODE_OAUTH_TOKEN).
     $envMap = @{
         BOT_HOME = $P.BotHome; BOT_NAME = $Bot; BOTCORP_HOME = $RtHome; BOTCORP_ROOT = $BotCorp
         CLAUDE_CONFIG_DIR = $P.ConfigDir; CLAUDE_PLUGIN_ROOT = $Harness; PYTHONIOENCODING = 'utf-8'
@@ -225,7 +227,7 @@ function Invoke-AutomationJob {
             foreach ($k in $secretNames) {
                 $v = $null
                 try { $v = Get-VaultSecret -BotHome $P.BotHome -Bot $Bot -Key "$k" -Reason 'automation' } catch { Log "run ${name}: vault key '$k' unreadable - re-enter it with: botcorp secrets set $Bot $k" }
-                if ($v) { $envMap["$k".ToUpperInvariant()] = $v } else { Log "run ${name}: vault key '$k' missing" }
+                if ($v) { $envMap["$k".ToUpperInvariant()] = $v; $envMap[(Get-SecretEnvName $k)] = $v } else { Log "run ${name}: vault key '$k' missing" }
             }
         } catch { Log "run ${name}: vault unavailable ($($_.Exception.Message))" }
         $ErrorActionPreference = 'Continue'   # vault.ps1 sets Stop for itself
@@ -245,6 +247,9 @@ function Invoke-AutomationJob {
         $psi.Arguments = "/d /s /c `"($command) > `"$logPath`" 2>&1`""
         $psi.UseShellExecute = $false; $psi.CreateNoWindow = $true
         $psi.WorkingDirectory = $P.BotHome
+        # An inherited Claude credential is another account's (the HKCU user env
+        # on a shared host); a job gets only its own, through secrets: [oauth_token].
+        foreach ($k in 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY') { [void]$psi.Environment.Remove($k) }
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
         if ($isPrompt) { $psi.RedirectStandardInput = $true; $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false) }
         $proc = [System.Diagnostics.Process]::Start($psi)
@@ -256,7 +261,7 @@ function Invoke-AutomationJob {
     $sw.Stop()
     $end = $(if ($env:BOTCORP_FAKE_NOW) { $start } else { Get-Date })
     $durationS = [Math]::Round($sw.Elapsed.TotalSeconds, 1)
-    foreach ($k in $secretNames) { $envMap.Remove("$k".ToUpperInvariant()) }
+    foreach ($k in $secretNames) { $envMap.Remove("$k".ToUpperInvariant()); $envMap.Remove((Get-SecretEnvName $k)) }
 
     # summary: first `SUMMARY:` line, else the last non-empty line, 200 chars.
     $summary = ''

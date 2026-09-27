@@ -42,6 +42,13 @@ Cockpit control and the capability registry (R5a).
   expanded in the command; the session launch puts the same folder on PATH.
 - **The board poll reads `gh_token` from the vault** when the bot declares
   it, for the poll child only.
+- **Fix: jobs no longer run on another account's Claude token.** The job env
+  dropped nothing the daemon inherited, so a machine-wide (HKCU)
+  `CLAUDE_CODE_OAUTH_TOKEN` reached every job, and a usage probe measured
+  that account instead of the bot's. An inherited `CLAUDE_CODE_OAUTH_TOKEN` /
+  `ANTHROPIC_API_KEY` is now removed; `secrets: [oauth_token]` sets both
+  `OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`. A job that relied on the
+  inherited value must declare the key.
 - `botYamlSchema` is 2 (additive, no migration script).
 - Upgrading: `botcorp sync <bot>` for every bot (the new hooks). A bot that
   used to approve its own changes now queues them for the cockpit.

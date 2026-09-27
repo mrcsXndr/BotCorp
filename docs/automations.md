@@ -123,7 +123,10 @@ gated there is dropped until the next fire instead of being retried.
   `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, and every key listed in
   `secrets:` decrypted in-process from the bot's DPAPI vault and injected as
   `<KEY>` (env names are case-insensitive on Windows; `hub_token` ->
-  `HUB_TOKEN`). Secrets never touch a command line or a log. Every key an
+  `HUB_TOKEN`; `oauth_token` also as `CLAUDE_CODE_OAUTH_TOKEN`, the session's
+  name for it). An inherited `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
+  (a machine-wide one is another account's) is removed from every job's env.
+  Secrets never touch a command line or a log. Every key an
   automation lists must also be in the bot's top-level `secrets:` list
   (`bot.yaml` validation rejects it otherwise); that list is also what the
   launcher injects into the SESSION env (docs/daemon.md, "Session secrets").
