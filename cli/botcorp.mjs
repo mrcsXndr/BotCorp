@@ -820,6 +820,42 @@ function cmdReject({ pos, flags }) {
   return 0;
 }
 
+// The human diff the cockpit shows: `automations.x.enabled: false -> true`,
+// `secrets: + gh_token`, `tools: + 3 (a, b, c)`, `automations: - old`.
+function short(v) { const s = JSON.stringify(v === undefined ? null : v); return s.length > 80 ? s.slice(0, 77) + '...' : s; }
+function approvalDiff(cfg, e) {
+  const op = e.op || 'set';
+  if (op === 'remove') return `${e.path}: - ${e.value}`;
+  if (op === 'append') {
+    const items = [].concat(e.value);
+    const ids = items.map((i) => (isObj(i) ? String(i.name) : String(i)));
+    return items.length === 1 ? `${e.path}: + ${ids[0]}` : `${e.path}: + ${items.length} (${ids.join(', ')})`;
+  }
+  let before;
+  try { before = cfg ? getDeep(cfg, splitPath(e.path)) : undefined; } catch {}
+  return `${e.path}: ${short(before)} -> ${short(e.value)}`;
+}
+
+// `approvals [--json]`: every bot's pending entries (read-only, so a bot may run it).
+function cmdApprovals({ flags }) {
+  const rows = [];
+  for (const bot of listBots()) {
+    const q = readApprovals(bot);
+    if (!q.length) continue;
+    let cfg = null;
+    try { cfg = loadBotYaml(botYamlPath(bot)); } catch {}
+    for (const e of q) {
+      rows.push({ id: e.id, bot, requested_by: e.requested_by, at: e.ts, op: e.op || 'set', path: e.path,
+        value: short(e.value), diff: approvalDiff(cfg, e), why: e.reason || 'widening' });
+    }
+  }
+  if (flags.json) { outJson(rows); return 0; }
+  if (!rows.length) { out('approvals: none pending'); return 0; }
+  for (const r of rows) out(`${r.bot}  ${r.id}  ${r.at}  ${r.diff}  by ${r.requested_by}  (${r.why})`);
+  out(`approvals: ${rows.length} pending (botcorp approve <bot> <id> | reject <bot> <id>)`);
+  return 0;
+}
+
 // ---- start / stop / restart (daemon/pty-host.mjs) ---------------------------------------
 const PTY_HOST = path.join(ROOT, 'daemon', 'pty-host.mjs');
 const pausedPath = bot => path.join(STATE_DIR, `${bot}.paused`);
@@ -2665,6 +2701,8 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
       passphrase always on stdin, never argv)
   pair <bot> <senderId> | pair <bot> --list [--json] | pair <bot> --deny <senderId>
   config get <bot> [<dotted.path>] [--json] | config set <bot> <dotted.path> <value>
+  config add <bot> <automations|tools|secrets> <json entry|key> | config remove <bot> <automations|tools|secrets> <name|key>
+  approvals [--json]   (every bot's pending widening changes, with a diff and why)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
@@ -2689,7 +2727,7 @@ const COMMANDS = {
   new: cmdNew, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
-  secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject,
+  secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   send: cmdSend, inbox: cmdInbox,
   update: cmdUpdate, cc: cmdCc, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
