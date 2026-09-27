@@ -22,6 +22,7 @@ param(
   [int]$AbMaxAgeMin = 20,      # ab.sh heartbeat staleness (min) past which a still-alive agent-browser pile is treated as ABANDONED and reaped. ab.sh AB_TIMEOUT is 90s, so 20m idle = nobody's driving it.
   [int]$TestMaxAgeMin = 60,    # age past which a `node --test` / `tsx --test` proc is treated as HUNG — a fast suite that never exits looks exactly like a passing run.
   [int]$TgCooldownH = 6,       # don't re-alert the SAME issue set within this many hours
+  [double]$DupBridgeMinMin = 10, # how long TWO procs must have held the SAME tg-enable settings file before it is a warn. A launch overlap or a scratch bot lasts minutes; a real dual-poller keeps 409-ing and ages past this by the next tick.
   [double]$DevSrvMaxAgeH = 4   # age past which a `wrangler dev`/vite/next dev server counts as left-behind. Count thresholds can't see these (a wrangler dev tree is only 3 node procs) — one has been seen running for DAYS on --remote.
 )
 
@@ -62,6 +63,38 @@ function Resolve-Py {
 $Py = Resolve-Py
 
 function Add-Issue($sev,$cat,$detail){ $script:issues += ,([ordered]@{ sev=$sev; cat=$cat; detail=$detail }) }
+
+# --- the duplicate-bridge decision, lifted out so a test can drive it --------
+# Live process ages cannot be faked on a box (you cannot make a real claude.exe
+# two hours old), so the rule itself is the unit: given the ages in minutes of
+# every proc holding ONE tg-enable settings file, is this a standing duplicate?
+# 'held' is the SECOND-oldest age = how long the file has had two holders, which
+# is the thing that must persist. See the dual-poller section below for why.
+function Get-BridgeHolderKey {
+  # '' when this command line does not hold a Telegram bridge, else the group it
+  # holds: the --settings tg-enable file, or '(default)' for a bare --channels
+  # shape. The FLAG forms only, never a loose mention of the path — a headless
+  # claude carries its own PROMPT in argv, and a triage tick whose prompt quotes
+  # this very warning (settings path and all) would otherwise count itself as a
+  # second holder of its own bridge. A check its own alert text can trip is a
+  # loop.
+  # A `claude --bg-pty-host <pipe> ... -- claude <argv>` wrapper (the
+  # background session host) repeats its child's argv verbatim, so one session
+  # can read as two holders. The child holds the bridge; the wrapper never does.
+  param([string]$CommandLine)
+  if ($CommandLine -match '--bg-pty-host') { return '' }
+  if ($CommandLine -match '--settings\s+"?([^"\s]+tg-enable\.settings\.json)') { return $matches[1].ToLower() }
+  if ($CommandLine -match '--channels\s+"?plugin:telegram') { return '(default)' }
+  return ''
+}
+
+function Get-BridgeVerdict {
+  param([double[]]$Ages, [double]$MinMin)
+  $s = @(@($Ages) | Sort-Object -Descending)
+  if ($s.Count -le 1) { return [pscustomobject]@{ verdict = 'none'; count = $s.Count; held = 0.0 } }
+  $held = [math]::Round($s[1], 1)
+  [pscustomobject]@{ verdict = $(if ($held -ge $MinMin) { 'dup' } else { 'young' }); count = $s.Count; held = $held }
+}
 
 # --- reap helper: kill a set, VERIFY, and return what SURVIVED ---------------
 # A -Clean branch that Add-Issue's 'warn' BEFORE the kill pages for a condition
@@ -250,25 +283,48 @@ if (@($hungTests).Count -gt 0) {
 # --settings file (one per bot instance; bare --channels with no --settings is
 # this bot's own default shape) and warn only when ONE group has more than one
 # holder.
+#
+# AGE, not the instant. A duplicate that matters is one that PERSISTS: two
+# sessions polling one token keep 409-ing until someone stops one. A duplicate
+# that lives for minutes is a launch overlap, or a scratch/probe bot spun up
+# and torn down the same hour — paging for either is a page nobody can act on.
+# So: warn only when at least two holders of one group have been alive >=
+# $DupBridgeMinMin (the second-oldest age is exactly that test — see
+# Get-BridgeVerdict above), and report a younger duplicate as info so it stays
+# visible without alarming. A real dual-poller is still caught — one tick
+# later, by which time it has aged into the warn. The last line of defence
+# remains the TG watchdog's getUpdates-409 probe, as above.
 $allClaude = @(Get-Process -Name claude -EA SilentlyContinue)
 $claudeCount = 0
-$bridgeGroups = @{}
+$bridgeGroups = @{}   # settings file -> ages in minutes of the procs holding it
 if ($allClaude.Count -gt 0) {
   $byPid = @{}
   Get-CimInstance Win32_Process -Filter "Name='claude.exe'" -EA SilentlyContinue |
-    ForEach-Object { $byPid[[int]$_.ProcessId] = $_.CommandLine }
+    ForEach-Object { $byPid[[int]$_.ProcessId] = $_ }
   foreach ($c in $allClaude) {
-    $cl = [string]$byPid[[int]$c.Id]
-    if ($cl -match '--channels' -or $cl -match 'tg-enable\.settings\.json') {
+    $p  = $byPid[[int]$c.Id]
+    $grp = Get-BridgeHolderKey ([string]$p.CommandLine)
+    if ($grp) {
       $claudeCount++
-      $grp = if ($cl -match '--settings\s+"?([^"\s]+tg-enable\.settings\.json)') { $matches[1].ToLower() } else { '(default)' }
-      $bridgeGroups[$grp] = 1 + [int]$bridgeGroups[$grp]
+      # No CreationDate (a proc that vanished between the two queries) = age 0:
+      # unknown never promotes a duplicate to a warn.
+      $age = 0.0
+      try { if ($p.CreationDate) { $age = ((Get-Date) - $p.CreationDate).TotalMinutes } } catch {}
+      # Seed the list explicitly: `@($null) + ,$age` is a TWO-element array whose
+      # first item is $null, which made every single holder look like a pair.
+      if (-not $bridgeGroups.ContainsKey($grp)) { $bridgeGroups[$grp] = @() }
+      $bridgeGroups[$grp] = @($bridgeGroups[$grp]) + ,[double]$age
     }
   }
 }
 $claudeWorkers = $allClaude.Count - $claudeCount
 foreach ($g in $bridgeGroups.Keys) {
-  if ($bridgeGroups[$g] -gt 1) { Add-Issue 'warn' 'bot' "$($bridgeGroups[$g]) claude procs hold the SAME TG bridge ($g) — duplicate session / dual-poller risk" }
+  $v = Get-BridgeVerdict -Ages @($bridgeGroups[$g]) -MinMin $DupBridgeMinMin
+  if ($v.verdict -eq 'dup') {
+    Add-Issue 'warn' 'bot' "$($v.count) claude procs hold the SAME TG bridge ($g), 2+ of them for $($v.held)m — duplicate session / dual-poller risk"
+  } elseif ($v.verdict -eq 'young') {
+    Add-Issue 'info' 'bot' "$($v.count) claude procs hold the SAME TG bridge ($g) but only for $($v.held)m — launch overlap or scratch bot; warns past ${DupBridgeMinMin}m"
+  }
 }
 if ($claudeWorkers -gt 0) { Add-Issue 'info' 'bot' "$claudeWorkers headless claude worker(s) — no TG bridge, cannot dual-poll" }
 
