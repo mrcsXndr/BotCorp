@@ -60,7 +60,7 @@ export function attentionItems({ bots: list = [], approvals = [], pairing = {}, 
     const r = registry[b.name];
     if (r && (r.unregistered.length || r.missing.length)) {
       const bits = [r.unregistered.length && `${r.unregistered.length} unregistered`, r.missing.length && `${r.missing.length} missing`].filter(Boolean);
-      push(b.name, 'registry', r.missing.length ? 'bad' : 'warn', `${b.name}: tools registry has ${bits.join(', ')}`, { type: 'tools', bot: b.name });
+      push(b.name, 'registry', r.missing.length || r.registry === 'enforce' ? 'bad' : 'warn', `${b.name}: tools registry has ${bits.join(', ')}`, { type: 'tools', bot: b.name });
     }
     const u = usage[b.name];
     const hot = u ? [['5 h', u.fiveHour], ['7 d', u.sevenDay]].filter(([, w]) => w && !w.na && w.pct >= USAGE_BLOCK_PCT) : [];

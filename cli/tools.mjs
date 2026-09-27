@@ -249,13 +249,40 @@ export function scanTools(botHome, cfg) {
   };
 }
 
-const BARE_PY_RE = /^\s*(python3?|py)(\.exe)?(\s|$)/i;
+// The clean-day record (<rt>/state/<bot>.registry-days.json): one row per
+// local date, {scans, worst: {<DAY_KEYS>: count}}, worst-of-day, 30 days kept.
+// A day is clean with at least one scan and every worst count at 0.
+export const DAY_KEYS = ['unregistered', 'missing', 'automation_unregistered', 'underclassified'];
+export const localDate = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+export function nextRegistryDays(days, scan, now = new Date()) {
+  const k = localDate(now);
+  const prev = isObj(days[k]) ? days[k] : {};
+  const worst = {};
+  for (const n of DAY_KEYS) worst[n] = Math.max(Number(isObj(prev.worst) && prev.worst[n]) || 0, (scan[n] || []).length);
+  const all = { ...days, [k]: { scans: (Number(prev.scans) || 0) + 1, worst } };
+  return Object.fromEntries(Object.keys(all).sort().slice(-30).map((d) => [d, all[d]]));
+}
+
+// Consecutive clean days ending today (or yesterday while today has no scan
+// yet); a day with no row breaks the streak.
+export function cleanStreak(days, now = new Date()) {
+  const clean = (r) => isObj(r) && Number(r.scans) >= 1 && isObj(r.worst) && DAY_KEYS.every((n) => Number(r.worst[n]) === 0);
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  if (!days[localDate(d)]) d.setDate(d.getDate() - 1);
+  let n = 0;
+  while (clean(days[localDate(d)])) { n++; d.setDate(d.getDate() - 1); }
+  return n;
+}
+
+const BARE_PY_RE =/^\s*(python3?|py)(\.exe)?(\s|$)/i;
 const few = (list) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ` (+${list.length - 5} more)` : ''}`;
 
 // The doctor rows for one bot: [{level, name, detail}], `<bot>` in detail for
 // the caller to fill. scan = scanTools(...) or null when the registry is off
-// (`tools:` absent): then only the two rows that do not need it.
-export function registryRows(cfg, scan) {
+// (`tools:` absent): then only the two rows that do not need it. streak =
+// cleanStreak(...) of the clean-day record, or null to leave out the enforce row.
+export function registryRows(cfg, scan, streak = null) {
   const rows = [];
   if (scan && scan.registry !== 'off') {
     const gap = scan.registry === 'enforce' ? 'FAIL' : 'WARN';   // harness.tools_registry
@@ -274,6 +301,11 @@ export function registryRows(cfg, scan) {
     rows.push(uc.length
       ? { level: gap, name: 'tools-underclassified', detail: `secret readers registered below integration: ${few(uc.map((x) => `${x.path} (${x.entry}) reads ${x.reads.join(', ')}`))}. Fix: register each as an exact kind: integration entry with its secrets` }
       : { level: 'PASS', name: 'tools-underclassified', detail: 'no registered secret reader sits below integration' });
+    if (scan.registry === 'warn' && streak !== null) {
+      rows.push({ level: 'INFO', name: 'tools-enforce-ready', detail: streak >= 7
+        ? `clean ${streak}/7 consecutive days: ready for botcorp config set <bot> harness.tools_registry enforce`
+        : `clean ${streak}/7 consecutive days before enforce (botcorp tools <bot> gate)` });
+    }
     if (scan.unused.length) rows.push({ level: 'INFO', name: 'tools-unused', detail: `registered but referenced by nothing (no automation, rule or import): ${few(scan.unused)}` });
   }
   const bare = (Array.isArray(cfg.automations) ? cfg.automations : [])

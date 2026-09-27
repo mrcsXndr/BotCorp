@@ -291,6 +291,25 @@ function Invoke-Janitor {
     } catch { Write-DaemonLog "janitor: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
+function Invoke-RegistryScan {
+    # Once a day per bot with a `tools:` list: `botcorp tools <bot> scan` records
+    # the day in <rt>/state/<bot>.registry-days.json, so a quiet day still
+    # counts toward `tools <bot> gate`. Bounded, fail-open.
+    param([string]$Bot, $Cfg, [switch]$AsDryRun)
+    try {
+        if ($null -eq $Cfg.tools) { return }
+        $st = Read-BotState -Bot $Bot
+        $last = $null; try { if ($st -and ($st.PSObject.Properties.Name -contains 'registry_scan_at')) { $last = $st.registry_scan_at } } catch {}
+        if ($last) { $t = [datetime]::MinValue; if ([datetime]::TryParse("$last", [ref]$t) -and (((Get-Date) - $t).TotalHours -lt 23)) { return } }
+        if ($AsDryRun) { Write-DaemonLog 'DRYRUN would run the daily tools registry scan' -Bot $Bot; return }
+        $node = Resolve-Node
+        if (-not $node) { return }
+        Write-BotState -Bot $Bot -Updates @{ registry_scan_at = (Get-Date).ToString('o') }
+        $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $BotCorp 'cli\botcorp.mjs'), 'tools', $Bot, 'scan', '--json') -TimeoutSec 60 -Label 'registry scan' -Capture -Env @{ BOTCORP_HOME = $script:RtHome; BOTCORP_BOTS_DIR = $script:BotsDir } -WorkingDirectory $BotCorp -Bot $Bot
+        Write-DaemonLog "registry scan: exit=$($r.ExitCode)" -Bot $Bot -Quiet
+    } catch { Write-DaemonLog "registry scan: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
 # --- per-bot isolated ticks ------------------------------------------------------
 function Invoke-UsageResume {
     # AUTO-CONTINUE after a usage-limit window. usage_monitor.py --resume-check
@@ -703,6 +722,7 @@ function Invoke-BotTick {
         if (Test-BotModule $cfg 'board') { Invoke-BoardPoll -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'hub') { Invoke-HubPush -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'janitor') { Invoke-Janitor -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
+        Invoke-RegistryScan -Bot $Bot -Cfg $cfg -AsDryRun:$DryRun
     }
     if ($resumeWanted -and $action -eq 'none') { $action = $(if ($alive -and $claudePid -gt 0) { 'restart' } else { 'cold-start' }); $why = 'usage-limit window passed' }
     # A harness release applied this tick: every live bot restarts onto the new

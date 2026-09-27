@@ -61,6 +61,6 @@ const { isShim } = await load("daemon/sync.mjs");
 const cfg = loadBotYaml(path.join(home, "bot.yaml"));
 if (!Array.isArray(cfg.tools) || cfg.tools.some((t) => covers(t, rel)) || isShim(path.join(home, rel))) process.exit(0);
 const name = path.posix.basename(rel).replace(/\.[^.]+$/, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "tool";
-console.log("unregistered tool " + rel + ": register it this turn with botcorp tools " + cfg.name + " register --name " + name + " --path " + rel + " --kind cli --purpose \"<what it does>\" (kind integration if it uses a secret or writes outside the box)");
+console.log("unregistered tool " + rel + ": register it this turn with botcorp tools " + cfg.name + " register --name " + name + " --path " + rel + " --kind cli --purpose \"<what it does>\" (kind integration if it uses a secret or writes outside the box)" + (cfg.harness.tools_registry === "enforce" ? "; the registry is enforced: doctor FAILs until registered" : ""));
 ' "$BOTCORP" "$HOME_N" "$REL" 2>/dev/null || true
 exit 0

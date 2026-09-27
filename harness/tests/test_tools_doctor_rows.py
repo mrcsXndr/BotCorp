@@ -67,6 +67,24 @@ def test_clean_registry_passes_and_off_has_no_rows():
     assert _rows(CFG, None) == {}
 
 
+def _rows3(cfg: dict, scan: dict, streak) -> dict:
+    script = ("const { registryRows } = await import(process.argv[1]);"
+              "const [cfg, scan, n] = JSON.parse(process.argv[2]);"
+              "console.log(JSON.stringify(registryRows(cfg, scan, n)));")
+    r = subprocess.run(["node", "--input-type=module", "-e", script, TOOLS_MJS, json.dumps([cfg, scan, streak])],
+                       capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr
+    return {row["name"]: row for row in json.loads(r.stdout)}
+
+
+@needs_node
+def test_enforce_ready_row_only_in_warn_mode():
+    assert _rows3(CFG, _scan(), 3)["tools-enforce-ready"] == {"level": "INFO", "name": "tools-enforce-ready", "detail": "clean 3/7 consecutive days before enforce (botcorp tools <bot> gate)"}
+    assert "ready for botcorp config set <bot> harness.tools_registry enforce" in _rows3(CFG, _scan(), 7)["tools-enforce-ready"]["detail"]
+    assert "tools-enforce-ready" not in _rows3(CFG, _scan(registry="enforce"), 9)
+    assert "tools-enforce-ready" not in _rows3(CFG, _scan(), None)
+
+
 @needs_node
 def test_bare_python_only_for_enabled_jobs():
     job = {"name": "j", "command": "python tools/a.py", "trigger": {"interval_min": 5}}

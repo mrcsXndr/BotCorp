@@ -50,9 +50,9 @@ const {
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
-const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows } = await import('./tools.mjs');
+const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak } = await import('./tools.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -910,7 +910,14 @@ function cmdApprovals({ flags }) {
 // ---- tools: the capability registry (cli/tools.mjs) ------------------------------------
 const TOOLS_USAGE = 'tools <bot> scan [--json] [--proposal <file>] | tools <bot> register --file <proposal> | '
   + 'tools <bot> register --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b] | '
-  + 'tools <bot> retire <name|path> [--by <who>]';
+  + 'tools <bot> retire <name|path> [--by <who>] | tools <bot> gate [--days <n>] [--json]';
+
+// <rt>/state/<bot>.registry-days.json: every `tools <bot> scan` records its
+// day there (cli/tools.mjs nextRegistryDays); `tools <bot> gate` reads the streak.
+const registryDaysPath = (bot) => path.join(STATE_DIR, `${bot}.registry-days.json`);
+function readRegistryDays(bot) {
+  try { const d = JSON.parse(fs.readFileSync(registryDaysPath(bot), 'utf-8')); return isObj(d) ? d : {}; } catch { return {}; }
+}
 
 function cmdTools({ pos, flags }) {
   const [, bot, action, ...rest] = pos;
@@ -922,6 +929,9 @@ function cmdTools({ pos, flags }) {
 
   if (action === 'scan') {
     const r = scanTools(home, cfg);
+    if (r.registry !== 'off') {
+      try { writeTextAtomic(registryDaysPath(bot), JSON.stringify(nextRegistryDays(readRegistryDays(bot), r), null, 1) + '\n'); } catch {}
+    }
     const proposalFile = val('proposal') && path.resolve(val('proposal'));
     if (proposalFile) writeTextAtomic(proposalFile, dumpYaml({ bot, generated_at: new Date().toISOString(), tools: r.proposal.tools, orphans: r.proposal.orphans }));
     if (flags.json) { outJson({ bot, ...r }); return 0; }
@@ -934,6 +944,15 @@ function cmdTools({ pos, flags }) {
     for (const o of r.proposal.orphans) out(typeof o === 'string' ? `  orphan      ${o}` : `  orphan      ${o.path}  reads ${o.reads.join(', ')}`);
     if (proposalFile) out(`proposal written: ${proposalFile} (botcorp tools ${bot} register --file <it>)`);
     return 0;
+  }
+
+  if (action === 'gate') {
+    const days = val('days') === null ? 7 : Number(val('days'));
+    if (!Number.isInteger(days) || days < 1) usage(TOOLS_USAGE);
+    const n = cleanStreak(readRegistryDays(bot));
+    if (flags.json) outJson({ bot, days, clean: n, ready: n >= days });
+    else out(`tools: ${bot} clean ${n}/${days} consecutive days${n >= days ? ': ready for harness.tools_registry enforce' : ''}`);
+    return n >= days ? 0 : 1;
   }
 
   if (action === 'register') {
@@ -1599,7 +1618,9 @@ function yamlFromSelection(name, persona, sel, lists, owner, backupRemote) {
   if (Object.keys(mods).length) harness.modules = mods;
   if (sel.skills.size !== lists.skills.length) harness.skills = lists.skills.map((s) => s.key).filter((k) => sel.skills.has(k));
   if (sel.agents.size !== lists.agents.length) harness.agents = lists.agents.map((a) => a.key).filter((k) => sel.agents.has(k));
-  if (Object.keys(harness).length) doc.harness = harness;
+  harness.tools_registry = 'enforce';   // a new bot starts with an empty, enforced registry
+  doc.harness = harness;
+  doc.tools = [];
   if (owner) doc.integrations = { telegram: { allow_from: [idValue(owner)] } };
   if (backupRemote) doc.backup = { git_remote: backupRemote };
   return doc;
@@ -2684,7 +2705,7 @@ async function cmdDoctor({ flags }) {
         add(v.level, `${bot}: harness tools reachable`, v.detail, 'bots');
       }
       // the capability registry (cli/tools.mjs); tools: absent = only the job rows
-      for (const r of registryRows(cfg, cfg.tools === null ? null : scanTools(botHome(bot), cfg))) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
+      for (const r of registryRows(cfg, cfg.tools === null ? null : scanTools(botHome(bot), cfg), cleanStreak(readRegistryDays(bot)))) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
       if (cfg.harness.tray) add(trayEntries.has(`BotCorp-Tray-${bot}`) ? 'PASS' : 'WARN', `${bot}: tray`, trayEntries.has(`BotCorp-Tray-${bot}`) ? 'HKCU Run entry registered' : `harness.tray is on but no HKCU Run entry (botcorp tray ${bot} on)`, 'bots');
       else add('INFO', `${bot}: tray`, 'off (harness.tray: false)', 'bots');
       if (cfg.harness.modules.telegram) {
@@ -2844,6 +2865,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
+  tools <bot> gate [--days 7] [--json]   clean consecutive days from the scan record; exit 0 once ready for enforce
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)

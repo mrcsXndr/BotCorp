@@ -64,6 +64,15 @@ def test_covered_or_not_a_tool_is_silent(tmp_path, bot_home, rel):
 
 
 @needs_node
+def test_enforce_says_doctor_fails(tmp_path, bot_home):
+    home = _bot(bot_home)
+    (home / "bot.yaml").write_text((home / "bot.yaml").read_text(encoding="utf-8") + "harness:\n  tools_registry: enforce\n", encoding="utf-8")
+    lines = _write(tmp_path, home, "tools/new_thing.py").stdout.splitlines()
+    assert len(lines) == 1 and "doctor FAILs until registered" in lines[0], lines
+    assert "FAIL" not in _write(tmp_path, _bot(bot_home), "tools/other.py").stdout   # warn mode says nothing of it
+
+
+@needs_node
 def test_registry_off_when_tools_absent(tmp_path, bot_home):
     proc = _write(tmp_path, _bot(bot_home, tools=False), "tools/new_thing.py")
     assert proc.returncode == 0, proc.stderr
