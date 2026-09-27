@@ -3,6 +3,37 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.3
+
+Truth and gates.
+
+- **More verbs are operator-only.** `pair <bot> <id>`, `secrets set|delete`,
+  `accounts add|remove|seed`, `--requested-by`, `update --apply|--skip`,
+  `cc rollback` and `cockpit expose|unexpose` refuse from a bot session
+  (exit 3), and the cockpit's pair, secret set and release Apply/Skip need
+  the operator (Access, or the approve token).
+- **The approval queue holds one copy of a change.** The same queued change
+  is not queued twice; approving an append that is already in place is a
+  no-op; a failing entry no longer strands the ones already applied.
+- **core-guard fires on Windows paths**, and its message says the edit
+  blocks every future engine update, with the revert command.
+- **vault-guard fails closed** when it cannot parse a tool call (a missing
+  or broken python), instead of letting it through.
+- **recall indexes the bot's `memory/auto`** by default.
+- **The cockpit writes its approve token to an owner-only file**
+  (`<BOTCORP_HOME>/state/cockpit-approve-token`); vault-guard blocks a bot
+  from reading it.
+- **The janitor prunes session snapshots older than 7 days**
+  (`memory/sessions/<stamp>.md`, never a session folder).
+- **The subagent cost rollup runs before each hub push**, so
+  `subagent_usd_7d` is current.
+- Removed: the unread `harness/automations.yaml`, update_restart's dead
+  once-a-day gate, health_sweep's supervisor check, operator-guard's
+  `tools approve` pattern, and the tunnel's unread `COCKPIT_ALLOWED_HOSTS`.
+- Docs now match the code: session lifecycle, migrations, adopt,
+  onboarding, the tick's step order, Run now, doctor rows, guard matchers,
+  audit reasons and the cockpit's own writes.
+
 ## v0.7.2
 
 - **Doctor no longer fails an account's token check from a bot session.** The
