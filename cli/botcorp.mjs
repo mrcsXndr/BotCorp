@@ -952,7 +952,13 @@ function cmdTools({ pos, flags }) {
     const fresh = entries.filter((e) => !(isObj(e) && have.has(String(e.name))));
     for (const e of entries) if (!fresh.includes(e)) out(`already registered: ${e.name}`);
     if (!fresh.length) { out(`tools: ${bot} nothing new to register`); return 0; }
-    return queueOrApply(bot, { op: 'append', segs: ['tools'], value: fresh, flags, direct: true });
+    if (isOperatorContext()) return queueOrApply(bot, { op: 'append', segs: ['tools'], value: fresh, flags, direct: true });
+    // From a bot: the plain entries apply now; only the widening ones wait, as one queue entry.
+    const wide = fresh.filter(isWideningTool), rest = fresh.filter((e) => !isWideningTool(e));
+    if (rest.length) queueOrApply(bot, { op: 'append', segs: ['tools'], value: rest, flags, direct: true });
+    if (wide.length) queueOrApply(bot, { op: 'append', segs: ['tools'], value: wide, flags, direct: true });
+    out(`tools: ${bot} ${rest.length} applied, ${wide.length} queued for operator approval`);
+    return 0;
   }
 
   if (action === 'retire') {
