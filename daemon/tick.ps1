@@ -371,6 +371,15 @@ function Invoke-BoardPoll {
         if (-not (Test-Path $gh)) { return }
         if ($AsDryRun) { Write-DaemonLog 'board: DRYRUN would poll + TG-alert any queued cards' -Bot $Bot; return }
         $env = Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths
+        if (@($Cfg.secrets) -contains 'gh_token') {
+            # the board's own PAT, child env only; on failure the poll falls back to host gh / .env
+            try {
+                if (-not (Get-Command Get-VaultSecret -ErrorAction SilentlyContinue)) { . (Join-Path $PSScriptRoot 'vault.ps1') }
+                $tok = Get-VaultSecret -BotHome $Paths.BotHome -Bot $Bot -Key 'gh_token' -Reason 'board'
+                if ($tok) { $env['GH_PROJECTS_TOKEN'] = $tok } else { Write-DaemonLog 'board: vault key gh_token missing - polling with host gh' -Bot $Bot }
+            } catch { Write-DaemonLog "board: vault key gh_token unreadable ($($_.Exception.Message)) - polling with host gh" -Bot $Bot }
+            $ErrorActionPreference = 'Continue'   # vault.ps1 sets Stop for itself
+        }
         $r = Invoke-Bounded -Exe $pyExe -Arguments @($gh, 'poll') -TimeoutSec 90 -Label 'board poll' -Capture -Env $env -WorkingDirectory $Paths.BotHome -Bot $Bot
         if ($r.ExitCode -ne 0) { Write-DaemonLog "board: poll exit=$($r.ExitCode) $((($r.Output -split "`n") | Select-Object -First 2) -join ' | ')" -Bot $Bot; return }
         $json = "$($r.Output)".Trim()
