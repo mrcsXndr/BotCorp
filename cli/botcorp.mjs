@@ -575,10 +575,35 @@ function setDeep(obj, segs, value) {
 
 function listOf(v) { return Array.isArray(v) ? v.map(String) : []; }
 
+// The lists `config add|remove` and queue entries with op append|remove
+// address: elements matched by `name`, secrets by the key itself.
+const LIST_KEYS = { automations: 'name', tools: 'name', secrets: null };
+
+// A tools entry that reaches outside the bot: an integration, or one holding vault keys.
+function isWideningTool(t) { return isObj(t) && (t.kind === 'integration' || listOf(t.secrets).length > 0); }
+
 // "Widening" = the change lets more people or more capability reach the bot.
 // Those never apply from a chat message; they wait in the approval queue.
-function isWidening(cfg, segs, value) {
+// op: set (a dotted path) | append | remove (a LIST_KEYS list; remove narrows).
+function isWidening(cfg, segs, value, op = 'set') {
   const p = segs.join('.');
+  if (op === 'remove') return null;
+  if (op === 'append') {
+    const items = [].concat(value);
+    if (p === 'secrets') return 'declares a new vault secret';
+    if (p === 'automations') return 'adds an automation';
+    if (p === 'tools') {
+      const w = items.filter(isWideningTool).map((t) => t.name);
+      return w.length ? `registers an integration or secret-bearing tool (${w.join(', ')})` : null;
+    }
+    return null;
+  }
+  if (p === 'secrets') return listOf(value).some((k) => !listOf(cfg.secrets).includes(k)) ? 'declares a new vault secret' : null;
+  if (p === 'harness.tools_registry') return cfg.harness.tools_registry === 'enforce' && value === 'warn' ? 'relaxes the tools registry enforce -> warn' : null;
+  if (segs[0] === 'automations' && segs[2] === 'enabled' && segs.length === 3) {
+    const el = findElem(cfg.automations, segs[1]);
+    return value === true && el && el.enabled === false ? `enables automation ${el.name}` : null;
+  }
   if (p === 'integrations.telegram.allow_from') {
     const cur = listOf(cfg.integrations.telegram.allow_from);
     return listOf(value).some((id) => !cur.includes(id)) ? 'adds a Telegram sender' : null;
@@ -603,11 +628,39 @@ function isWidening(cfg, segs, value) {
 function applySet(bot, segs, value) {
   const raw = loadRawYaml(bot);
   setDeep(raw, segs, value);
+  writeValidated(bot, raw, 'config set');
+}
+
+function writeValidated(bot, raw, verb) {
   const effective = deepMerge(DEFAULTS, raw);
   if (!effective.name) effective.name = bot;
   const errs = validate(effective);
-  if (errs.length) fail(`config set: rejected, bot.yaml would be invalid:\n  ${errs.join('\n  ')}`);
+  if (errs.length) fail(`${verb}: rejected, bot.yaml would be invalid:\n  ${errs.join('\n  ')}`);
   writeRawYaml(bot, raw);
+}
+
+// append: `value` is one element or a list of them (secrets: keys); remove:
+// `value` is the element's name (secrets: the key). Starts from the effective
+// list, so appending to an absent `secrets:` keeps the default keys.
+function applyListOp(bot, key, op, value) {
+  if (!Object.hasOwn(LIST_KEYS, key)) fail(`config ${op}: ${key} is not a list (${Object.keys(LIST_KEYS).join(' | ')})`);
+  const by = LIST_KEYS[key];
+  const raw = loadRawYaml(bot);
+  const list = Array.isArray(raw[key]) ? raw[key] : [...(deepMerge(DEFAULTS, raw)[key] || [])];
+  const idOf = (e) => (by ? (isObj(e) ? String(e[by]) : null) : String(e));
+  if (op === 'append') {
+    for (const item of [].concat(value)) {
+      if (by && !isObj(item)) fail(`config add: a ${key} entry must be a mapping with a ${by} (got ${JSON.stringify(item)})`);
+      if (list.some((e) => idOf(e) === idOf(item))) fail(`config add: ${key} already has '${idOf(item)}'`);
+      list.push(item);
+    }
+  } else if (op === 'remove') {
+    const i = list.findIndex((e) => idOf(e) === String(value));
+    if (i < 0) fail(`config remove: no '${value}' in ${key}`);
+    list.splice(i, 1);
+  } else fail(`config: unknown op '${op}'`);
+  raw[key] = list;
+  writeValidated(bot, raw, `config ${op === 'append' ? 'add' : 'remove'}`);
 }
 
 function approvalsPath(bot) { return path.join(STATE_DIR, `${bot}.approvals.json`); }
@@ -643,10 +696,50 @@ function recordDecision(bot, entry, decision, by, extra = {}) {
   return stamped;
 }
 
+function entryText({ op = 'set', path: p, value }) {
+  return op === 'set' ? `${p} = ${JSON.stringify(value)}` : `${op} ${p} ${JSON.stringify(value)}`;
+}
+
+// Queue a widening change, apply anything else. -> the CLI exit code.
+//   op set: segs = the dotted path; append/remove: segs = [<LIST_KEYS key>]
+function queueOrApply(bot, { op = 'set', segs, value, flags }) {
+  const p = segs.join('.');
+  const shown = entryText({ op, path: p, value });
+  const why = isWidening(loadBotYaml(botYamlPath(bot)), segs, value, op);
+  if (why) {
+    const entry = { id: crypto.randomBytes(3).toString('hex'), ts: new Date().toISOString(), op, path: p, value, requested_by: requestedBy(flags), reason: why };
+    const q = readApprovals(bot);
+    q.push(entry);
+    writeApprovals(bot, q);
+    logApproval(bot, `QUEUED ${entry.id} ${shown} by ${entry.requested_by} (${why})`);
+    out(`not applied: ${p} ${why}`);
+    out(`queued for operator approval: botcorp approve ${bot} ${entry.id}`);
+    if (flags.json) outJson({ applied: false, queued: entry });
+    return 0;
+  }
+  if (op === 'set') applySet(bot, segs, value);
+  else applyListOp(bot, p, op, value);
+  out(`config: ${bot} ${shown} (applied; takes effect at the next session roll)`);
+  doSync(bot);
+  return 0;
+}
+
+// `config add` takes JSON for an automations/tools entry (a list adds several),
+// a bare key for secrets.
+function parseListValue(text) {
+  const t = String(text ?? '').trim();
+  if (/^[[{]/.test(t)) { try { return JSON.parse(t); } catch (e) { usage(`config add: not valid JSON: ${e.message}`); } }
+  return parseValue(t);
+}
+
 function cmdConfig({ pos, flags }) {
   const [, action, bot, dotted, ...rest] = pos;
-  if (!action) usage('config get <bot> <path> | config set <bot> <path> <value>');
+  if (!action) usage('config get <bot> <path> | config set <bot> <path> <value> | config add|remove <bot> <automations|tools|secrets> <entry|name>');
   requireBot(bot);
+  if (action === 'add' || action === 'remove') {
+    if (!Object.hasOwn(LIST_KEYS, String(dotted)) || rest.length === 0) usage(`config ${action} <bot> <${Object.keys(LIST_KEYS).join('|')}> <${action === 'add' ? 'json entry | key' : 'name | key'}>`);
+    return queueOrApply(bot, { op: action === 'add' ? 'append' : 'remove', segs: [dotted], value: action === 'add' ? parseListValue(rest.join(' ')) : rest.join(' ').trim(), flags });
+  }
   if (action === 'get') {
     const cfg = loadBotYaml(botYamlPath(bot));
     if (!dotted) { if (flags.json) outJson(cfg); else out(dumpYaml(cfg).trimEnd()); return 0; }
@@ -661,27 +754,13 @@ function cmdConfig({ pos, flags }) {
   if (!dotted || rest.length === 0) usage('config set <bot> <path> <value>');
   const segs = splitPath(dotted);
   checkKnownPath(segs);
-  const value = parseValue(rest.join(' '));
-  const cfg = loadBotYaml(botYamlPath(bot));
-  const why = isWidening(cfg, segs, value);
-  if (why) {
-    const entry = { id: crypto.randomBytes(3).toString('hex'), ts: new Date().toISOString(), path: segs.join('.'), value, requested_by: requestedBy(flags), reason: why };
-    const q = readApprovals(bot);
-    q.push(entry);
-    writeApprovals(bot, q);
-    logApproval(bot, `QUEUED ${entry.id} ${entry.path}=${JSON.stringify(value)} by ${entry.requested_by} (${why})`);
-    out(`not applied: ${entry.path} ${why}`);
-    out(`queued for operator approval: botcorp approve ${bot} ${entry.id}`);
-    if (flags.json) outJson({ applied: false, queued: entry });
-    return 0;
-  }
-  applySet(bot, segs, value);
-  out(`config: ${bot} ${segs.join('.')} = ${JSON.stringify(value)} (applied; takes effect at the next session roll)`);
-  doSync(bot);
-  return 0;
+  return queueOrApply(bot, { segs, value: parseValue(rest.join(' ')), flags });
 }
 
+// An entry without `op` (queued before v0.6.0) is a set.
 function applyApproved(bot, entry) {
+  const op = entry.op || 'set';
+  if (op !== 'set') { applyListOp(bot, entry.path, op, entry.value); return []; }
   const segs = splitPath(entry.path);
   const before = loadBotYaml(botYamlPath(bot));
   applySet(bot, segs, entry.value);
@@ -703,7 +782,7 @@ function cmdApprove({ pos, flags }) {
   if (flags.list) {
     if (flags.json) { outJson(q); return 0; }
     if (!q.length) { out(`approvals: ${bot} queue empty`); return 0; }
-    for (const e of q) out(`${e.id}  ${e.ts}  ${e.path} = ${JSON.stringify(e.value)}  by ${e.requested_by}  (${e.reason || 'widening'})`);
+    for (const e of q) out(`${e.id}  ${e.ts}  ${entryText(e)}  by ${e.requested_by}  (${e.reason || 'widening'})`);
     return 0;
   }
   if (!id && !flags.all) usage('approve <bot> <id|--all> [--by <who>] | approve <bot> --list');
@@ -715,8 +794,8 @@ function cmdApprove({ pos, flags }) {
   for (const e of pick) {
     const notes = applyApproved(bot, e);
     recordDecision(bot, e, 'approved', by);
-    logApproval(bot, `APPROVED ${e.id} ${e.path}=${JSON.stringify(e.value)} by ${by}`);
-    out(`approved ${e.id}: ${e.path} = ${JSON.stringify(e.value)} (by ${by})`);
+    logApproval(bot, `APPROVED ${e.id} ${entryText(e)} by ${by}`);
+    out(`approved ${e.id}: ${entryText(e)} (by ${by})`);
     for (const n of notes) out(`  ${n}`);
   }
   writeApprovals(bot, remaining);
@@ -736,8 +815,8 @@ function cmdReject({ pos, flags }) {
   if (!e) fail(`reject: no pending entry ${id} for ${bot}`);
   writeApprovals(bot, q.filter((x) => x !== e));
   recordDecision(bot, e, 'rejected', by, flags.reason && flags.reason !== true ? { rejected_reason: String(flags.reason) } : {});
-  logApproval(bot, `REJECTED ${e.id} ${e.path}=${JSON.stringify(e.value)} by ${by}`);
-  out(`rejected ${e.id}: ${e.path} = ${JSON.stringify(e.value)} (by ${by})`);
+  logApproval(bot, `REJECTED ${e.id} ${entryText(e)} by ${by}`);
+  out(`rejected ${e.id}: ${entryText(e)} (by ${by})`);
   return 0;
 }
 
