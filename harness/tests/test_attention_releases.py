@@ -55,9 +55,11 @@ def test_nothing_newer_means_no_item(tmp_path):
 
 @needs_node
 def test_list_updates_marks_older_pending(tmp_path):
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "updates.json").write_text(json.dumps({"releases": RELEASES}), encoding="utf-8")
     installed = json.loads((ASSEMBLY / "botcorp.json").read_text(encoding="utf-8"))["version"]
+    # The installed tag is always in updates.json on a real host; add it so a version bump can't break the test.
+    releases = RELEASES + [{"tag": f"v{installed}", "status": "applied"}] * all(r["tag"] != f"v{installed}" for r in RELEASES)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "updates.json").write_text(json.dumps({"releases": releases}), encoding="utf-8")
     out = json.loads(_node("const { listUpdates } = await import(process.argv[1]); console.log(JSON.stringify(await listUpdates()));",
                            UPDATES, rt=tmp_path))
     assert out["installed"] == installed
