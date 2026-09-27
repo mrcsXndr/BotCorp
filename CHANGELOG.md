@@ -54,6 +54,10 @@ Cockpit control and the capability registry (R5a).
   attention bar now counts only pending tags newer than the installed
   version and shows one item for the newest; the Releases panel marks the
   rest "older than installed", without Apply. `updates.json` is unchanged.
+- **Fix: the duplicate Telegram-bridge warning no longer fires on a restart.**
+  `resource_monitor.ps1` matches bridge holders on their launch flags and
+  warns only once the second-oldest holder has lived 10 minutes
+  (`-DupBridgeMinMin`); a younger one is the normal restart overlap.
 - `botYamlSchema` is 2 (additive, no migration script).
 - Upgrading: `botcorp sync <bot>` for every bot (the new hooks). A bot that
   used to approve its own changes now queues them for the cockpit.
