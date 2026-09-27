@@ -11,6 +11,10 @@ versions follow SemVer.
   cockpit's Switch account) refuse an account whose check failed. From a bot
   session a cache miss is now a WARN and nothing is cached. A failed check
   also names the HTTP status.
+- **A tools glob over non-executables is no longer "missing".** A glob entry
+  such as `tools/x/test_*.py` or `tools/x/_*.py` names real files that the
+  scan does not count as executables; doctor reported it as matching no file.
+  A glob now needs any code file to match, as an exact path always did.
 
 ## v0.7.1
 

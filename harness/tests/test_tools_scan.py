@@ -78,6 +78,19 @@ def test_register_file_from_a_bot_applies_a_plain_proposal(tree):
 
 
 @needs_node
+def test_a_glob_over_non_executables_is_not_missing(tree):
+    """test_* and _private files are not executables, but a glob naming them matches real files."""
+    rt, bots, env, home = tree
+    (home / "tools" / "mon" / "test_watch.py").write_text("def test_x():\n    pass\n", encoding="utf-8")
+    (home / "bot.yaml").write_text(YAML + "tools:\n"
+                                   "  - {name: tests, path: tools/mon/test_*.py, kind: lib}\n"
+                                   "  - {name: priv, path: tools/lib/_*.py, kind: lib}\n"
+                                   "  - {name: none, path: tools/nowhere/*.py, kind: lib}\n", encoding="utf-8")
+    d = json.loads(cli(env, "tools", "t", "scan", "--json").stdout)
+    assert d["missing"] == ["none"]
+
+
+@needs_node
 def test_register_an_integration_from_a_bot_queues(tree):
     rt, bots, env, home = tree
     before = (home / "bot.yaml").read_text(encoding="utf-8")

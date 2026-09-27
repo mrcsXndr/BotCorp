@@ -173,7 +173,8 @@ export function scanTools(botHome, cfg) {
   const alsoReads = (undeclared) => (undeclared.length ? `; also reads ${undeclared.join(', ')}, not declared` : '');
 
   const registered = tools.map((t) => ({ name: t.name, path: t.path, kind: t.kind, purpose: t.purpose ? String(t.purpose) : null, secrets: Array.isArray(t.secrets) ? t.secrets.map(String) : [], matches: exes.filter((f) => covers(t, f.rel)).length }));
-  const missing = tools.filter((t) => (isGlob(t.path) ? !exes.some((f) => covers(t, f.rel)) : !fs.existsSync(path.join(botHome, String(t.path || ''))))).map((t) => t.name);
+  // Any code file counts, as for an exact path: a glob over test_* or _private files is not "missing".
+  const missing = tools.filter((t) => (isGlob(t.path) ? !all.some((f) => covers(t, f.rel)) : !fs.existsSync(path.join(botHome, String(t.path || ''))))).map((t) => t.name);
   const unused = tools.filter((t) => !isGlob(t.path) && t.kind !== 'lib' && exes.some((f) => covers(t, f.rel)) && !exes.some((f) => covers(t, f.rel) && referenced(f.rel))).map((t) => t.name);
   const unregistered = exes.filter((f) => !tools.some((t) => covers(t, f.rel))).map((f) => f.rel);
   // A registered secret reader no integration entry covers.
