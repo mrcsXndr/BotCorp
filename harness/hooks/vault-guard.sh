@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PreToolUse guard (Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit) —
+# PreToolUse guard (Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit) —
 # block any tool call that touches a bot vault (any bot's, this bot's own
 # included — a bot never has a reason to reach into vault files) or the
 # secrets CLI's mutating verbs.

@@ -15,9 +15,15 @@
         ]
       },
       {
-        "matcher": "Read|Glob|Grep|Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/vault-guard.sh\"", "timeout": 5 }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-guard.sh\"", "timeout": 5 }
         ]
       }
     ],

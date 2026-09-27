@@ -123,8 +123,8 @@ export function validate(cfg) {
     const known = hookNames();
     const bad = cfg.harness.hooks_disable.map(String).filter((h) => !known.includes(h));
     if (known.length && bad.length) errs.push(`harness.hooks_disable: unknown hook(s) ${bad.join(', ')} (valid: ${known.join(', ')})`);
-    // The vault guard is the one hook a bot may never switch off.
-    if (cfg.harness.hooks_disable.map(String).includes('vault-guard')) errs.push('harness.hooks_disable: vault-guard cannot be disabled');
+    // The vault guard and the operator guard are the hooks a bot may never switch off.
+    for (const h of ['vault-guard', 'operator-guard']) if (cfg.harness.hooks_disable.map(String).includes(h)) errs.push(`harness.hooks_disable: ${h} cannot be disabled`);
   }
   const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
