@@ -195,6 +195,41 @@ export function scanTools(botHome, cfg) {
   };
 }
 
+const BARE_PY_RE = /^\s*(python3?|py)(\.exe)?(\s|$)/i;
+const few = (list) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ` (+${list.length - 5} more)` : ''}`;
+
+// The doctor rows for one bot: [{level, name, detail}], `<bot>` in detail for
+// the caller to fill. scan = scanTools(...) or null when the registry is off
+// (`tools:` absent): then only the two rows that do not need it.
+export function registryRows(cfg, scan) {
+  const rows = [];
+  if (scan && scan.registry !== 'off') {
+    const u = scan.unregistered;
+    rows.push(u.length
+      ? { level: 'WARN', name: 'tools-unregistered', detail: `${u.length} executable(s) no tools: entry covers: ${few(u)}. Fix: botcorp tools <bot> scan --proposal <file>, then register --file or retire` }
+      : { level: 'PASS', name: 'tools-unregistered', detail: `every executable is registered (${scan.executables.length})` });
+    rows.push(scan.missing.length
+      ? { level: 'FAIL', name: 'tools-missing', detail: `tools: entries matching no file: ${few(scan.missing)}. Fix: botcorp config remove <bot> tools <name>` }
+      : { level: 'PASS', name: 'tools-missing', detail: `all ${scan.registered.length} entries match a file` });
+    const au = scan.automation_unregistered;
+    rows.push(au.length
+      ? { level: 'WARN', name: 'automation-unregistered', detail: `automation commands naming an unregistered script: ${few(au.map((a) => `${a.automation} -> ${a.path}`))}` }
+      : { level: 'PASS', name: 'automation-unregistered', detail: 'every script an automation runs is registered' });
+    if (scan.unused.length) rows.push({ level: 'INFO', name: 'tools-unused', detail: `registered but referenced by nothing (no automation, rule or import): ${few(scan.unused)}` });
+  }
+  const bare = (Array.isArray(cfg.automations) ? cfg.automations : [])
+    .filter((a) => isObj(a) && a.enabled !== false && a.kind !== 'prompt' && typeof a.command === 'string' && BARE_PY_RE.test(a.command))
+    .map((a) => a.name);
+  if (bare.length) rows.push({ level: 'WARN', name: 'automation-bare-python', detail: `enabled job(s) start with a bare python (no Python on the job PATH before v0.6.0; the Store stub exits 49): ${few(bare)}. Fix: command: \${PY} ...` });
+  if (cfg.harness && cfg.harness.modules && cfg.harness.modules.board) {
+    const declared = Array.isArray(cfg.secrets) && cfg.secrets.map(String).includes('gh_token');
+    rows.push(declared
+      ? { level: 'PASS', name: 'board-token', detail: 'board poll gets GH_PROJECTS_TOKEN from the vault (gh_token)' }
+      : { level: 'INFO', name: 'board-token', detail: 'board poll uses the host gh login (declare gh_token in secrets: to give it its own token)' });
+  }
+  return rows;
+}
+
 // Move files out of the bot folder into <rt>/retired/<bot>/<stamp>/<rel> and
 // append one line to <rt>/retired/<bot>/retired.jsonl. -> the record.
 export function retireFiles({ botHome, bot, runtime, rels, name = null, by = null, now = new Date() }) {

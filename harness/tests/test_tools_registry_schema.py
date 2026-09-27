@@ -95,4 +95,5 @@ def test_doctor_shows_no_tools_rows_without_a_registry(box):
     rt, bots, env = box
     r = cli(env, "doctor", "--no-tg-probe", "--no-accounts", "--json", timeout=300)
     rows = json.loads(r.stdout)
-    assert rows and not [c for c in rows if str(c.get("name", "")).startswith("tools-")]
+    assert any(c["name"] == "t: bot.yaml" for c in rows)
+    assert not [c for c in rows if ": tools-" in str(c.get("name", ""))]

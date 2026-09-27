@@ -50,7 +50,7 @@ const {
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
-const { scanTools, listExecutables, retireFiles, covers, isGlob } = await import('./tools.mjs');
+const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows } = await import('./tools.mjs');
 
 const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
@@ -2623,6 +2623,8 @@ async function cmdDoctor({ flags }) {
         const v = harnessToolsVerdict(bot);
         add(v.level, `${bot}: harness tools reachable`, v.detail, 'bots');
       }
+      // the capability registry (cli/tools.mjs); tools: absent = only the job rows
+      for (const r of registryRows(cfg, cfg.tools === null ? null : scanTools(botHome(bot), cfg))) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
       if (cfg.harness.tray) add(trayEntries.has(`BotCorp-Tray-${bot}`) ? 'PASS' : 'WARN', `${bot}: tray`, trayEntries.has(`BotCorp-Tray-${bot}`) ? 'HKCU Run entry registered' : `harness.tray is on but no HKCU Run entry (botcorp tray ${bot} on)`, 'bots');
       else add('INFO', `${bot}: tray`, 'off (harness.tray: false)', 'bots');
       if (cfg.harness.modules.telegram) {
