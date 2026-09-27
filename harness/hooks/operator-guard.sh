@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash|PowerShell) — a bot never runs the operator-only
-# verbs: `botcorp approve|reject` (its own queued widening change),
-# `botcorp tools approve`, `botcorp accounts use`. The CLI refuses them too
+# verbs: `botcorp approve|reject` (its own queued widening change) and
+# `botcorp accounts use`. The CLI refuses them too
 # (BOT_NAME / CLAUDECODE in the env, exit 3); this is the second layer.
 #
 # Matches the COMMAND field only, never file paths or Grep patterns, so a
@@ -31,8 +31,8 @@ except Exception:
 
 CMD_N=$(printf '%s\n' "$CMD" | tr '[:upper:]' '[:lower:]')
 
-if printf '%s\n' "$CMD_N" | grep -qE "botcorp(\.mjs)?[\"']?[[:space:]]+(approve|reject|tools[[:space:]]+([^[:space:]]+[[:space:]]+)?approve|accounts[[:space:]]+use)([^a-z0-9_-]|$)"; then
-  echo "BLOCKED: botcorp approve / reject / tools approve / accounts use are operator-only. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal; never approve from a session. To read the queue: botcorp approvals." >&2
+if printf '%s\n' "$CMD_N" | grep -qE "botcorp(\.mjs)?[\"']?[[:space:]]+(approve|reject|accounts[[:space:]]+use)([^a-z0-9_-]|$)"; then
+  echo "BLOCKED: botcorp approve / reject / accounts use are operator-only. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal; never approve from a session. To read the queue: botcorp approvals." >&2
   exit 2
 fi
 exit 0

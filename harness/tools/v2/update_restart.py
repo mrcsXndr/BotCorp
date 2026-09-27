@@ -26,8 +26,8 @@ Modes:
     --check-only   like --dry-run but ALSO skip running `claude update`
                    (pure "what version am I on / is one available" probe)
     --auto         GATED autonomous entrypoint. Runs the full flow ONLY if ALL
-                   of: (a) not-checked-today, (b) update-available, (c) session
-                   idle. If any gate fails, logs why and exits 0 (no restart).
+                   of: (b) update-available, (c) session idle. If either gate
+                   fails, logs why and exits 0 (no restart).
                    Combine with --dry-run to print the gate decisions WITHOUT
                    restarting. NOT wired to any hook/timer — the Director invokes
                    it deliberately on an autonomous tick once the base is proven.
@@ -37,10 +37,8 @@ Exit codes:
     2  handled but a step failed (a best-effort notice may have been sent)
 
 # --auto autonomous gate (IMPLEMENTED below; NOT auto-wired to any hook/timer).
-# The full flow fires only when ALL THREE gates pass:
-#   (a) NOT-CHECKED-TODAY  — daily stamp <config_home>/.botcorp_update_stamp
-#       (written by the launcher on launch). If it already reads today's date,
-#       skip: launch already ran a check today.
+# The full flow fires only when BOTH gates pass (a former gate (a), a daily
+# "not checked today" stamp, was removed in v0.7.3: nothing ever wrote it):
 #   (b) UPDATE-AVAILABLE   — `claude update` changed the version (ver_before !=
 #       ver_after); computed by the existing flow.
 #   (c) SESSION-IDLE       — no in-flight work. Idle signal (cheap, available
@@ -65,7 +63,7 @@ Exit codes:
 # handoff checklist done, nothing in flight, as the LAST action of its turn) by
 # dropping .claude/.botcorp_breakpoint. A marker younger than
 # BOT_BREAKPOINT_TTL_MIN (default 30) satisfies gate (c) regardless of
-# transcript mtime and waives gate (a); a fresh .busy still wins. The
+# transcript mtime; a fresh .busy still wins. The
 # supervisor tick honours the same marker and runs this flow with
 # --claude-pid, and the marker is consumed the moment a restart is spawned.
 # Gate (b) also recognises an update that ALREADY landed on disk (CC's own
@@ -285,12 +283,9 @@ def _terminate_pid(pid: int) -> None:
 
 
 # ---------------------------------------------------------------------------
-# --auto gate logic (gates a/c; gate b is the existing version-delta check)
+# --auto gate logic (gate c; gate b is the existing version-delta check)
 # ---------------------------------------------------------------------------
 
-import datetime  # noqa: E402  (local to the gate code)
-
-STAMP_FILE = config_home() / ".botcorp_update_stamp"
 IDLE_MIN = float(os.environ.get("BOT_IDLE_MIN", "5"))
 # "Roll at this breakpoint" marker the Director drops itself (see module doc).
 BREAKPOINT_FILE = REPO_ROOT / ".claude" / ".botcorp_breakpoint"
@@ -358,18 +353,6 @@ def _current_session_id() -> str | None:
         return None
 
 
-def gate_not_checked_today() -> tuple[bool, str]:
-    """(a) Pass if the daily stamp is absent or not today's date."""
-    today = datetime.date.today().isoformat()
-    try:
-        last = STAMP_FILE.read_text(encoding="utf-8").strip()
-    except OSError:
-        return True, f"no stamp file ({STAMP_FILE}); treat as not-checked-today"
-    if last == today:
-        return False, f"already checked today (stamp={last})"
-    return True, f"stamp is {last or '(empty)'}, today is {today}"
-
-
 def _transcripts_dir() -> Path:
     """Claude Code's transcript dir for this repo — the project slug derived
     exactly as Claude Code derives it (every non-alphanumeric -> '-')."""
@@ -425,29 +408,22 @@ def gate_session_idle(now: float | None = None) -> tuple[bool, str]:
 
 
 def run_auto(dry_run: bool, exe: str) -> int:
-    """Gated autonomous flow. Evaluate gates (a) and (c) up front (cheap, no
-    side effects), then run the version-check flow as gate (b). Only if ALL
-    pass do we proceed to the real update+restart. Always exits 0 unless a
-    real update step fails."""
-    g_a_pass, g_a_why = gate_not_checked_today()
+    """Gated autonomous flow. Evaluate gate (c) up front (cheap, no side
+    effects), then run the version-check flow as gate (b). Only if both pass
+    do we proceed to the real update+restart. Always exits 0 unless a real
+    update step fails."""
     g_c_pass, g_c_why = gate_session_idle()
-    bp_ok, _ = breakpoint_declared()
-    if bp_ok and not g_a_pass:
-        # The Director asked for this roll explicitly; "launch already checked
-        # today" only guards against needless re-checks, not against a wanted one.
-        g_a_pass, g_a_why = True, f"waived by breakpoint marker ({g_a_why})"
 
     print("=== --auto gate evaluation ===")
-    print(f"  (a) not-checked-today : {'PASS' if g_a_pass else 'FAIL'} — {g_a_why}")
     print(f"  (c) session-idle      : {'PASS' if g_c_pass else 'FAIL'} — {g_c_why}")
 
-    if not (g_a_pass and g_c_pass):
+    if not g_c_pass:
         # Short-circuit before touching `claude update` — gate b not even checked.
-        print("  (b) update-available  : SKIPPED (a/c did not both pass)")
-        print("--auto: gate(s) failed -> no update/restart. exit 0.")
+        print("  (b) update-available  : SKIPPED (c did not pass)")
+        print("--auto: gate failed -> no update/restart. exit 0.")
         return 0
 
-    print("  (a)+(c) passed; now checking (b) update-available via version delta...")
+    print("  (c) passed; now checking (b) update-available via version delta...")
     running, running_why = _status_version()
     ver_before = _claude_version(exe)
     update_out = _run_update(exe)

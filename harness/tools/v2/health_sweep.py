@@ -11,8 +11,7 @@ of only producing another notification nobody reads.
 
 Built-in checks:
   tg-poller       tg_watchdog --probe-only     (409 = ALIVE is the good state)
-  supervisor      supervisor.log fresh          (< 10 min; 3-min ticks)
-  disk            free space on the repo's volume (FAIL under 10 GB)
+  disk           free space on the repo's volume (FAIL under 10 GB)
   browser-orphans leftover headless Chrome processes (> 6 = a leak)
 
 Add your own to CHECKS. A check is a zero-argument callable returning
@@ -46,7 +45,6 @@ import re
 import shutil
 import subprocess
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -97,14 +95,6 @@ def check_tg_poller() -> tuple[bool, str]:
     verdict = "ALIVE" if up else ("DEAD" if "DEAD" in out else "UNKNOWN")
     # UNKNOWN is a transient non-answer, not an outage — don't page on it.
     return up or verdict == "UNKNOWN", f"poller={verdict}"
-
-
-def check_supervisor() -> tuple[bool, str]:
-    log = REPO / "memory/metrics/supervisor.log"
-    if not log.exists():
-        return False, "supervisor.log missing"
-    age = time.time() - log.stat().st_mtime
-    return age < 600, f"log age {int(age)}s (tick=180s)"
 
 
 #: Below this and the box is close enough to full that builds, caches and log
@@ -168,7 +158,6 @@ def check_http(url: str, timeout: int = 30) -> tuple[bool, str]:
 #: budgets before you pick its timeout.
 CHECKS = [
     ("tg-poller", check_tg_poller),
-    ("supervisor", check_supervisor),
     ("disk", check_disk),
     ("browser-orphans", check_browser_orphans),
 ]

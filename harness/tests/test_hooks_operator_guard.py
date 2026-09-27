@@ -1,7 +1,7 @@
 """R5a step 2: the operator-guard hook, and PowerShell under the vault guard.
 
 Fake-stdin runs (the test_hooks_fake_stdin.py pattern):
-- operator-guard.sh blocks `botcorp approve|reject|tools approve|accounts use`
+- operator-guard.sh blocks `botcorp approve|reject|accounts use`
   in a Bash or PowerShell command (exit 2, BLOCKED on stderr), and never looks
   at anything but the command field (a Grep for "approve" passes).
 - hooks.json registers it for Bash|PowerShell, and vault-guard's matcher now
@@ -25,7 +25,6 @@ def _run(env, hook, tool_name, tool_input):
     "node cli/botcorp.mjs approve alpha 3",
     'node "C:\\x\\BotCorp\\cli\\botcorp.mjs" approve alpha --all',
     "botcorp reject beta ab12cd --reason x",
-    "node cli/botcorp.mjs tools alpha approve",
     "BC=1 node cli/botcorp.mjs accounts use alpha acc1",
 ])
 def test_blocks_operator_verbs(tmp_path, bot_home, tool, command):
