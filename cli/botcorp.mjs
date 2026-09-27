@@ -1265,8 +1265,9 @@ function cmdAutomations({ pos, flags }) {
   }
   if (!name) usage(`automations <bot> ${action} <name>`);
   if (!list.some((a) => a.name === name)) fail(`automations: no '${name}' in ${bot}'s bot.yaml`);
-  if (action === 'pause' || action === 'resume') {
-    return cmdConfig({ pos: ['config', 'set', bot, `automations.${name}.enabled`, action === 'resume' ? 'true' : 'false'], flags });
+  // enable|disable = resume|pause: the operator's flip applies, a bot's enable queues
+  if (['pause', 'resume', 'enable', 'disable'].includes(action)) {
+    return queueOrApply(bot, { segs: ['automations', name, 'enabled'], value: action === 'resume' || action === 'enable', flags, direct: true });
   }
   if (action === 'run') {
     const q = path.join(STATE_DIR, bot, 'events', 'run-now.queue');
@@ -1275,7 +1276,7 @@ function cmdAutomations({ pos, flags }) {
     out(`automations: queued run-now for ${name} in ${q} (the daemon's automations tick consumes it)`);
     return 0;
   }
-  usage(`automations: unknown action '${action}' (list|pause|resume|run)`);
+  usage(`automations: unknown action '${action}' (list|pause|resume|enable|disable|run)`);
 }
 
 // ---- new ------------------------------------------------------------------------------------
@@ -2790,7 +2791,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order once the session is idle)
   inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
   (start, stop, restart, sync, secrets, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
-  automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]
+  automations <bot> [list [--json] | pause|disable <name> | resume|enable <name> | run <name>]   (a bot's enable queues for approval)
   update [--json] | update --apply <tag> | update --skip <tag> | update --check
   cc status [--json] | cc test | cc rollback [--to <version>]          (the Claude Code pin: bots roll onto it between turns)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
