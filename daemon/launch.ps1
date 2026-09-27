@@ -278,14 +278,26 @@ $secrets = @{}
 $vaultNote = @()
 $tokenFile = ''
 $declared = @(); try { $declared = @($cfg.secrets | Where-Object { $_ }) } catch {}
+$account = "$($cfg.account)"   # '' = the bot's own oauth_token
+$oauthFrom = ''                # account | vault-fallback once the account path ran
 if (-not $attested) { $vaultNote += 'vault: skipped (unattested launch)' }
 else { try {
     # The vault only: the machine-wide token was scrubbed at the top.
     $t = $null
-    if ($declared -contains 'oauth_token') { $t = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'oauth_token' -Reason 'launch' -Nonce $LaunchNonce }
-    else { $vaultNote += 'oauth: oauth_token not in bot.yaml secrets: -> not injected' }
-    if ($t) { $secrets['oauth_token'] = $t; $vaultNote += "oauth: vault ok ($(Mask $t))" }
-    else { $vaultNote += 'oauth: no vault entry' }
+    # bot.yaml account: that account's token (<rt>\accounts\<id>); unreadable ->
+    # the bot's own, so a broken account never keeps the bot down.
+    if ($account) {
+        $accHome = Join-Path (Join-Path $RtHome 'accounts') $account
+        try { if (Test-Path (Join-Path $accHome 'account.json')) { $t = Get-VaultSecret -BotHome $accHome -Bot "account:$account" -Key 'oauth_token' } } catch { $t = $null }
+        if ($t) { $secrets['oauth_token'] = $t; $oauthFrom = 'account'; $vaultNote += "oauth: account $account ok ($(Mask $t))" }
+        else { $oauthFrom = 'vault-fallback'; $vaultNote += "oauth: account $account unreadable -> bot's own token (fallback)" }
+    }
+    if (-not $t) {
+        if ($declared -contains 'oauth_token') { $t = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'oauth_token' -Reason 'launch' -Nonce $LaunchNonce }
+        else { $vaultNote += 'oauth: oauth_token not in bot.yaml secrets: -> not injected' }
+        if ($t) { $secrets['oauth_token'] = $t; $vaultNote += "oauth: vault ok ($(Mask $t))" }
+        else { $vaultNote += 'oauth: no vault entry' }
+    }
     if ($hasTgMod -and $canOwn) {
         $tt = $null
         if ($declared -contains 'telegram_token') { $tt = Get-VaultSecret -BotHome $BotHome -Bot $Bot -Key 'telegram_token' -Reason 'launch' -Nonce $LaunchNonce }
@@ -461,10 +473,17 @@ if ($Bg -and -not $resumeId) { Write-State @{ session_id = $null; bg_id = $null 
 Write-LaunchLog "launch shell_pid=$PID started_by=$StartedBy mode=$modeText channels=$canOwn"
 # What this launch puts in the session's env, last 4 only: the session's
 # BOT_LAUNCHER_PID points back here (Add-LaunchEnvRecord, Get-SessionEnvCheck).
-$oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { 'vault' } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
-$oauthVal = $(if ($oauthSrc -eq 'vault') { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
+# The account the previous launch attempted (its record; none = '' = the bot token).
+$prevAccount = ''
+try {
+    $le = Read-JsonFile -Path (Join-Path $ConfigDir 'botcorp\launch-env.json')
+    $prevRec = $(if ($le -and $le.launches) { @($le.launches.PSObject.Properties | ForEach-Object { $_.Value } | Sort-Object { ConvertTo-UtcTime $_.at } -Descending | Select-Object -First 1) } else { @() })
+    if ($prevRec.Count -and ($prevRec[0].PSObject.Properties.Name -contains 'account')) { $prevAccount = "$($prevRec[0].account)" }
+} catch {}
+$oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { $(if ($oauthFrom) { $oauthFrom } else { 'vault' }) } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
+$oauthVal = $(if ($secrets.ContainsKey('oauth_token')) { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
 [void](Add-LaunchEnvRecord -ConfigDir $ConfigDir -LauncherPid $PID -OauthLast4 ((Mask $oauthVal) -replace '^\*+') -OauthSource $oauthSrc `
-                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames -AutoCompactWindow "$($cfg._context_window)")
+                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames -AutoCompactWindow "$($cfg._context_window)" -Account $account)
 $launchT0 = (Get-Date).AddSeconds(-2)
 
 # Inherited from a parent Claude Code session these make the child run with
@@ -547,6 +566,7 @@ if ($Bg) {
             else { Write-LaunchLog "bg: WARN daemon pid $($dmn.Pid) did not stop -> the session inherits ITS env (Telegram token / OAuth from the vault may not reach it)" }
         } elseif ($dmnAction -eq 'inherit') {
             Write-LaunchLog "bg: WARN daemon pid $($dmn.Pid) (up since $($dmn.StartedAt)) still has $(if ($live -lt 0) { 'an unreadable roster' } else { "$live live session(s)" }) -> not stopped; the new session inherits the DAEMON's env, not this launch's (stop them first: botcorp stop $Bot)"
+            if ($account -ne $prevAccount) { Write-LaunchLog "bg: WARN account switch to $(if ($account) { $account } else { "the bot's own token" }) will NOT land: the daemon keeps $(if ($live -lt 0) { 'its' } else { $live }) live session(s) with the old token" }
         } else { Write-LaunchLog 'bg: no daemon running -> claude --bg starts one with this launch''s env' }
 
         $r = Invoke-Bounded -Exe $exe -Arguments $argv -TimeoutSec 120 -Label 'claude --bg' -Capture -Env $childEnv -WorkingDirectory $BotHome -Bot $Bot

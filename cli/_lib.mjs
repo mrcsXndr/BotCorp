@@ -449,8 +449,10 @@ export function pickSessionEnvRecord(sessions, sessionId, sinceIso) {
 //   vault   { oauth, telegram } last 4 now ('' no entry; undefined not read)
 //   machineOauth  the machine-wide (HKCU) token's last 4, if read
 //   expectTg      the launch passed --channels (so it injected the token)
+//   accountOauth  the bot.yaml account's token last 4 (accounts list masked), if read:
+//                 what a launch with oauth_source `account` must have injected
 // -> { level: PASS|WARN|FAIL|INFO, env: OK|MISMATCH|FOREIGN|UNKNOWN|null, oauth, detail }
-export function sessionEnvVerdict({ running, rec = null, launch = null, lastLauncherPid = null, vault = {}, machineOauth = '', expectTg = false }) {
+export function sessionEnvVerdict({ running, rec = null, launch = null, lastLauncherPid = null, vault = {}, machineOauth = '', expectTg = false, accountOauth = '' }) {
   if (!running) return { level: 'INFO', env: null, oauth: null, detail: 'bot not running' };
   if (!rec) return { level: 'WARN', env: 'UNKNOWN', oauth: null, detail: 'no session-env record for this session (the session-env hook has not run, is disabled, or the harness predates v0.1.7)' };
   const m = (v) => (v ? `****${v}` : 'none');
@@ -461,11 +463,13 @@ export function sessionEnvVerdict({ running, rec = null, launch = null, lastLaun
   const from = rec.launcher_pid === lastLauncherPid ? 'the latest launch' : `an earlier launch (pid ${rec.launcher_pid} at ${launch.at}, which started the daemon)`;
   const bad = [];
   if (launch.oauth_source === 'inherited') bad.push(`oauth ${m(oauth)} came from the environment (a machine-wide token is another bot's account), not the vault`);
+  else if (launch.oauth_source === 'account') { if (accountOauth && oauth !== accountOauth) bad.push(`oauth ${m(oauth)} is not account ${launch.account}'s ****${accountOauth}`); }
   else if (vault.oauth && oauth !== vault.oauth) bad.push(`oauth ${m(oauth)} is not the vault's ****${vault.oauth}`);
   if (expectTg && !rec.telegram_last4) bad.push('no telegram token');
   else if (expectTg && vault.telegram && rec.telegram_last4 !== vault.telegram) bad.push(`telegram ${m(rec.telegram_last4)} is not the vault's ****${vault.telegram}`);
   const detail = `env of ${from}: oauth ${launch.oauth_source === 'none' ? "none (the config home's own login)" : `${m(oauth)} (${launch.oauth_source})`}, ${tg}`;
   if (bad.length) return { level: 'FAIL', env: 'MISMATCH', oauth, detail: `${bad.join('; ')} - ${detail}` };
+  if (launch.oauth_source === 'vault-fallback') return { level: 'WARN', env: 'OK', oauth, detail: `account ${launch.account} unreadable, running on the bot's own token - ${detail}` };
   return { level: 'PASS', env: 'OK', oauth, detail };
 }
 

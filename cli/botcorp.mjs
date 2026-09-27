@@ -287,6 +287,14 @@ function accountsListJson() {
   try { const p = JSON.parse(r.out.trim() || '[]'); return { ok: true, rows: Array.isArray(p) ? p : [p] }; }
   catch { return { ok: false, err: 'accounts list: unparsable output', rows: [] }; }
 }
+// An account's token last 4 (accounts list masked), '' when unknown; one list per run.
+let accountRows;
+function accountLast4(id) {
+  if (!id) return '';
+  if (accountRows === undefined) { const r = accountsListJson(); accountRows = r.ok ? r.rows : []; }
+  const row = accountRows.find((x) => x.id === id);
+  return row && /^\*+(.{4})$/.test(row.masked || '') ? row.masked.slice(-4) : '';
+}
 function echoPs(r) {
   if (r.out.trim()) out(r.out.trim());
   if (r.err.trim()) process.stderr.write(r.err.trim() + '\n');
@@ -2654,7 +2662,7 @@ async function cmdDoctor({ flags }) {
       // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
       {
         const l4 = (key) => { if (!vault.ok) return undefined; const r = vault.rows.find((x) => x.key === key); return !r ? '' : /^\*+(.{4})$/.test(r.masked) ? r.masked.slice(-4) : undefined; };
-        const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4 });
+        const v = sessionEnvOf(bot, botState(bot), s.running, !!cfg.harness.modules.telegram, { vault: { oauth: l4('oauth_token'), telegram: l4('telegram_token') }, machineOauth: envLast4, accountOauth: accountLast4(cfg.account) });
         add(v.level, `${bot}: session env`, `${v.env ? `${v.env}: ` : ''}${v.detail}${v.level === 'FAIL' ? `. Fix: botcorp stop ${bot}; botcorp start ${bot} (launches.log: the "bg:" daemon line and the "env:" line)` : ''}`, 'bots');
         // names only: which vault keys the running session's env holds
         const launch = sessionLaunchOf(bot, botState(bot)).launch;

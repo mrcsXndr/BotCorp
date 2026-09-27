@@ -101,6 +101,7 @@ def test_launch_env_record_keeps_the_newest_launches(tmp_path):
     launches = json.loads((cfg / "botcorp" / "launch-env.json").read_text(encoding="utf-8"))["launches"]
     assert sorted(launches) == ["102", "103", "104"]
     assert launches["104"]["oauth_last4"] == "Q7w3" and launches["104"]["oauth_source"] == "vault" and launches["104"]["telegram_last4"] is None
+    assert launches["104"]["account"] == ""   # no -Account: the bot's own token
 
 
 @needs_pwsh
@@ -162,3 +163,22 @@ def test_session_env_verdict_truth_table():
     got = _node(f"{json.dumps([c for c, _ in cases])}.map((c) => {{ const v = m.sessionEnvVerdict(c); return [v.level, v.env, v.detail]; }})")
     assert [(g[0], g[1]) for g in got] == [want for _, want in cases]
     assert "Mw99" in got[2][2] and "****Q7w3 (vault)" in got[4][2] and "earlier launch" in got[5][2]
+
+
+@needs_node
+def test_session_env_verdict_grades_an_account_launch_against_the_account():
+    # R5c: a launch on bot.yaml `account:` is graded against that account's token, not the bot's vault
+    rec = {"session_id": "s", "launcher_pid": 222, "telegram_last4": "XyZ9"}
+    acct = {"at": "2026-09-25T00:00:00Z", "oauth_last4": "A1b2", "oauth_source": "account", "account": "acc1"}
+    fallback = {"at": "2026-09-25T00:00:00Z", "oauth_last4": "C3d4", "oauth_source": "vault-fallback", "account": "acc1"}
+    vault = {"oauth": "C3d4", "telegram": "XyZ9"}
+    cases = [
+        ({"running": True, "rec": rec, "launch": acct, "lastLauncherPid": 222, "vault": vault, "accountOauth": "A1b2"}, ("PASS", "OK")),
+        ({"running": True, "rec": rec, "launch": fallback, "lastLauncherPid": 222, "vault": vault, "accountOauth": "A1b2"}, ("WARN", "OK")),
+        ({"running": True, "rec": rec, "launch": dict(acct, oauth_last4="Zz99"), "lastLauncherPid": 222, "vault": vault, "accountOauth": "A1b2"}, ("FAIL", "MISMATCH")),
+    ]
+    got = _node(f"{json.dumps([c for c, _ in cases])}.map((c) => {{ const v = m.sessionEnvVerdict(c); return [v.level, v.env, v.detail]; }})")
+    assert [(g[0], g[1]) for g in got] == [want for _, want in cases]
+    assert "****A1b2 (account)" in got[0][2]
+    assert "account acc1 unreadable, running on the bot's own token" in got[1][2]
+    assert "is not account acc1's ****A1b2" in got[2][2]
