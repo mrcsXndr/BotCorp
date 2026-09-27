@@ -630,6 +630,30 @@ downloads an update (doctor: `cc autoupdater`). `update_restart.py` and TG
 `/update` refuse while `BOTCORP_CLAUDE_EXE` is set ("Claude Code is pinned by
 BotCorp: botcorp cc status"); the tick no longer runs them.
 
+## Account roll
+
+`bot.yaml` `account:` (set by `botcorp accounts use`) names the Claude login a
+bot runs on. Launch reads that account's `oauth_token`; when it cannot, it
+starts on the bot's own token, logs one `launches.log` line and records
+`oauth_source: vault-fallback`. Either way the session launcher's
+`launch-env.json` record (`launches[<pid>].account`, `''` for the bot's own
+token) says which account the launch **attempted**; `state.env_launcher_pid`
+names the newest one.
+
+When the tick's decision is `none`, no cc roll is due, and the wanted account
+differs from the attempted one, `Get-AccountRollAction` decides with the cc
+roll's gates: **roll** only when the bot is alive, its phase is `idle`, it
+declared a fresh breakpoint or its job record awaits the next prompt, no inbox
+drainer is live, and no `account_roll_at` is younger than 30 min. The bot
+then restarts through the normal restart path (busy check, start cap,
+`--resume`, so the conversation is kept) with the reason `account -> <id>`
+(`account -> bot token` after `accounts use <bot> none`).
+Anything else defers quietly (`account roll -> <id> DEFERRED (<why>)`).
+Because the comparison is against the attempted account, a launch that fell
+back is never rolled again; `doctor` and the cockpit's `account` attention
+item report a switch that did not land. A pre-0.7 record without the key reads
+as the bot's own token.
+
 ## Harness update (admin-applied, never automatic)
 
 `update.ps1 -Check` (hourly from the tick) does a bounded `git fetch --tags`

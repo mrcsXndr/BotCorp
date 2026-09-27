@@ -330,7 +330,22 @@ config_dir, updated_at}` per account (masked = `****last4` or empty).
 `claude/` (session histories survive). `seed` creates one account per bot
 that already holds an `oauth_token` (id = the bot's name, re-encrypted
 in-process into the account vault's own entropy; accounts that already exist
-are left alone).
+are left alone). `remove` refuses while a bot's `account:` names the account.
+
+### `accounts use <bot> <id|none> [--by <who>]`
+
+Puts a bot on an account's Claude login: writes `bot.yaml` `account: <id>`
+(`none` removes the key: the bot's own `oauth_token` again) and appends a line
+to `<BOTCORP_HOME>/logs/<bot>/accounts.log`. Operator-only (exit 3 from a bot
+session); the account must exist and pass its token check first. The switch
+never restarts anything itself: a live bg bot rolls onto the account at its
+next idle point between turns (`docs/daemon.md`, "Account roll"), keeping the
+conversation; a stopped bot uses it at its next start. Launch reads the
+account's token and falls back to the bot's own when it cannot
+(`launch-env.json` `oauth_source: vault-fallback`, one `launches.log` line),
+and jobs that declare `oauth_token` follow the same account. `config set
+<bot> account ...` from a bot is widening and queues for approval. The
+cockpit's Usage sheet runs this verb ("Switch account").
 
 ### `chat [--account <id>] [--cwd <path>|--generic] [--dry-run]`
 
@@ -456,10 +471,17 @@ registry is off for that bot and nothing below reports.
 - `scan` reports registered, unregistered, missing (an entry matching no file)
   and unused (referenced by nothing), and proposes entries for the
   unregistered: `monitor` (or `integration`, with secrets) when an automation
-  runs it, `cli` when CLAUDE.md, `.claude/` or `scripts/` mention it
-  (`integration` if its text reads a declared secret's env name), one `lib`
-  glob per folder of import-only modules; the rest are orphans, only
-  ever proposed for retiring. `--proposal <file>` writes the proposal YAML.
+  runs it, `cli` when CLAUDE.md, `.claude/` or `scripts/` mention it, one
+  `lib` glob per folder of import-only modules; the rest are orphans, only
+  ever proposed for retiring. A file that reads a secret (a declared key's env
+  name, or an env read of a name like `*_TOKEN`, `*SECRET*`, `*_KEY`) is
+  always an exact `integration` entry, never inside a glob; an orphan that
+  does carries its `reads`. `underclassified` lists registered secret readers
+  no `integration` entry covers. Files the harness loads by a fixed path
+  (`tools/tg_commands_local.py`) count as referenced. `--proposal <file>`
+  writes the proposal YAML. Every scan of a bot with `tools:` records the
+  day's worst counts in `<BOTCORP_HOME>/state/<bot>.registry-days.json`; the
+  tick scans each such bot once a day.
 - `register --file <proposal>` or `register --name <n> --path <p> --kind <k>
   [--purpose <t>] [--secrets a,b]` appends the entries. From the operator it
   applies; from a bot an `integration` or secret-bearing entry queues for
@@ -468,13 +490,21 @@ registry is off for that bot and nothing below reports.
   `<BOTCORP_HOME>/retired/<bot>/<stamp>/<rel>`, drops the entry, and appends
   a line to `<BOTCORP_HOME>/retired/<bot>/retired.jsonl`. A bot may retire;
   git history and the runtime copy are the undo.
+- `gate [--days 7] [--json]` prints `clean <n>/<days> consecutive days` from
+  that record and exits 0 once n reaches days (1 otherwise). A day is clean
+  with at least one scan and every worst count at 0; a dirty or missing day
+  breaks the streak, and today not scanned yet is not a gap. Run it before
+  switching a bot to `enforce`.
 
 `bot.yaml` `harness.tools_registry` (`warn`, the default, or `enforce`) sets
-how `doctor` grades a gap: `tools-unregistered` and `automation-unregistered`
-(an automation command naming an unregistered script) are WARN, or FAIL under
-`enforce`; `tools-missing` is always FAIL; `tools-unused` is INFO. The harness
-`tools-nudge` hook prints the register command the moment a bot writes an
-unregistered executable.
+how `doctor` grades a gap: `tools-unregistered`, `automation-unregistered`
+(an automation command naming an unregistered script) and
+`tools-underclassified` are WARN, or FAIL under `enforce`; `tools-missing` is
+always FAIL; `tools-unused` is INFO; in warn mode `tools-enforce-ready` (INFO)
+shows the gate streak. The harness `tools-nudge` hook prints the register
+command the moment a bot writes an unregistered executable (under `enforce`
+it adds that doctor FAILs until it is registered). `botcorp new` starts a bot
+with `tools: []` and `enforce`.
 
 ### `start <bot> [--fresh] [--debug] [--dry-run]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
 

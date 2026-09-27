@@ -2845,6 +2845,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   backup <bot> [--dry-run]                                              (needs backup.git_remote in bot.yaml)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
   accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)
+  accounts use <bot> <id|none> [--by <who>]   (operator: run a bot on an account's login; applied at its next idle turn)
   chat [--account <id>] [--cwd <folder>|--generic] [--dry-run]     (plain claude for an account in its own WT tab; a picker without flags)
   attach <bot> [--elevate] | tray <bot> on [--attach-at-login]|off|status   (pull a bg bot up in a WT tab; per-bot tray icon at login)
   sync <bot> [--dry-run]

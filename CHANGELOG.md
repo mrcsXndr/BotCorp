@@ -3,6 +3,51 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.0
+
+Account switch and registry enforcement groundwork (R5c).
+
+- **A bot can run on an account's login.** `bot.yaml` `account: <id>`
+  (botYamlSchema 3) names an account from `botcorp accounts`; `botcorp
+  accounts use <bot> <id|none> [--by <who>]` sets it (operator-only, the
+  account must pass its token check, logged to `logs/<bot>/accounts.log`).
+  Launch reads the account's token and falls back to the bot's own when it
+  cannot (`launch-env.json` records the attempted account and `oauth_source:
+  account | vault-fallback`); jobs that declare `oauth_token` follow the same
+  account. `accounts remove` refuses while a bot names the account, and
+  `config set <bot> account` from a bot queues for approval.
+- **The switch lands between turns.** The tick rolls a live bot onto its
+  wanted account only at an idle point (the cc roll's gates: phase idle,
+  between turns, no inbox drainer, 30-minute backoff) through the normal
+  restart path, so the conversation is kept. A launch that fell back is never
+  re-rolled; doctor and a new cockpit `account` attention item report a
+  switch that did not land.
+- **Cockpit: Switch account.** The Usage sheet gets a per-bot picker (each
+  account, the bots already on it, and the bot's own token) and a "switching
+  to <id> at next idle" line. `POST /api/bots/:name/account` is
+  operator-gated and audited.
+- **`tools register` from a bot applies the plain entries** and queues only
+  the integration / secret-bearing ones, as one approval entry (before, one
+  integration held back the whole file).
+- **The tools scan finds secret readers.** A file that reads a declared key's
+  env name, or an env var named like a secret (`*_TOKEN`, `*SECRET*`,
+  `*_KEY`, ...), is proposed as an exact `integration` entry and never put
+  inside a glob; an orphan that reads one shows its `reads`. New scan field
+  `underclassified` and doctor row `tools-underclassified` (WARN, FAIL under
+  enforce). Files the harness loads by a fixed path
+  (`tools/tg_commands_local.py`) are no longer orphans.
+- **Enforce groundwork.** Every `tools <bot> scan` records the day's worst
+  counts in `state/<bot>.registry-days.json`, and the tick scans each bot
+  with `tools:` once a day. `botcorp tools <bot> gate [--days 7]` prints the
+  clean-day streak and exits 0 once it is long enough; doctor shows it as
+  `tools-enforce-ready` (INFO) in warn mode. Under `enforce` the tools-nudge
+  hook says doctor FAILs and the cockpit's registry item is bad. **`botcorp
+  new` now writes `tools: []` and `harness.tools_registry: enforce`.**
+- **Rollback:** v0.6.0 rejects `account:` as an unknown bot.yaml key, which
+  makes launch exit 1. **Before downgrading, run `botcorp accounts use <bot>
+  none` for every bot that has an account.** The other additions
+  (`registry-days.json`, launch-env `account`) are ignored by v0.6.0.
+
 ## v0.6.0
 
 Cockpit control and the capability registry (R5a).
