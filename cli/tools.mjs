@@ -103,6 +103,35 @@ function docSources(botHome) {
   return [...new Set(files)].map((abs) => ({ rel: fwd(path.relative(botHome, abs)), text: readText(abs) })).filter((d) => d.text);
 }
 
+// The env names a declared vault key reaches a process as.
+const SESSION_NAMES = { oauth_token: 'CLAUDE_CODE_OAUTH_TOKEN', telegram_token: 'TELEGRAM_BOT_TOKEN' };
+const envNames = (k) => [k.toUpperCase(), SESSION_NAMES[k]].filter(Boolean);
+const SECRET_NAME_RE = /(TOKEN|SECRET|PASSWORD|PASSWD|BEARER|CREDENTIAL|API_KEY|ACCESS_KEY|_KEY$)/;
+const ENV_READ_RES = [
+  /os\.environ\[\s*['"]([A-Za-z_]\w*)['"]\s*\]/g,
+  /os\.environ\.get\(\s*['"]([A-Za-z_]\w*)['"]/g,
+  /os\.getenv\(\s*['"]([A-Za-z_]\w*)['"]/g,
+  /process\.env\.([A-Za-z_]\w*)/g,
+  /process\.env\[\s*['"`]([A-Za-z_]\w*)['"`]\s*\]/g,
+  /\$env:([A-Za-z_]\w*)/gi,
+];
+
+// The secret env names a file's text reads, sorted: a declared key's env name
+// anywhere in the text, or an env read whose literal name looks like a secret.
+export function secretReads(text, declared = []) {
+  const found = new Set();
+  for (const k of declared.map(String)) for (const n of envNames(k)) if (text.includes(n)) found.add(n);
+  for (const re of ENV_READ_RES) for (const m of text.matchAll(re)) if (SECRET_NAME_RE.test(m[1])) found.add(m[1]);
+  return [...found].sort();
+}
+
+// Split a file's reads into the declared keys they come from and the rest.
+function readKeys(reads, declared) {
+  const secrets = declared.filter((k) => envNames(k).some((n) => reads.includes(n)));
+  const covered = new Set(secrets.flatMap(envNames));
+  return { secrets, undeclared: reads.filter((n) => !covered.has(n)) };
+}
+
 function slug(s) {
   return String(s).toLowerCase().replace(/\.[a-z0-9]+$/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'tool';
 }
@@ -111,7 +140,8 @@ function slug(s) {
 //   registry: off|warn|enforce, executables: [rel],
 //   registered: [{name, path, kind, purpose, secrets, matches}], missing: [name], unused: [name],
 //   unregistered: [rel], automation_unregistered: [{automation, path}],
-//   proposal: { tools: [entries], orphans: [rel] } }
+//   underclassified: [{path, entry, reads}] (a secret reader no integration entry covers),
+//   proposal: { tools: [entries], orphans: [rel | {path, reads}] } }
 export function scanTools(botHome, cfg) {
   const all = codeFiles(botHome);
   const exes = all.filter((f) => f.entry);
@@ -131,11 +161,21 @@ export function scanTools(botHome, cfg) {
     refs.set(f.rel, { auto, doc, imp });
   }
   const referenced = (rel) => { const r = refs.get(rel); return !!(r && (r.auto || r.doc || r.imp)); };
+  const textOf = new Map(importers.map((o) => [o.rel, o.text]));
+  const reads = new Map(exes.map((f) => [f.rel, secretReads(textOf.get(f.rel) || '', declared)]));
+  const readerDirs = new Set(exes.filter((f) => reads.get(f.rel).length).map((f) => path.posix.dirname(f.rel)));
+  // "also reads FOO_TOKEN, not declared" for a proposal's purpose.
+  const alsoReads = (undeclared) => (undeclared.length ? `; also reads ${undeclared.join(', ')}, not declared` : '');
 
   const registered = tools.map((t) => ({ name: t.name, path: t.path, kind: t.kind, purpose: t.purpose ? String(t.purpose) : null, secrets: Array.isArray(t.secrets) ? t.secrets.map(String) : [], matches: exes.filter((f) => covers(t, f.rel)).length }));
   const missing = tools.filter((t) => (isGlob(t.path) ? !exes.some((f) => covers(t, f.rel)) : !fs.existsSync(path.join(botHome, String(t.path || ''))))).map((t) => t.name);
   const unused = tools.filter((t) => !isGlob(t.path) && t.kind !== 'lib' && exes.some((f) => covers(t, f.rel)) && !exes.some((f) => covers(t, f.rel) && referenced(f.rel))).map((t) => t.name);
   const unregistered = exes.filter((f) => !tools.some((t) => covers(t, f.rel))).map((f) => f.rel);
+  // A registered secret reader no integration entry covers.
+  const underclassified = exes.filter((f) => reads.get(f.rel).length).flatMap((f) => {
+    const cov = tools.filter((t) => covers(t, f.rel));
+    return cov.length && !cov.some((t) => t.kind === 'integration') ? [{ path: f.rel, entry: String(cov[0].name), reads: reads.get(f.rel) }] : [];
+  });
   const automationUnregistered = [];
   for (const a of autos) {
     for (const f of exes) {
@@ -147,34 +187,41 @@ export function scanTools(botHome, cfg) {
   const exact = [], cliByDir = new Map(), libByDir = new Map(), orphans = [];
   for (const rel of unregistered) {
     const { auto, doc, imp } = refs.get(rel);
-    const abs = path.join(botHome, rel);
+    const r = reads.get(rel);
+    const { secrets: readSecrets, undeclared } = readKeys(r, declared);
+    // A secret reader is always an exact integration entry, whatever references it.
+    const integration = (purpose, extra = []) => {
+      const secrets = [...new Set([...extra, ...readSecrets])];
+      exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: 'integration', purpose: purpose + alsoReads(undeclared), ...(secrets.length ? { secrets } : {}) });
+    };
     if (auto) {
       const secrets = Array.isArray(auto.secrets) ? auto.secrets.map(String) : [];
-      exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: secrets.length ? 'integration' : 'monitor', purpose: `run by automation ${auto.name}`, ...(secrets.length ? { secrets } : {}) });
+      if (secrets.length || r.length) integration(`run by automation ${auto.name}`, secrets);
+      else exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: 'monitor', purpose: `run by automation ${auto.name}` });
     } else if (doc) {
-      const text = readText(abs);
-      const secrets = declared.filter((k) => text.includes(k.toUpperCase()) || (k === 'oauth_token' && text.includes('CLAUDE_CODE_OAUTH_TOKEN')) || (k === 'telegram_token' && text.includes('TELEGRAM_BOT_TOKEN')));
-      if (secrets.length) exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: 'integration', purpose: `referenced from ${doc.rel}`, secrets });
+      if (r.length) integration(`referenced from ${doc.rel}`);
       else { const d = path.posix.dirname(rel); cliByDir.set(d, [...(cliByDir.get(d) || []), { rel, from: doc.rel }]); }
     } else if (imp) {
-      const d = path.posix.dirname(rel);
-      libByDir.set(d, [...(libByDir.get(d) || []), rel]);
-    } else orphans.push(rel);
+      if (r.length) integration(`imported by ${imp.rel}`);
+      else { const d = path.posix.dirname(rel); libByDir.set(d, [...(libByDir.get(d) || []), rel]); }
+    } else orphans.push(r.length ? { path: rel, reads: r } : rel);
   }
   const groupPath = (dir, rels) => {
     const exts = [...new Set(rels.map((r) => path.posix.extname(r)))];
     return `${dir}/*${exts.length === 1 ? exts[0] : ''}`;
   };
   const dirSlug = (d) => slug(d.replace(/^tools(\/|$)/, '') || 'tools');
+  // No glob over a folder holding a secret reader: it would register the reader below integration.
   for (const [dir, items] of cliByDir) {
-    if (items.length === 1) exact.push({ name: slug(path.posix.basename(items[0].rel)), path: items[0].rel, kind: 'cli', purpose: `referenced from ${items[0].from}` });
+    if (items.length === 1 || readerDirs.has(dir)) for (const it of items) exact.push({ name: slug(path.posix.basename(it.rel)), path: it.rel, kind: 'cli', purpose: `referenced from ${it.from}` });
     else exact.push({ name: `cli-${dirSlug(dir)}`, path: groupPath(dir, items.map((i) => i.rel)), kind: 'cli', purpose: `${items.length} scripts referenced from CLAUDE.md / .claude / scripts` });
   }
   for (const [dir, all] of libByDir) {
     // a cli glob over the same directory already covers these
     const rels = all.filter((r) => !exact.some((e) => isGlob(e.path) && covers(e, r)));
     if (!rels.length) continue;
-    exact.push({ name: `lib-${dirSlug(dir)}`, path: rels.length === 1 ? rels[0] : groupPath(dir, rels), kind: 'lib', purpose: `${rels.length} module${rels.length === 1 ? '' : 's'} imported by other tools` });
+    if (rels.length > 1 && readerDirs.has(dir)) for (const r of rels) exact.push({ name: slug(path.posix.basename(r)), path: r, kind: 'lib', purpose: 'module imported by other tools' });
+    else exact.push({ name: `lib-${dirSlug(dir)}`, path: rels.length === 1 ? rels[0] : groupPath(dir, rels), kind: 'lib', purpose: `${rels.length} module${rels.length === 1 ? '' : 's'} imported by other tools` });
   }
   // Names stay unique against the registry and each other (a clash gets its directory).
   const taken = new Set(tools.map((t) => String(t.name)));
@@ -189,7 +236,7 @@ export function scanTools(botHome, cfg) {
   return {
     registry: cfg.tools === null || cfg.tools === undefined ? 'off' : (cfg.harness && cfg.harness.tools_registry) || 'warn',
     executables: exes.map((f) => f.rel),
-    registered, missing, unused, unregistered,
+    registered, missing, unused, unregistered, underclassified,
     automation_unregistered: automationUnregistered,
     proposal: { tools: exact, orphans },
   };
@@ -216,6 +263,10 @@ export function registryRows(cfg, scan) {
     rows.push(au.length
       ? { level: gap, name: 'automation-unregistered', detail: `automation commands naming an unregistered script: ${few(au.map((a) => `${a.automation} -> ${a.path}`))}` }
       : { level: 'PASS', name: 'automation-unregistered', detail: 'every script an automation runs is registered' });
+    const uc = scan.underclassified || [];
+    rows.push(uc.length
+      ? { level: gap, name: 'tools-underclassified', detail: `secret readers registered below integration: ${few(uc.map((x) => `${x.path} (${x.entry}) reads ${x.reads.join(', ')}`))}. Fix: register each as an exact kind: integration entry with its secrets` }
+      : { level: 'PASS', name: 'tools-underclassified', detail: 'no registered secret reader sits below integration' });
     if (scan.unused.length) rows.push({ level: 'INFO', name: 'tools-unused', detail: `registered but referenced by nothing (no automation, rule or import): ${few(scan.unused)}` });
   }
   const bare = (Array.isArray(cfg.automations) ? cfg.automations : [])

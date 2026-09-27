@@ -85,6 +85,23 @@ def test_board_token_row():
 
 
 @needs_node
+def test_a_glob_over_a_secret_reader_is_underclassified(box):
+    rt, bots, env = box
+    home = bots / "t"
+    for name, text in {"one.py": "print(1)\n", "two.py": "print(2)\n", "a.py": 'import os\nk = os.environ["AWS_SECRET_ACCESS_KEY"]\n'}.items():
+        (home / "tools" / "x").mkdir(parents=True, exist_ok=True)
+        (home / "tools" / "x" / name).write_text(text, encoding="utf-8")
+    base = "name: t\nharness:\n  service: manual\n{mode}tools:\n  - {{name: x, path: tools/x/*.py, kind: cli}}\n"
+    for mode, level in (("", "WARN"), ("  tools_registry: enforce\n", "FAIL")):
+        (home / "bot.yaml").write_text(base.format(mode=mode), encoding="utf-8")
+        scan = json.loads(cli(env, "tools", "t", "scan", "--json").stdout)
+        assert scan["underclassified"] == [{"path": "tools/x/a.py", "entry": "x", "reads": ["AWS_SECRET_ACCESS_KEY"]}]
+        row = _rows(CFG, scan)["tools-underclassified"]
+        assert row["level"] == level and "tools/x/a.py" in row["detail"]
+    assert _rows(CFG, _scan())["tools-underclassified"]["level"] == "PASS"
+
+
+@needs_node
 def test_doctor_shows_the_rows_for_a_registry_bot(box):
     rt, bots, env = box
     home = bots / "t"

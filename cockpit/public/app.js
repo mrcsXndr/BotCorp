@@ -313,7 +313,10 @@ function toolsHtml(s) {
       html += `<div class="cap"><div class="grow"><div class="l1"><span class="p">${esc(p.path)}</span></div><div class="l2">register as ${esc(p.name)} (${esc(p.kind)})${p.purpose ? ': ' + esc(p.purpose) : ''}${p.secrets ? ' · secrets ' + esc(p.secrets.join(', ')) : ''}</div></div>`
         + `<div class="acts"><button class="btn" data-reg="${i}">Register</button>${p.path.includes('*') ? '' : `<button class="btn quiet" data-retire="${esc(p.path)}">Retire</button>`}</div></div>`;
     });
-    for (const o of orphans) html += `<div class="cap"><div class="grow"><div class="l1"><span class="p">${esc(o)}</span></div><div class="l2">nothing runs, documents or imports it</div></div><div class="acts"><button class="btn quiet" data-retire="${esc(o)}">Retire</button></div></div>`;
+    for (const o of orphans) {
+      const p = typeof o === 'string' ? o : o.path;
+      html += `<div class="cap"><div class="grow"><div class="l1"><span class="p">${esc(p)}</span></div><div class="l2">nothing runs, documents or imports it${o.reads ? ' · reads ' + esc(o.reads.join(', ')) : ''}</div></div><div class="acts"><button class="btn quiet" data-retire="${esc(p)}">Retire</button></div></div>`;
+    }
   }
   if (missing.size) {
     html += `<p class="caphead">Missing <span class="num">${missing.size}</span></p>`;

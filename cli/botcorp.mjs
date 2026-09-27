@@ -926,11 +926,12 @@ function cmdTools({ pos, flags }) {
     if (proposalFile) writeTextAtomic(proposalFile, dumpYaml({ bot, generated_at: new Date().toISOString(), tools: r.proposal.tools, orphans: r.proposal.orphans }));
     if (flags.json) { outJson({ bot, ...r }); return 0; }
     out(`tools: ${bot} registry ${r.registry}, ${r.executables.length} executables, ${r.registered.length} entries`);
-    out(`  unregistered ${r.unregistered.length}, missing ${r.missing.length}, unused ${r.unused.length}`);
+    out(`  unregistered ${r.unregistered.length}, missing ${r.missing.length}, unused ${r.unused.length}, underclassified ${r.underclassified.length}`);
     for (const n of r.missing) out(`  missing: ${n}`);
+    for (const u of r.underclassified) out(`  underclassified: ${u.path} (${u.entry}) reads ${u.reads.join(', ')}`);
     out(`proposal: ${r.proposal.tools.length} entries, ${r.proposal.orphans.length} orphans`);
     for (const e of r.proposal.tools) out(`  ${e.kind.padEnd(11)} ${e.name}  ${e.path}`);
-    for (const o of r.proposal.orphans) out(`  orphan      ${o}`);
+    for (const o of r.proposal.orphans) out(typeof o === 'string' ? `  orphan      ${o}` : `  orphan      ${o.path}  reads ${o.reads.join(', ')}`);
     if (proposalFile) out(`proposal written: ${proposalFile} (botcorp tools ${bot} register --file <it>)`);
     return 0;
   }
