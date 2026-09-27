@@ -805,10 +805,12 @@ document.addEventListener('click', (e) => { const m = el('more'); if (m.open && 
 
 /* ---- releases (machine-wide, not per-bot) ---- */
 function relCard(r) {
-  const statusCls = ['applied', 'failed', 'pending'].includes(r.status) ? r.status : '';
-  const actions = r.status === 'pending' ? `<div class="actions"><button class="btn primary" data-apply="${esc(r.tag)}">Apply</button><button class="btn" data-skip="${esc(r.tag)}">Skip</button></div>` : '';
-  return `<div class="rel">
-    <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(r.status)}</span></div>
+  // a pending tag at or below the checkout is stale bookkeeping, not an action
+  const older = r.status === 'pending' && r.older;
+  const statusCls = older ? '' : ['applied', 'failed', 'pending'].includes(r.status) ? r.status : '';
+  const actions = r.status === 'pending' && !older ? `<div class="actions"><button class="btn primary" data-apply="${esc(r.tag)}">Apply</button><button class="btn" data-skip="${esc(r.tag)}">Skip</button></div>` : '';
+  return `<div class="rel${older ? ' older' : ''}">
+    <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(older ? 'older than installed' : r.status)}</span></div>
     <dl>
       <dt>what</dt><dd>${esc(r.what || '(none given)')}</dd>
       <dt>why</dt><dd>${esc(r.why || '(none given)')}</dd>

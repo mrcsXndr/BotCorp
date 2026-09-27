@@ -9,7 +9,8 @@
 //   blocked / down      bots.mjs liveness (the doctor's checks)
 //   automation_failing  <rt>/state/<bot>/automations.json failure_streak >= 3
 //   registry            `tools <bot> scan --json` (bots with a tools: list)
-//   release             <rt>/state/updates.json pending
+//   release             <rt>/state/updates.json pending AND newer than the
+//                       checkout; one item, for the newest
 //   cc_rejected         core/cc.mjs candidate rejected by the canary
 //   usage_blocked       status.json 5 h or 7 d >= 95%
 // Each item: {bot, kind, severity: warn|bad, text, action}. The action names
@@ -20,7 +21,7 @@ import path from 'node:path';
 import * as bots from './bots.mjs';
 import { cliJson } from './cli.mjs';
 import { pairingState } from './pairing.mjs';
-import { listUpdates } from './updates.mjs';
+import { listUpdates, isOlder, cmpVersion } from './updates.mjs';
 import { chatStatus } from './chatstatus.mjs';
 import { ccStatus } from '../core/cc.mjs';
 
@@ -32,7 +33,7 @@ const SCAN_CACHE_MS = 60_000;
 const SEVERITY = { bad: 0, warn: 1 };
 
 // Pure: the inputs gathered below -> the sorted item list (bad first, then as found).
-export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], cc = null, usage = {} } = {}) {
+export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {} } = {}) {
   const items = [];
   const push = (bot, kind, severity, text, action) => items.push({ bot, kind, severity, text, action });
   for (const a of approvals) push(a.bot, 'approval', 'warn', `${a.bot} asks: ${a.diff}`, { type: 'approve', bot: a.bot, id: a.id });
@@ -61,7 +62,8 @@ export function attentionItems({ bots: list = [], approvals = [], pairing = {}, 
     const hot = u ? [['5 h', u.fiveHour], ['7 d', u.sevenDay]].filter(([, w]) => w && !w.na && w.pct >= USAGE_BLOCK_PCT) : [];
     if (hot.length) push(b.name, 'usage_blocked', 'bad', `${b.name}: ${hot.map(([k, w]) => `${k} limit at ${Math.round(w.pct)}%`).join(', ')}`, { type: 'usage' });
   }
-  for (const r of releases) if (r.status === 'pending') push(null, 'release', 'warn', `Release ${r.tag} is ready to apply`, { type: 'release', tag: r.tag });
+  const newer = releases.filter((r) => r.status === 'pending' && !isOlder(r.tag, installed)).sort((a, b) => cmpVersion(b.tag, a.tag));
+  if (newer.length) push(null, 'release', 'warn', `Release ${newer[0].tag} is ready to apply${newer.length > 1 ? ` (${newer.length} newer releases)` : ''}`, { type: 'release', tag: newer[0].tag });
   if (cc && cc.candidate && cc.candidate.status === 'rejected') push(null, 'cc_rejected', 'warn', `Claude Code ${cc.candidate.version} failed its canary and was not rolled out`, { type: 'release' });
   return items.map((it, i) => [it, i]).sort((a, b) => SEVERITY[a[0].severity] - SEVERITY[b[0].severity] || a[1] - b[1]).map(([it]) => it);
 }
@@ -92,7 +94,7 @@ async function gather() {
   let cc = null;
   try { cc = ccStatus(); } catch {}
   const items = attentionItems({
-    bots: list, approvals, status: Array.isArray(status) ? status : [status], releases: updates.releases, cc,
+    bots: list, approvals, status: Array.isArray(status) ? status : [status], releases: updates.releases, installed: updates.installed, cc,
     pairing: Object.fromEntries(pairs), autoState: Object.fromEntries(autos),
     registry: Object.fromEntries(regs.filter(([, r]) => r)), usage: Object.fromEntries(usage),
   });

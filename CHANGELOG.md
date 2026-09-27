@@ -49,6 +49,11 @@ Cockpit control and the capability registry (R5a).
   `ANTHROPIC_API_KEY` is now removed; `secrets: [oauth_token]` sets both
   `OAUTH_TOKEN` and `CLAUDE_CODE_OAUTH_TOKEN`. A job that relied on the
   inherited value must declare the key.
+- **Fix: stale releases no longer need you.** `updates.json` keeps every tag
+  the daemon saw, most still `pending` after the checkout passed them. The
+  attention bar now counts only pending tags newer than the installed
+  version and shows one item for the newest; the Releases panel marks the
+  rest "older than installed", without Apply. `updates.json` is unchanged.
 - `botYamlSchema` is 2 (additive, no migration script).
 - Upgrading: `botcorp sync <bot>` for every bot (the new hooks). A bot that
   used to approve its own changes now queues them for the cockpit.
