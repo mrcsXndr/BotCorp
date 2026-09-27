@@ -423,7 +423,9 @@ WIDENING changes are NOT applied. They are appended to
 `<BOTCORP_HOME>/state/<bot>.approvals.json` as
 `{id, ts, op, path, value, requested_by, reason}` (`op` is `set`, `append` or
 `remove`; an entry queued before v0.6.0 has none and is a `set`) and the
-command prints `queued for operator approval: botcorp approve <bot> <id>`:
+command prints `queued for operator approval: botcorp approve <bot> <id>`.
+Asking again for the same change (same op, path and value) while it is pending
+queues nothing and prints the pending entry's id (`already queued ...`):
 
 | path | widening when |
 |---|---|
@@ -461,7 +463,11 @@ Applies a queued entry (or all), then `sync`. Approving an `allow_from`
 addition also performs `pair` for each new id (access.json + `approved/<id>`)
 when the telegram module is on; when it is off the ids sit in `bot.yaml` and
 `sync` writes them into `access.json` once the module is enabled (the command
-says so). `reject` drops the entry. Each decision is appended, stamped with
+says so). Approving an `add` to `secrets`, `automations` or `tools` skips the
+names the list already has (`already registered, skipped: ...`) instead of
+failing. Each entry leaves the queue as soon as it is applied, so when a later
+entry of `--all` fails only it and the untried ones stay pending. `reject`
+drops the entry. Each decision is appended, stamped with
 `approved_by|rejected_by` (`--by`, default `operator:<user>`; the cockpit
 passes the viewer's identity), `approved_at|rejected_at` and any
 `rejected_reason`, to `<BOTCORP_HOME>/state/<bot>.approvals.history.jsonl`;

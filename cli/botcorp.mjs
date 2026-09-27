@@ -766,6 +766,13 @@ function queueOrApply(bot, { op = 'set', segs, value, flags, direct = false }) {
   if (why) {
     const entry = { id: crypto.randomBytes(3).toString('hex'), ts: new Date().toISOString(), op, path: p, value, requested_by: requestedBy(flags), reason: why };
     const q = readApprovals(bot);
+    const dup = q.find((e) => (e.op || 'set') === op && e.path === p && JSON.stringify(e.value) === JSON.stringify(value));
+    if (dup) {
+      out(`not applied: ${p} ${why}`);
+      out(`already queued for operator approval: botcorp approve ${bot} ${dup.id}`);
+      if (flags.json) outJson({ applied: false, queued: dup, duplicate: true });
+      return 0;
+    }
     q.push(entry);
     writeApprovals(bot, q);
     logApproval(bot, `QUEUED ${entry.id} ${shown} by ${entry.requested_by} (${why})`);
@@ -814,9 +821,22 @@ function cmdConfig({ pos, flags }) {
   return queueOrApply(bot, { segs, value: parseValue(rest.join(' ')), flags });
 }
 
-// An entry without `op` (queued before v0.6.0) is a set.
+// An entry without `op` (queued before v0.6.0) is a set. An append skips the
+// names the list already has (another entry, or the operator, added them), so
+// approving stays idempotent instead of failing on "already has".
 function applyApproved(bot, entry) {
   const op = entry.op || 'set';
+  if (op === 'append' && Object.hasOwn(LIST_KEYS, entry.path)) {
+    const by = LIST_KEYS[entry.path];
+    const idOf = (e) => (by ? (isObj(e) ? String(e[by]) : null) : String(e));
+    const raw = loadRawYaml(bot);
+    const have = new Set((Array.isArray(raw[entry.path]) ? raw[entry.path] : deepMerge(DEFAULTS, raw)[entry.path] || []).map(idOf));
+    const items = [].concat(entry.value);
+    const fresh = items.filter((i) => !have.has(idOf(i)));
+    const skipped = items.filter((i) => have.has(idOf(i))).map(idOf);
+    if (fresh.length) applyListOp(bot, entry.path, op, fresh);
+    return skipped.length ? [`already registered, skipped: ${skipped.join(', ')}`] : [];
+  }
   if (op !== 'set') { applyListOp(bot, entry.path, op, entry.value); return []; }
   const segs = splitPath(entry.path);
   const before = loadBotYaml(botYamlPath(bot));
@@ -847,17 +867,18 @@ function cmdApprove({ pos, flags }) {
   const by = decidedBy(flags);
   const pick = flags.all ? q : q.filter((e) => e.id === id);
   if (!pick.length) { if (flags.all) { out(`approvals: ${bot} queue empty`); return 0; } fail(`approve: no pending entry ${id} for ${bot}`); }
-  const remaining = q.filter((e) => !pick.includes(e));
   for (const e of pick) {
     const notes = applyApproved(bot, e);
+    // out of the queue as soon as it is applied: a later entry that fails
+    // cannot strand this one as pending (re-read: a bot may queue meanwhile)
+    writeApprovals(bot, readApprovals(bot).filter((x) => x.id !== e.id));
     recordDecision(bot, e, 'approved', by);
     logApproval(bot, `APPROVED ${e.id} ${entryText(e)} by ${by}`);
     out(`approved ${e.id}: ${entryText(e)} (by ${by})`);
     for (const n of notes) out(`  ${n}`);
   }
-  writeApprovals(bot, remaining);
   doSync(bot);
-  out(`approvals: ${remaining.length} pending`);
+  out(`approvals: ${readApprovals(bot).length} pending`);
   return 0;
 }
 
