@@ -8,7 +8,8 @@ first (`pwsh` 7 for the vault and the scheduled-task checks).
 
 Conventions:
 
-- Exit codes: `0` ok, `1` error, `2` usage, `3` duplicate Telegram token.
+- Exit codes: `0` ok, `1` error, `2` usage, `3` duplicate Telegram token, or
+  an operator-only verb (`approve`, `reject`) run from inside a bot session.
 - Plain text, one fact per line. Read commands take `--json` and print objects.
 - A secret is never on a command line and never printed: values go in on
   STDIN (or a hidden prompt) and come out masked (`****last4`).
@@ -372,7 +373,7 @@ also registers a second HKCU Run value, `BotCorp-Attach-<bot>`, that runs
 daemon to bring the session up, then opens the attach tab, as the reference
 host does.
 
-### `config get <bot> [<dotted.path>] [--json]` / `config set <bot> <dotted.path> <value>`
+### `config get <bot> [<dotted.path>] [--json]` / `config set <bot> <dotted.path> <value>` / `config add|remove <bot> <automations|tools|secrets> <entry|name>`
 
 The GUARDED WRITER: the only way `bot.yaml` changes from inside a bot session
 (the harness `config-guard` PreToolUse hook blocks direct `Edit`/`Write` on
@@ -384,17 +385,22 @@ touching a vault or the secrets CLI's mutating verbs).
 by name: `automations.<name>.enabled`. Unknown paths (anything not in
 `daemon/botyaml.mjs` DEFAULTS, for `get` and `set` alike) and values that
 would make `bot.yaml` invalid are rejected (`name` cannot be changed here).
+`add` appends one element (or a JSON list of them) to `automations`, `tools`
+or `secrets`: a JSON mapping with a `name` for the first two, a bare key for
+`secrets`. `remove` drops the element with that name (or key).
 
 Non-widening paths apply immediately (written to `bot.yaml`, then `sync`;
 effective at the next session roll): `model`, `effort`, `persona`,
-`harness.modules.*`, `harness.hooks_disable`, `automations.<name>.enabled`,
-`suggest.*`, `integrations.hub.interval_s`, and anything else that does not
-widen.
+`harness.modules.*`, `harness.hooks_disable`, `automations.<name>.enabled`
+(except a bot turning a disabled one on), `suggest.*`,
+`integrations.hub.interval_s`, every `remove`, and anything else that does
+not widen.
 
 WIDENING changes are NOT applied. They are appended to
 `<BOTCORP_HOME>/state/<bot>.approvals.json` as
-`{id, ts, path, value, requested_by, reason}` and the command prints
-`queued for operator approval: botcorp approve <bot> <id>`:
+`{id, ts, op, path, value, requested_by, reason}` (`op` is `set`, `append` or
+`remove`; an entry queued before v0.6.0 has none and is a `set`) and the
+command prints `queued for operator approval: botcorp approve <bot> <id>`:
 
 | path | widening when |
 |---|---|
@@ -403,18 +409,72 @@ WIDENING changes are NOT applied. They are appended to
 | `permissions` | `default` -> `bypass` |
 | `harness.modules.remote_control` | `false` -> `true` |
 | `automations.<name>.secrets` | the new list adds a vault key |
+| `automations.<name>.enabled` | `false` -> `true` |
+| `secrets` (set or add) | it declares a new vault key |
+| `automations` (add) | always |
+| `tools` (add) | an entry is `kind: integration` or has `secrets` |
+| `harness.tools_registry` | `enforce` -> `warn` |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
 `operator:<user>` (`--requested-by` overrides). Every queue/approve/reject is
 appended to `<BOTCORP_HOME>/logs/<bot>/approvals.log`.
 
-### `approve <bot> <id|--all>` / `approve <bot> --list [--json]` / `reject <bot> <id>`
+### `approvals [--json]`
+
+Every bot's pending entries in one list: bot, id, when, who asked, why, and a
+readable diff (`automations.x.enabled: false -> true`, `secrets: + gh_token`,
+`tools: + 3 (a, b, c)`). Read-only, so a bot may run it. `--json` rows are
+`{id, bot, requested_by, at, op, path, value, diff, why}`.
+
+### `approve <bot> <id|--all> [--by <who>]` / `approve <bot> --list [--json]` / `reject <bot> <id> [--by <who>] [--reason <text>]`
+
+OPERATOR-ONLY: with `BOT_NAME` or `CLAUDECODE` in the environment (a bot
+session, or a Claude Code shell) both refuse with exit 3 and change nothing;
+the harness `operator-guard` hook also blocks the command text before it
+runs. Approve from your own terminal or the cockpit (`--list` stays open).
 
 Applies a queued entry (or all), then `sync`. Approving an `allow_from`
 addition also performs `pair` for each new id (access.json + `approved/<id>`)
 when the telegram module is on; when it is off the ids sit in `bot.yaml` and
 `sync` writes them into `access.json` once the module is enabled (the command
-says so). `reject` drops the entry.
+says so). `reject` drops the entry. Each decision is appended, stamped with
+`approved_by|rejected_by` (`--by`, default `operator:<user>`; the cockpit
+passes the viewer's identity), `approved_at|rejected_at` and any
+`rejected_reason`, to `<BOTCORP_HOME>/state/<bot>.approvals.history.jsonl`;
+the cockpit's Approvals sheet reads it for "approved by".
+
+### `tools <bot> scan [--json] [--proposal <file>]` / `tools <bot> register ...` / `tools <bot> retire <name|path> [--by <who>]`
+
+The capability registry: `bot.yaml` `tools:` lists every executable
+(`.py .mjs .js .cjs .sh .ps1` under `tools/` or `scripts/`, minus `_private`
+modules, `test_*` files and `sync` shims) as `{name, path, kind, purpose,
+secrets}`, where `kind` is `cli | lib | monitor | integration`, `path` may be
+a glob for `cli` and `lib` (`*` within a folder, `**` across), and `secrets`
+must be declared in the bot's `secrets:`. With `tools:` absent the
+registry is off for that bot and nothing below reports.
+
+- `scan` reports registered, unregistered, missing (an entry matching no file)
+  and unused (referenced by nothing), and proposes entries for the
+  unregistered: `monitor` (or `integration`, with secrets) when an automation
+  runs it, `cli` when CLAUDE.md, `.claude/` or `scripts/` mention it
+  (`integration` if its text reads a declared secret's env name), one `lib`
+  glob per folder of import-only modules; the rest are orphans, only
+  ever proposed for retiring. `--proposal <file>` writes the proposal YAML.
+- `register --file <proposal>` or `register --name <n> --path <p> --kind <k>
+  [--purpose <t>] [--secrets a,b]` appends the entries. From the operator it
+  applies; from a bot an `integration` or secret-bearing entry queues for
+  approval, the rest apply (registering is what a bot should do).
+- `retire` moves the file(s) an entry covers, or one unregistered file, to
+  `<BOTCORP_HOME>/retired/<bot>/<stamp>/<rel>`, drops the entry, and appends
+  a line to `<BOTCORP_HOME>/retired/<bot>/retired.jsonl`. A bot may retire;
+  git history and the runtime copy are the undo.
+
+`bot.yaml` `harness.tools_registry` (`warn`, the default, or `enforce`) sets
+how `doctor` grades a gap: `tools-unregistered` and `automation-unregistered`
+(an automation command naming an unregistered script) are WARN, or FAIL under
+`enforce`; `tools-missing` is always FAIL; `tools-unused` is INFO. The harness
+`tools-nudge` hook prints the register command the moment a bot writes an
+unregistered executable.
 
 ### `start <bot> [--fresh] [--debug] [--dry-run]` / `stop <bot>` / `restart <bot> [--fresh] [--debug]`
 
@@ -596,14 +656,16 @@ always kept), and `inbox.results.jsonl` to the newest line of each kept
 message once it passes 1000 lines. Writers to `inbox.jsonl` hold
 `inbox.lock` for the few ms a write takes.
 
-### `automations <bot> [list [--json] | pause <name> | resume <name> | run <name>]`
+### `automations <bot> [list [--json] | pause|disable <name> | resume|enable <name> | run <name>]`
 
 `list` joins `bot.yaml` `automations[]` with the daemon's
 `<BOTCORP_HOME>/state/<bot>/automations.json` when present; each row carries
 its `kind`, and a `kind: prompt` row shows the prompt's first 60 characters
-and `last_result` (docs/automations.md). `pause` /
-`resume` = `config set automations.<name>.enabled false|true` (non-widening,
-applied at once; the next daemon tick honours it). `run` appends
+and `last_result` (docs/automations.md). `pause` / `disable` and `resume` /
+`enable` are aliases for `config set automations.<name>.enabled false|true`:
+the operator's flip applies at once (the next daemon tick honours it);
+pausing always applies, but a bot turning a disabled job on queues for
+approval. `run` appends
 `{"automation": "<name>", "ts": "<iso>"}` to
 `<BOTCORP_HOME>/state/<bot>/events/run-now.queue`, which
 `daemon/automations.ps1` consumes on its next tick (the run still obeys
@@ -884,9 +946,18 @@ Prints the command summary.
 (passphrase on stdin), `status <bot> --json` (lock state for the vault
 drawer), `pair <bot> <senderId>`, `pair <bot> --list --json`, `pair <bot>
 --deny <senderId>`, `update [--json]`, `update --apply|--skip <tag>`,
-`send <bot> --source cockpit --json` (message on stdin). Output
-is truncated to 4 KB and scrubbed of token shapes before it reaches the
-browser (`cockpit/cli.mjs`).
+`send <bot> --source cockpit --json` (message on stdin), `approvals --json`,
+`approve|reject <bot> <id> --by <identity>`, `status --json` and `accounts
+list --json` (the attention list and usage), `automations <bot>
+run|pause|resume|enable|disable <name>`, `tools <bot> scan --json`,
+`tools <bot> register --name ... --path ... --kind ...`, `tools <bot> retire
+<name|path> --by <identity>`. Output is truncated to 4 KB (a `--json` read the
+cockpit parses may reach 4 MB) and scrubbed of token shapes before it reaches
+the browser (`cockpit/cli.mjs`). Every cockpit POST is audited to
+`<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume and
+register need the operator: Cloudflare Access when the cockpit is exposed,
+else the per-boot approval token the cockpit prints at start
+(`X-Approve-Token`), or they answer 403.
 
 ## Notes
 

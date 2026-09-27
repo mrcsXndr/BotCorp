@@ -204,16 +204,17 @@ const few = (list) => `${list.slice(0, 5).join(', ')}${list.length > 5 ? ` (+${l
 export function registryRows(cfg, scan) {
   const rows = [];
   if (scan && scan.registry !== 'off') {
+    const gap = scan.registry === 'enforce' ? 'FAIL' : 'WARN';   // harness.tools_registry
     const u = scan.unregistered;
     rows.push(u.length
-      ? { level: 'WARN', name: 'tools-unregistered', detail: `${u.length} executable(s) no tools: entry covers: ${few(u)}. Fix: botcorp tools <bot> scan --proposal <file>, then register --file or retire` }
+      ? { level: gap, name: 'tools-unregistered', detail: `${u.length} executable(s) no tools: entry covers: ${few(u)}. Fix: botcorp tools <bot> scan --proposal <file>, then register --file or retire` }
       : { level: 'PASS', name: 'tools-unregistered', detail: `every executable is registered (${scan.executables.length})` });
     rows.push(scan.missing.length
       ? { level: 'FAIL', name: 'tools-missing', detail: `tools: entries matching no file: ${few(scan.missing)}. Fix: botcorp config remove <bot> tools <name>` }
       : { level: 'PASS', name: 'tools-missing', detail: `all ${scan.registered.length} entries match a file` });
     const au = scan.automation_unregistered;
     rows.push(au.length
-      ? { level: 'WARN', name: 'automation-unregistered', detail: `automation commands naming an unregistered script: ${few(au.map((a) => `${a.automation} -> ${a.path}`))}` }
+      ? { level: gap, name: 'automation-unregistered', detail: `automation commands naming an unregistered script: ${few(au.map((a) => `${a.automation} -> ${a.path}`))}` }
       : { level: 'PASS', name: 'automation-unregistered', detail: 'every script an automation runs is registered' });
     if (scan.unused.length) rows.push({ level: 'INFO', name: 'tools-unused', detail: `registered but referenced by nothing (no automation, rule or import): ${few(scan.unused)}` });
   }

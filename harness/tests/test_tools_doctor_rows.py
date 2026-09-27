@@ -3,7 +3,8 @@ registryRows, a pure function of the config and the scan).
 
 - warn mode: an unregistered executable is WARN, an entry matching no file FAIL,
   an automation running an unregistered script WARN, a registered script
-  nothing references INFO.
+  nothing references INFO. enforce mode (harness.tools_registry) makes the
+  two gap rows FAIL.
 - automation-bare-python: WARN for an ENABLED job starting with python / py;
   a disabled one gives no row.
 - board-token: PASS with gh_token declared, INFO without (board module on only).
@@ -46,6 +47,15 @@ def test_warn_mode_levels():
     assert rows["tools-unregistered"]["level"] == "WARN"
     assert rows["tools-missing"]["level"] == "FAIL" and "gone" in rows["tools-missing"]["detail"]
     assert rows["automation-unregistered"]["level"] == "WARN"
+    assert rows["tools-unused"]["level"] == "INFO"
+
+
+@needs_node
+def test_enforce_mode_fails_the_gaps():
+    rows = _rows(CFG, _scan(registry="enforce", unregistered=["tools/a.py"], unused=["idle"],
+                            automation_unregistered=[{"automation": "mon", "path": "tools/a.py"}]))
+    assert rows["tools-unregistered"]["level"] == "FAIL"
+    assert rows["automation-unregistered"]["level"] == "FAIL"
     assert rows["tools-unused"]["level"] == "INFO"
 
 

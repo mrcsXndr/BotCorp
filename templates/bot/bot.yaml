@@ -29,6 +29,7 @@ harness:
   resume_prompt: null             # every other unattended bg launch (daemon cold-start / restart, botcorp start|restart): null = one short turn (re-arm watchers, carry on, reply "ok"); '' = off
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
   hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
+  tools_registry: warn            # warn | enforce: doctor grades an executable no tools: entry covers WARN or FAIL (tools: below)
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
     telegram: false               # the official Telegram plugin; false = cockpit/terminal-only bot
     board: false                  # GitHub Projects v2 board tools + poll tick (integrations.board)
@@ -97,6 +98,13 @@ automations: []                   # per-bot jobs run by the ONE daemon (docs/aut
 #    idle_gated: true                    # only when this bot's session is idle
 #    critical: false                     # true = keeps running while the account is usage-blocked
 #    enabled: true
+
+# tools:                          # OPTIONAL capability registry; absent = off. Every executable under tools/ and
+#  - name: report                 # scripts/ gets an entry (docs/cli.md `tools`); `botcorp tools <name> scan --proposal
+#    path: tools/report.py        # <file>` drafts them. path: a glob only for kind cli | lib
+#    kind: monitor                # cli | lib | monitor | integration (secrets or external writes: needs operator approval)
+#    purpose: the nightly report
+#    secrets: []                  # each must be in secrets: above
 
 suggest:
   weekly: false                  # weekly headless run proposing harness upgrades as suggest/<bot>/<topic> PRs

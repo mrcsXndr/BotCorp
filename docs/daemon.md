@@ -116,7 +116,9 @@ v1 file into the blocks (idempotent: a second run changes no byte), and every
 `Write-BotState` converts on write as well (`ConvertTo-BotStateV2`). The
 state schema is versioned in each file (`schema: 2`), separately from
 `botcorp.json` `botYamlSchema`, which numbers the `bot.yaml` migrations in
-`harness/migrations/` and is unchanged.
+`harness/migrations/`. It is 2 since v0.6.0: the `tools:` list and
+`harness.tools_registry` are additive (absent = registry off, `warn`), so no
+migration script runs.
 
 ## Two session kinds (`bot.yaml` `harness.session`)
 

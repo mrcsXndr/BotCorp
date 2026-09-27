@@ -3,6 +3,54 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.6.0
+
+Cockpit control and the capability registry (R5a).
+
+- **Behaviour change: approving is operator-only.** `botcorp approve` and
+  `reject` exit 3 when `BOT_NAME` or `CLAUDECODE` is set, so a bot can no
+  longer approve its own queued change (`--list` still works). They take
+  `--by` (and `reject --reason`) and stamp the decided entry with
+  `approved_by` / `rejected_by` and the time in
+  `state/<bot>.approvals.history.jsonl`. The new `operator-guard` hook blocks
+  the same commands from a bot's Bash or PowerShell, and `vault-guard` now
+  covers PowerShell too. Neither can be listed in `harness.hooks_disable`.
+- **The cockpit approves, rejects and acts.** It shows an attention bar
+  (pending approvals and pairings, a locked vault, a bot blocked or down, a
+  job failing 3 runs in a row, registry gaps, a usage limit at 95%, a
+  pending release), an approvals sheet with the diff and who decided each past entry,
+  a machine-wide usage sheet, and a per-bot Capabilities drawer (automations
+  run / pause / resume, tools scan / register / retire). Approve, reject,
+  resume and register answer 403 unless Cloudflare Access is configured or
+  the request carries the per-boot loopback token the cockpit prints at
+  start. Every POST is appended to `state/cockpit-audit.jsonl`.
+- **`botcorp approvals [--json]`** lists pending changes across bots.
+- **Capability registry:** an optional `tools:` list in bot.yaml, `botcorp
+  tools <bot> scan | register | retire`, doctor rows (`tools-unregistered`,
+  `tools-missing`, `tools-unused`, `automation-unregistered`,
+  `automation-bare-python`, `board-token`) and the warn-only `tools-nudge`
+  hook. `harness.tools_registry: enforce` turns the two gap rows FAIL.
+  Absent `tools:` = off, no rows.
+- **Widening additions:** declaring a secret, adding or enabling an
+  automation, registering an integration or secret-bearing tool, and
+  `tools_registry` enforce -> warn now queue for approval. `config add |
+  remove <bot> <automations|tools|secrets>` edits the lists; queue entries
+  carry `op`.
+- **`automations <bot> enable | disable`** alias `resume | pause`.
+- **Python for jobs and sessions:** automation jobs get `BOT_PYTHON` and the
+  resolved Python first on PATH, with `${PY}` / `${HARNESS}` / `${BOTCORP}`
+  expanded in the command; the session launch puts the same folder on PATH.
+- **The board poll reads `gh_token` from the vault** when the bot declares
+  it, for the poll child only.
+- `botYamlSchema` is 2 (additive, no migration script).
+- Upgrading: `botcorp sync <bot>` for every bot (the new hooks). A bot that
+  used to approve its own changes now queues them for the cockpit.
+- Rolling back to v0.5.0: remove `tools:` and `harness.tools_registry` from
+  every bot.yaml and `operator-guard` / `tools-nudge` from any
+  `hooks_disable` (v0.5.0 rejects them as unknown), and approve or reject
+  pending `config add|remove` entries first (v0.5.0 applies every queue entry
+  as a set). Then check out the tag and `botcorp sync` each bot.
+
 ## v0.5.0
 
 The Claude Code update gate (R3): bots stop riding every global Claude Code
