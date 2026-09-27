@@ -16,9 +16,9 @@
 #   1. refuses without a valid-looking access.json (team + aud present) — M5/H1/H2
 #   2. refuses if -Port is already bound by something else: prints who owns it
 #      and exits 1 — it NEVER kills another process's listener
-#   3. (re)launches the cockpit bound to loopback with the tunnel host
-#      allow-listed (COCKPIT_ALLOWED_HOSTS), which also flips its session
-#      cookie to Secure
+#   3. (re)launches the cockpit bound to loopback; with access.json present it
+#      runs in Access mode (any Host, same-origin Origin, a verified Access JWT
+#      on every request, Secure session cookie), so no host allowlist is needed
 #   4. starts cloudflared (background), then polls https://<hostname>/healthz
 #      for a 200
 #   5. prints the one check this script CANNOT do for you: a verified Cf-
@@ -83,11 +83,10 @@ if ($existing) {
     exit 1
 }
 
-# --- 3. (re)launch the cockpit with the tunnel host allow-listed -------------
+# --- 3. (re)launch the cockpit (Access mode: access.json is present) ---------
 New-Item -ItemType Directory -Force -Path $rtHome | Out-Null
 $log = Join-Path $rtHome 'cockpit.log'
-$env:COCKPIT_ALLOWED_HOSTS = $Hostname
-Write-Host "Starting cockpit (127.0.0.1:$Port, allow-listing $Hostname)..." -ForegroundColor Cyan
+Write-Host "Starting cockpit (127.0.0.1:$Port, Access mode)..." -ForegroundColor Cyan
 Start-Process -FilePath $node -ArgumentList "$repo\cockpit\server.mjs" `
     -WorkingDirectory $repo -WindowStyle Hidden `
     -RedirectStandardOutput $log -RedirectStandardError "$log.err"

@@ -124,9 +124,8 @@ pwsh -File scripts\tunnel-up.ps1 -Hostname botcorp.example.com -Tunnel botcorp
 `tunnel-up.ps1`, in order: refuses without a valid `access.json`; refuses if
 the cockpit's port is already held by something else (it prints who owns it
 and exits — it never kills another process's listener); (re)launches the
-cockpit with the tunnel host allow-listed
-(`COCKPIT_ALLOWED_HOSTS`, which also flips the session cookie to `Secure`);
-starts `cloudflared`; polls `https://botcorp.example.com/healthz` for a 200.
+cockpit, which runs in Access mode because `access.json` is present (the
+session cookie is `Secure`); starts `cloudflared`; polls `https://botcorp.example.com/healthz` for a 200.
 
 It then prints the one check it cannot perform itself: open
 `https://botcorp.example.com/api/access/selftest` in a browser and confirm
@@ -145,16 +144,16 @@ tunnel's config) and let the BotCorp daemon keep the cockpit alive:
 cloudflared service install          # runs the tunnel as a Windows service
 ```
 
-Keep `COCKPIT_ALLOWED_HOSTS=botcorp.example.com` set as a user environment
-variable so a daemon-started cockpit also accepts the tunnel host, and keep
-`access.json` in place — removing it does not open anything up; it simply
-makes every future non-loopback bind refuse to start until it's restored.
+Keep `access.json` in place: a daemon-started cockpit reads it too, so it
+accepts the tunnel host with no extra setting. Removing it does not open
+anything up; it simply makes every future non-loopback bind refuse to start
+until it's restored.
 
 ## Why the cockpit accepts the tunnel host
 
-Its control-plane lockdown (host allowlist + origin check + the Access JWT
-check on all HTTP + WebSocket traffic) rejects any Host/Origin it doesn't
-know — that's what stops DNS rebinding and CSRF, loopback or not.
-`COCKPIT_ALLOWED_HOSTS` adds your tunnel hostname to that allowlist (host +
-`https://` origin), so Cloudflare-edge traffic is accepted while everything
-else is still refused. See `docs/cockpit.md` for the full auth model.
+With `<BOTCORP_HOME>/access.json` present the cockpit runs in Access mode:
+the edge owns the hostname, so any Host is accepted, an `Origin` (when sent)
+must match that Host, and every HTTP + WebSocket request needs a verified
+Access JWT. Without it the cockpit accepts only the exact loopback hosts and
+origins, which is what stops DNS rebinding and CSRF. No environment variable
+is involved. See `docs/cockpit.md` for the full auth model.
