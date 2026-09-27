@@ -3,6 +3,13 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.1
+
+- **The registry scan no longer counts a `*_TOKENS` variable as a secret
+  read.** `MAX_CONTEXT_TOKENS` and the like are counts, so a script that only
+  reads one is no longer proposed as an integration or reported as
+  underclassified. A name like `AUTH_TOKEN_FILE` still counts.
+
 ## v0.7.0
 
 Account switch and registry enforcement groundwork (R5c).
