@@ -55,7 +55,9 @@ def bot(tmp_path):
         d.mkdir()
     seen = tmp_path / "seen.txt"
     (fake_bin / "claude.cmd").write_text(f'@echo off\r\n>>"{seen}" echo [%CLAUDE_CODE_OAUTH_TOKEN%] %* tg[%TELEGRAM_BOT_TOKEN%]\r\nexit /b 0\r\n', encoding="utf-8")
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_"))}
+    # BOTCORP_CLAUDE_EXE too: inside a bot session it names the real pinned exe,
+    # which Resolve-ClaudeExe prefers over the fake on PATH
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("CLAUDE", "TELEGRAM_", "BOT_")) and k != "BOTCORP_CLAUDE_EXE"}
     env.update({"BOTCORP_HOME": str(rt), "USERPROFILE": str(profile), "PATH": f"{fake_bin}{os.pathsep}{env.get('PATH', '')}",
                 "CLAUDE_CODE_OAUTH_TOKEN": HKCU_TOKEN, "BOT_TG_MUTE": "1"})
     (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n"
