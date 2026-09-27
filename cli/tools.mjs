@@ -109,7 +109,7 @@ function slug(s) {
 
 // Scan a bot folder against its effective config. -> {
 //   registry: off|warn|enforce, executables: [rel],
-//   registered: [{name, path, kind, matches}], missing: [name], unused: [name],
+//   registered: [{name, path, kind, purpose, secrets, matches}], missing: [name], unused: [name],
 //   unregistered: [rel], automation_unregistered: [{automation, path}],
 //   proposal: { tools: [entries], orphans: [rel] } }
 export function scanTools(botHome, cfg) {
@@ -132,7 +132,7 @@ export function scanTools(botHome, cfg) {
   }
   const referenced = (rel) => { const r = refs.get(rel); return !!(r && (r.auto || r.doc || r.imp)); };
 
-  const registered = tools.map((t) => ({ name: t.name, path: t.path, kind: t.kind, matches: exes.filter((f) => covers(t, f.rel)).length }));
+  const registered = tools.map((t) => ({ name: t.name, path: t.path, kind: t.kind, purpose: t.purpose ? String(t.purpose) : null, secrets: Array.isArray(t.secrets) ? t.secrets.map(String) : [], matches: exes.filter((f) => covers(t, f.rel)).length }));
   const missing = tools.filter((t) => (isGlob(t.path) ? !exes.some((f) => covers(t, f.rel)) : !fs.existsSync(path.join(botHome, String(t.path || ''))))).map((t) => t.name);
   const unused = tools.filter((t) => !isGlob(t.path) && t.kind !== 'lib' && exes.some((f) => covers(t, f.rel)) && !exes.some((f) => covers(t, f.rel) && referenced(f.rel))).map((t) => t.name);
   const unregistered = exes.filter((f) => !tools.some((t) => covers(t, f.rel))).map((f) => f.rel);

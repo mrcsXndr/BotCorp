@@ -74,9 +74,25 @@ use `--text-2`, which keeps readable contrast on every surface.
 - **Buttons:** `--r-btn`, weight 600. Primary = accent fill; secondary =
   surface + `--line-strong`. Disabled, in every variant: transparent,
   `--text-3`, a dashed `--line-strong` border, no shadow.
-- **Notices:** the "waiting on you" bar is a full `--warn-line` hairline around
-  a `--warn-soft` fill (no left accent bar). The session-exit bar is the same
-  shape in `--bad-soft` / `--bad-line`.
+- **Notices:** the attention bar ("N things need you", above the header, every
+  bot) is a full `--warn-line` hairline around a `--warn-soft` fill (no left
+  accent bar); it turns `--bad-soft` / `--bad-line` when any item is bad, and
+  a tap opens the attention sheet. A blocked bot's detail lives in the header
+  state's tooltip. The session-exit bar is the same shape in `--bad-soft` /
+  `--bad-line`.
+- **Sheets** (attention, approvals, usage): modals on desktop; on a phone they
+  dock to the bottom edge, full width, at most 88dvh, top corners `--r-card`.
+  - An attention item carries a 16px `--stub` mark (warn or bad) beside its
+    kind label, never a full-height bar, then one action and one quiet action.
+  - An approval card sits on `--task`: the bot, who asked, the diff in a mono
+    `--field` box (a bulk append collapses to "show all N"), the reason, then
+    Approve (secondary) and Reject (quiet). "Decided" rows below say
+    "approved by <b>who</b>" with the decision as a coloured `.out` word.
+  - A usage meter is a 6px `--line` track with a fill in `--text-2`, `--warn`
+    from 75% or `--bad` from 90% (the header readouts' `level()`); the value and reset time are mono. Accounts group
+    their bots.
+- **Operator token:** a 403 `need: approve-token` opens the token modal once;
+  the token is kept in `sessionStorage` and sent as `X-Approve-Token`.
 - **Chat:**
   - Operator bubbles use the soft accent; assistant bubbles are surface cards.
     Both render markdown through `md.js` (the only `innerHTML` source for
@@ -89,11 +105,18 @@ use `--text-2`, which keeps readable contrast on every surface.
   - A task card (a background agent or command reporting back) sits in the
     assistant lane on `--task`. It shows a status word, the summary and a meta
     line; the result is collapsed by default.
-- **Drawers** (details, pairing, vault, runs): a tab row with the active tab on
-  `--surface`. Run outcomes are coloured words: sent/exit 0 `--ok`, skipped
-  `--warn`, failed `--bad`.
+- **Drawers** (details, pairing, vault, runs, capabilities): a tab row with the
+  active tab on `--surface`. Run outcomes are coloured words: sent/exit 0
+  `--ok`, skipped `--warn`, failed `--bad`.
+- **Capabilities:** a two-way seg (Automations, Tools) over `.cap` rows: the
+  name, a state word (`.out`: enabled `--ok`, paused `--warn`, missing
+  `--bad`), a `--text-2` meta line (paths mono), and at most one secondary
+  action plus a quiet one. A failure streak of 3 or more is `--bad` text.
+  Retire asks `confirm()` first.
 - **States:** loading is a `.loading` line in `--text-3`; an error is an
   `.errbox` (`--bad-soft` fill, `--bad-line` hairline); an empty list or chat
   is an `.empty` / `.cempty` line saying what to do next.
 - **Phone (at most 700px wide):** the bot column becomes a top strip, the
-  header wraps, and the terminal keys form an even 6-column grid.
+  header wraps, and the terminal keys form an even 6-column grid. Sheets dock
+  to the bottom; every button in a sheet, modal or drawer is at least 44px
+  tall, and action rows become an even grid.

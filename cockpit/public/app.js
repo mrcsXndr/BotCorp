@@ -22,7 +22,7 @@ const state = {
   bots: [], selected: null, term: null, fit: null, ws: null, wsGen: 0,
   view: window.innerWidth <= 700 ? 'chat' : 'chat', drawer: null,
   reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null,
-  lastAuthUrl: '', linkIntent: '',
+  lastAuthUrl: '', linkIntent: '', attn: null, capsTab: 'autos', toolsScan: null,
 };
 let settings = { copyOnSelect: false };
 try { settings = { ...settings, ...JSON.parse(localStorage.getItem('cockpit.settings') || '{}') }; } catch {}
@@ -143,9 +143,7 @@ function renderHeader() {
   st.className = 'st ' + s.cls;
   st.title = b.down || '';
   renderTelegram(b);
-  el('waitbar').classList.toggle('show', !!(b.running && b.blocked));
-  el('waitbarText').textContent = b.running && b.blocked ? `Waiting on you: ${b.blocked.needs}` : '';
-  el('waitbarText').title = b.running && b.blocked ? b.blocked.detail : '';
+  st.title = b.running && b.blocked ? b.blocked.detail : st.title;
   // Never Start a live session: a second one means two Telegram pollers.
   el('startBtn').disabled = b.running;
   el('stopBtn').disabled = !b.running;
@@ -268,8 +266,79 @@ async function renderDrawer(which) {
         html += `<div class="row"><span class="m">${esc(run.automation || run.name || '?')}</span><span class="dim grow num" title="${esc(run.start || run.ts || '')}">${esc(fmtWhen(run.start || run.ts) || run.start || run.ts || '')}${run.duration_s != null ? ' · ' + esc(run.duration_s) + 's' : ''}</span><span class="out ${cls}">${esc(outcome)}</span></div>${run.summary ? `<div class="run-sum">${esc(run.summary)}</div>` : ''}`;
       }
       box.innerHTML = html || '<p class="hint">Nothing here.</p>';
+    } else if (which === 'caps') {
+      const seg = `<div class="seg capseg"><button data-caps="autos"${state.capsTab === 'autos' ? ' class="active"' : ''}>Automations</button><button data-caps="tools"${state.capsTab === 'tools' ? ' class="active"' : ''}>Tools</button></div>`;
+      box.innerHTML = seg + '<div id="capsBody"><p class="loading">Loading</p></div>';
+      box.querySelectorAll('[data-caps]').forEach((t) => { t.onclick = () => { state.capsTab = t.dataset.caps; renderDrawer('caps'); }; });
+      const body = el('capsBody');
+      if (state.capsTab === 'autos') body.innerHTML = automationsHtml(b, await api('GET', `/api/bots/${b.name}/automations`));
+      else body.innerHTML = toolsHtml(await api('GET', `/api/bots/${b.name}/tools`));
+      wireCaps(b, body);
     }
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+
+/* ---- capabilities: a bot's automations and its tools registry ---- */
+function fmtTrigger(t) {
+  if (t && typeof t === 'object') {
+    if (t.interval_min != null) return `every ${t.interval_min} min`;
+    if (t.cron) return `cron ${t.cron}`;
+    if (t.event) return `on ${t.event}`;
+  }
+  return typeof t === 'string' ? t : JSON.stringify(t);
+}
+function automationsHtml(b, r) {
+  if (!r.declared.length) return '<p class="hint">No automations declared in bot.yaml.</p>';
+  return r.declared.map((a) => {
+    const s = r.state[a.name] || {};
+    const streak = Number(s.failure_streak) || 0;
+    const last = typeof s.last_result === 'string' && s.last_result ? s.last_result.split(':')[0] : s.last_exit != null ? `exit ${s.last_exit}` : '';
+    const bits = [fmtTrigger(a.trigger) + (a.kind === 'prompt' ? ', prompt' : '')];
+    bits.push(s.last_run ? `last run ${esc(fmtWhen(s.last_run))}${last ? ' · ' + esc(last) : ''}` : 'never run');
+    if (streak) bits.push(`<span class="${streak >= 3 ? 'bad' : ''}">${streak} failed in a row</span>`);
+    if (a.enabled && s.next_due) bits.push(`next ${esc(fmtWhen(s.next_due))}`);
+    if (a.secrets.length) bits.push(`secrets ${esc(a.secrets.join(', '))}`);
+    return `<div class="cap"><div class="grow"><div class="l1"><span class="h">${esc(a.name)}</span><span class="out ${a.enabled ? 'ok' : 'warn'}">${a.enabled ? 'enabled' : 'paused'}</span></div><div class="l2">${bits.map((x, i) => (i === 0 ? esc(x) : x)).join(' · ')}</div></div>`
+      + `<div class="acts"><button class="btn" data-auto="${esc(a.name)}" data-act="run">Run now</button><button class="btn quiet" data-auto="${esc(a.name)}" data-act="${a.enabled ? 'pause' : 'resume'}">${a.enabled ? 'Pause' : 'Resume'}</button></div></div>`;
+  }).join('');
+}
+function toolsHtml(s) {
+  if (s.registry === 'off') return '<p class="hint">No registry: this bot.yaml has no <code>tools:</code> list. <code>botcorp tools &lt;bot&gt; scan --proposal &lt;file&gt;</code> drafts one.</p>';
+  const missing = new Set(s.missing);
+  let html = `<p class="hint">registry <b>${esc(s.registry)}</b> · <span class="num">${s.registered.length}</span> registered · <span class="num">${s.unregistered.length}</span> unregistered · <span class="num">${s.missing.length}</span> missing</p>`;
+  const props = s.proposal.tools, orphans = s.proposal.orphans;
+  if (props.length || orphans.length) {
+    html += `<p class="caphead">Unregistered <span class="num">${s.unregistered.length}</span></p>`;
+    props.forEach((p, i) => {
+      html += `<div class="cap"><div class="grow"><div class="l1"><span class="p">${esc(p.path)}</span></div><div class="l2">register as ${esc(p.name)} (${esc(p.kind)})${p.purpose ? ': ' + esc(p.purpose) : ''}${p.secrets ? ' · secrets ' + esc(p.secrets.join(', ')) : ''}</div></div>`
+        + `<div class="acts"><button class="btn" data-reg="${i}">Register</button>${p.path.includes('*') ? '' : `<button class="btn quiet" data-retire="${esc(p.path)}">Retire</button>`}</div></div>`;
+    });
+    for (const o of orphans) html += `<div class="cap"><div class="grow"><div class="l1"><span class="p">${esc(o)}</span></div><div class="l2">nothing runs, documents or imports it</div></div><div class="acts"><button class="btn quiet" data-retire="${esc(o)}">Retire</button></div></div>`;
+  }
+  if (missing.size) {
+    html += `<p class="caphead">Missing <span class="num">${missing.size}</span></p>`;
+    for (const t of s.registered.filter((r) => missing.has(r.name))) html += `<div class="cap"><div class="grow"><div class="l1"><span class="h">${esc(t.name)}</span><span class="out bad">missing</span></div><div class="l2"><span class="p">${esc(t.path)}</span> matches no file</div></div><div class="acts"><button class="btn quiet" data-retire="${esc(t.name)}">Remove entry</button></div></div>`;
+  }
+  const ok = s.registered.filter((r) => !missing.has(r.name));
+  html += `<p class="caphead">Registered <span class="num">${ok.length}</span></p>`;
+  html += ok.length ? ok.map((t) => `<div class="cap"><div class="grow"><div class="l1"><span class="h">${esc(t.name)}</span><span class="dim">${esc(t.kind)}</span></div><div class="l2"><span class="p">${esc(t.path)}</span>${t.matches > 1 ? ` · ${t.matches} files` : ''}${t.purpose ? ' · ' + esc(t.purpose) : ''}${t.secrets.length ? ' · secrets ' + esc(t.secrets.join(', ')) : ''}</div></div></div>`).join('') : '<p class="hint">None yet.</p>';
+  state.toolsScan = s;
+  return html;
+}
+function wireCaps(b, body) {
+  body.querySelectorAll('[data-auto]').forEach((btn) => {
+    btn.onclick = () => operatorAct(`POST`, `/api/bots/${b.name}/automations/${encodeURIComponent(btn.dataset.auto)}/${btn.dataset.act}`, null, `${btn.dataset.act} ${btn.dataset.auto}`, () => renderDrawer('caps'));
+  });
+  body.querySelectorAll('[data-reg]').forEach((btn) => {
+    const p = state.toolsScan.proposal.tools[Number(btn.dataset.reg)];
+    btn.onclick = () => operatorAct('POST', `/api/bots/${b.name}/tools/register`, p, `registered ${p.name}`, () => renderDrawer('caps'));
+  });
+  body.querySelectorAll('[data-retire]').forEach((btn) => {
+    btn.onclick = () => {
+      if (!confirm(`Retire ${btn.dataset.retire}? Its files move to the runtime's retired folder and its entry leaves bot.yaml.`)) return;
+      operatorAct('POST', `/api/bots/${b.name}/tools/retire`, { target: btn.dataset.retire }, `retired ${btn.dataset.retire}`, () => renderDrawer('caps'));
+    };
+  });
 }
 
 async function loadAudit(bot) {
@@ -774,7 +843,8 @@ async function updateAction(tag, action) {
   } catch (e) { toast(e.message, true); }
   loadUpdates();
 }
-el('updatesLink').onclick = (e) => { e.preventDefault(); el('updatesBg').classList.add('show'); loadUpdates(); };
+function openUpdates() { el('updatesBg').classList.add('show'); loadUpdates(); }
+el('updatesLink').onclick = (e) => { e.preventDefault(); openUpdates(); };
 el('updatesClose').onclick = () => el('updatesBg').classList.remove('show');
 el('updatesBg').onclick = (e) => { if (e.target === el('updatesBg')) el('updatesBg').classList.remove('show'); };
 
@@ -856,7 +926,194 @@ el('historyBtn').onclick = async () => {
 el('histClose').onclick = () => el('historyBg').classList.remove('show');
 el('historyBg').onclick = (e) => { if (e.target === el('historyBg')) el('historyBg').classList.remove('show'); };
 
+/* ---- operator decisions: approve / reject, resume, register, run. On loopback the
+   server wants its per-boot approval token for a widening change; it is asked for
+   once and kept for this tab (sessionStorage, or memory where storage is blocked). ---- */
+let tokenMem = '';
+function approveToken() { try { return sessionStorage.getItem('cockpit.approveToken') || tokenMem; } catch { return tokenMem; } }
+function keepApproveToken(t) { tokenMem = t; try { sessionStorage.setItem('cockpit.approveToken', t); } catch {} }
+
+let tokenWait = null;
+function askToken(msg) {
+  if (tokenWait) tokenWait.reject(new Error('superseded'));
+  el('tokenErr').textContent = msg || '';
+  el('tokenInput').value = '';
+  el('tokenBg').classList.add('show');
+  setTimeout(() => el('tokenInput').focus(), 30);
+  return new Promise((resolve, reject) => { tokenWait = { resolve, reject }; });
+}
+function closeToken(ok) {
+  el('tokenBg').classList.remove('show');
+  const w = tokenWait;
+  tokenWait = null;
+  if (w) { if (ok) w.resolve(); else w.reject(new Error('no approval token given')); }
+}
+el('tokenSave').onclick = () => {
+  const t = el('tokenInput').value.trim();
+  if (!t) { el('tokenErr').textContent = 'paste the token first'; return; }
+  keepApproveToken(t);
+  closeToken(true);
+};
+el('tokenInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') el('tokenSave').click(); });
+el('tokenCancel').onclick = () => closeToken(false);
+el('tokenBg').onclick = (e) => { if (e.target === el('tokenBg')) closeToken(false); };
+
+async function operatorApi(method, url, body) {
+  const headers = body ? { 'Content-Type': 'application/json' } : {};
+  const tok = approveToken();
+  if (tok) headers['X-Approve-Token'] = tok;
+  const res = await fetch(url, { method, headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.need === 'approve-token') {
+    await askToken(tok ? 'That token was not accepted: the cockpit prints a new one each time it starts.' : '');
+    return operatorApi(method, url, body);
+  }
+  if (!res.ok) throw new Error(data.error || String(data.err || data.out || '').trim() || `${res.status} ${res.statusText}`);
+  return data;
+}
+async function operatorAct(method, url, body, okMsg, after) {
+  try { await operatorApi(method, url, body); toast(okMsg); } catch (e) { toast(e.message, true); }
+  refreshAttention();
+  if (after) after();
+}
+
+function openSheet(id) { el(id).classList.add('show'); }
+function closeSheet(id) { el(id).classList.remove('show'); }
+for (const id of ['attnBg', 'approvalsBg', 'usageBg']) el(id).onclick = (e) => { if (e.target === el(id)) closeSheet(id); };
+
+// Select a bot and open one of its drawers (from an attention item).
+function openBot(name, drawer, capsTab) {
+  select(name);
+  if (capsTab) state.capsTab = capsTab;
+  if (!drawer) return;
+  state.drawer = drawer;
+  document.querySelectorAll('.tabs button').forEach((x) => x.classList.toggle('active', x.dataset.drawer === drawer));
+  renderDrawer(drawer);
+}
+
+/* ---- the attention bar + sheet (GET /api/attention, polled with the bot list) ---- */
+const KIND_LABEL = {
+  approval: 'approval', pairing: 'pairing request', vault_locked: 'vault locked', blocked: 'waiting on you', down: 'down',
+  automation_failing: 'automation failing', registry: 'tools registry', usage_blocked: 'usage limit', release: 'release', cc_rejected: 'Claude Code canary',
+};
+let attnSnap = '';
+async function refreshAttention() {
+  let a;
+  try { a = await api('GET', '/api/attention'); } catch { return; }
+  const snap = JSON.stringify(a.items);
+  if (snap === attnSnap) return;
+  attnSnap = snap;
+  state.attn = a;
+  renderAttention();
+}
+function renderAttention() {
+  const items = state.attn ? state.attn.items : [];
+  el('attnbar').classList.toggle('show', items.length > 0);
+  el('attnbar').classList.toggle('bad', items.some((i) => i.severity === 'bad'));
+  el('attnCount').textContent = items.length === 1 ? '1 thing needs you' : `${items.length} things need you`;
+  el('attnTop').textContent = items.length ? items[0].text : '';
+  if (el('attnBg').classList.contains('show')) renderAttnList();
+  if (el('approvalsBg').classList.contains('show')) loadApprovals();
+}
+function attnActs(a) {
+  const b = (label, k, quiet) => `<button class="btn${quiet ? ' quiet' : ''}" data-k="${k}">${label}</button>`;
+  switch (a && a.type) {
+    case 'approve': return b('Approve', 'approve') + b('Reject', 'reject', true);
+    case 'pair': return b('Pair', 'pair') + b('Deny', 'deny', true);
+    case 'unlock': return b('Open vault', 'vault');
+    case 'open': return b('Open', 'open');
+    case 'run': return b('Run now', 'run') + b('Details', 'caps', true);
+    case 'tools': return b('Review tools', 'tools');
+    case 'usage': return b('Usage', 'usage');
+    case 'release': return b('Releases', 'release');
+    default: return '';
+  }
+}
+function attnDo(a, k) {
+  const bot = encodeURIComponent(a.bot || '');
+  if (k === 'approve' || k === 'reject') return operatorAct('POST', `/api/bots/${bot}/approvals/${encodeURIComponent(a.id)}/${k}`, null, `${k === 'approve' ? 'approved' : 'rejected'} ${a.id}`);
+  if (k === 'pair' || k === 'deny') return operatorAct('POST', `/api/bots/${bot}/pair${k === 'deny' ? '/deny' : ''}`, { senderId: a.senderId }, `${k === 'pair' ? 'paired' : 'denied'} ${a.senderId}`);
+  if (k === 'run') return operatorAct('POST', `/api/bots/${bot}/automations/${encodeURIComponent(a.automation)}/run`, null, `${a.automation} queued`);
+  closeSheet('attnBg');
+  if (k === 'vault') return openBot(a.bot, 'vault');
+  if (k === 'open') return openBot(a.bot);
+  if (k === 'caps') return openBot(a.bot, 'caps', 'autos');
+  if (k === 'tools') return openBot(a.bot, 'caps', 'tools');
+  if (k === 'usage') return openUsage();
+  if (k === 'release') return openUpdates();
+}
+function renderAttnList() {
+  const items = state.attn ? state.attn.items : [];
+  const box = el('attnList');
+  box.innerHTML = items.length ? items.map((it, i) => `<div class="aitem ${it.severity === 'bad' ? 'bad' : 'warn'}" data-i="${i}"><div class="grow"><span class="who">${esc(KIND_LABEL[it.kind] || it.kind)}</span>${esc(it.text)}</div><div class="acts">${attnActs(it.action)}</div></div>`).join('')
+    : '<p class="hint">Nothing needs you right now.</p>';
+  box.querySelectorAll('[data-k]').forEach((btn) => {
+    btn.onclick = () => attnDo(items[Number(btn.closest('.aitem').dataset.i)].action, btn.dataset.k);
+  });
+}
+el('attnbar').onclick = () => { renderAttnList(); openSheet('attnBg'); };
+el('attnClose').onclick = () => closeSheet('attnBg');
+
+/* ---- approvals sheet: pending widening changes + who decided the recent ones ---- */
+function aprCard(p) {
+  // a bulk entry (`tools: + 3 (a, b, c)`) shows its count, the names on demand
+  const bulk = /^(.*?): \+ (\d+) \((.*)\)$/.exec(p.diff || '');
+  const diff = bulk
+    ? `<div class="diff">${esc(bulk[1])}: + ${esc(bulk[2])}</div><details><summary>show all ${esc(bulk[2])}</summary>${esc(bulk[3])}</details>`
+    : `<div class="diff">${esc(p.diff)}</div>`;
+  const d = `data-bot="${esc(p.bot)}" data-id="${esc(p.id)}"`;
+  return `<div class="apr"><div class="top"><span class="h">${esc(p.bot)}</span><span class="dim">asked by ${esc(p.requested_by || 'unknown')} · ${esc(fmtWhen(p.at) || p.at || '')} · <span class="num">${esc(p.id)}</span></span></div>${diff}`
+    + `<p class="why">${esc(p.why)}</p><div class="acts"><button class="btn" data-dec="approve" ${d}>Approve</button><button class="btn quiet" data-dec="reject" ${d}>Reject</button></div></div>`;
+}
+function decRow(r) {
+  return `<div class="dec"><span class="out ${r.decision === 'approved' ? 'ok' : 'bad'}">${esc(r.decision)}</span><span>by <b>${esc(r.by || 'unknown')}</b></span><span class="dim">${esc(r.bot)} · ${esc(fmtWhen(r.at) || '')}</span>`
+    + `<span class="d">${esc(r.path)}: ${esc(r.value)}${r.reason ? ` (${esc(r.reason)})` : ''}</span></div>`;
+}
+async function loadApprovals() {
+  const box = el('approvalsList');
+  if (!box.children.length) box.innerHTML = '<p class="loading">Loading approvals</p>';
+  try {
+    const { pending, recent } = await api('GET', '/api/approvals');
+    box.innerHTML = (pending.length ? pending.map(aprCard).join('') : '<p class="hint">Nothing waiting. A bot that asks for a wider permission shows up here.</p>')
+      + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>');
+    box.querySelectorAll('[data-dec]').forEach((btn) => {
+      const { bot, id, dec } = btn.dataset;
+      btn.onclick = () => { btn.disabled = true; operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/approvals/${encodeURIComponent(id)}/${dec}`, null, `${dec === 'approve' ? 'approved' : 'rejected'} ${id}`, loadApprovals); };
+    });
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+function openApprovals() { el('approvalsList').innerHTML = ''; openSheet('approvalsBg'); loadApprovals(); }
+el('approvalsLink').onclick = (e) => { e.preventDefault(); openApprovals(); };
+el('approvalsClose').onclick = () => closeSheet('approvalsBg');
+
+/* ---- usage sheet: every bot's 5 h / 7 d reading under the account it runs on ---- */
+function meter(k, w) {
+  if (!w || w.na) return `<div class="meter" title="${esc((w && w.na) || 'no reading')}"><span class="mk">${k}</span><span class="track"></span><span class="mv na">n/a</span></div>`;
+  const p = Math.max(0, Math.min(100, Math.round(w.pct)));
+  const resets = w.resetsAt ? `resets in ${fmtIn(w.resetsAt - Date.now() / 1000)}` : '';
+  return `<div class="meter" title="${esc(`${p}% used${resets ? ', ' + resets : ''}`)}"><span class="mk">${k}</span><span class="track"><span class="fill${level(p)}" style="width:${p}%"></span></span><span class="mv num">${p}%</span>${resets ? `<span class="mr">${esc(resets)}</span>` : ''}</div>`;
+}
+async function loadUsage() {
+  const box = el('usageList');
+  box.innerHTML = '<p class="loading">Loading usage</p>';
+  try {
+    const { bots, accounts } = await api('GET', '/api/usage');
+    const byBot = Object.fromEntries(bots.map((r) => [r.bot, r]));
+    const row = (r) => `<div class="urow"><span class="ub">${esc(r.bot)}${r.running ? '' : ' <span class="dim">stopped</span>'}</span>${meter('5 h', r.fiveHour)}${meter('7 d', r.sevenDay)}</div>`;
+    box.innerHTML = accounts.length ? accounts.map((g) => `<div class="acct"><div class="acct-h"><span class="h">${esc(g.label)}</span>${g.masked ? `<span class="m">${esc(g.masked)}</span>` : ''}<span class="dim">${g.registered ? 'registered account' : 'not in botcorp accounts'}</span></div>`
+      + (g.bots.length ? g.bots.map((n) => row(byBot[n])).join('') : '<p class="hint">No bot runs on it.</p>') + '</div>').join('')
+      : '<p class="hint">No bots yet.</p>';
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+function openUsage() { openSheet('usageBg'); loadUsage(); }
+el('usageLink').onclick = (e) => { e.preventDefault(); openUsage(); };
+el('usageClose').onclick = () => closeSheet('usageBg');
+// Tooltips do not exist on a phone: a tap on a meter shows its reading as a toast.
+el('usageList').onclick = (e) => { const m = e.target.closest('.meter'); if (m && m.title) toast(m.title); };
+
 /* ---- boot ---- */
 api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via\xa0Access' : 'loopback\xa0only'].filter(Boolean).join('\xa0· '); }).catch(() => {});
 refresh();
 setInterval(refresh, 5000);
+refreshAttention();
+setInterval(refreshAttention, 5000);

@@ -118,16 +118,78 @@
     .errbox { color: var(--text); background: var(--bad-soft); border: 1px solid var(--bad-line); border-radius: var(--r-btn); padding: var(--sp-2) var(--sp-3); font-size: var(--fs-sm); margin: 0; overflow-wrap: anywhere; }
     .out-pre { white-space: pre-wrap; word-break: break-all; font: var(--fs-xs)/1.5 var(--font-mono); color: var(--text-2); background: var(--field); border: 1px solid var(--line); border-radius: var(--r-btn); padding: var(--sp-2) var(--sp-3); margin: 10px 0 0; }
 
-    /* bars under the header: waiting on you / a link / the session exited */
+    /* bars: what needs you (above the header) / a link / the session exited */
     .notice { display: none; align-items: center; gap: var(--sp-3); margin: var(--sp-3) var(--sp-6) 0; padding: var(--sp-2) var(--sp-3); background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-btn); font-size: var(--fs-ui); }
     .notice.show { display: flex; }
-    .notice.wait { background: var(--warn-soft); border-color: var(--warn-line); color: var(--text); }
     .notice.exit { background: var(--bad-soft); border-color: var(--bad-line); }
     .notice .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .notice.wait .grow { white-space: normal; overflow-wrap: anywhere; }
     .notice .btn { height: 28px; }
     .notice .x { background: none; border: 0; color: var(--text-2); cursor: pointer; font-size: var(--fs-sm); padding: 0 var(--sp-1); }
     .notice .x:hover { color: var(--text); }
+
+    /* the attention bar: every decision a bot parks on the operator, machine-wide */
+    .notice.attn { width: auto; text-align: left; cursor: pointer; background: var(--warn-soft); border-color: var(--warn-line); color: var(--text); min-height: 40px; transition: border-color var(--t-fast) var(--ease); }
+    .notice.attn.bad { background: var(--bad-soft); border-color: var(--bad-line); }
+    .notice.attn:hover { border-color: var(--warn); }
+    .notice.attn.bad:hover { border-color: var(--bad); }
+    .attn .cnt { flex: none; font-weight: 650; }
+    .attn .grow { color: var(--text-2); }
+    .attn .go { flex: none; font-size: var(--fs-sm); font-weight: 600; color: var(--text); }
+
+    /* one decision: the attention sheet's rows and the approval cards. The stub is
+       the bot row's signature, carrying the severity here too. */
+    .aitem { position: relative; display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-3) 0 var(--sp-3) var(--sp-4); border-top: 1px solid var(--line); }
+    .aitem:first-child { border-top: 0; }
+    .aitem::before { content: ''; position: absolute; left: 2px; top: 15px; height: 16px; width: 4px; background: var(--warn); clip-path: var(--stub); }
+    .aitem.bad::before { background: var(--bad); }
+    .aitem .grow { flex: 1; min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+    .aitem .who { display: block; color: var(--text-3); font-size: var(--fs-xs); margin-bottom: 2px; }
+    .acts { flex: none; display: flex; gap: var(--sp-2); }
+    .apr { background: var(--task); border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--sp-3) var(--sp-4); margin-top: var(--sp-3); }
+    .apr .top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--sp-2); }
+    .apr .top .h { font-weight: 650; }
+    .apr .top .dim { color: var(--text-3); font-size: var(--fs-xs); }
+    .diff { font: var(--fs-sm)/1.5 var(--font-mono); color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: var(--r-btn); padding: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0; overflow-wrap: anywhere; }
+    .apr details { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); color: var(--text-2); }
+    .apr summary { cursor: pointer; width: max-content; }
+    .apr .why { color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; margin: 0 0 var(--sp-3); }
+    .dec { display: flex; align-items: baseline; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: 1px solid var(--line); font-size: var(--fs-sm); flex-wrap: wrap; }
+    .dec .out { flex: none; }
+    .dec .d { flex: 1 1 200px; min-width: 0; font: var(--fs-xs)/1.5 var(--font-mono); color: var(--text-2); overflow-wrap: anywhere; }
+    .dec .dim { color: var(--text-3); font-size: var(--fs-xs); }
+    .sub { margin: var(--sp-5) 0 0; font-size: var(--fs-ui); font-weight: 650; }
+
+    /* usage: one group per account, a pair of meters per bot */
+    .acct { padding: var(--sp-3) 0; border-top: 1px solid var(--line); }
+    .acct:first-child { border-top: 0; padding-top: 0; }
+    .acct-h { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--sp-3); margin-bottom: var(--sp-2); }
+    .acct-h .h { font-weight: 650; overflow-wrap: anywhere; }
+    .acct-h .m { font: var(--fs-xs) var(--font-mono); color: var(--text-2); }
+    .acct-h .dim { color: var(--text-3); font-size: var(--fs-xs); }
+    .urow { display: grid; grid-template-columns: 110px 1fr 1fr; align-items: center; gap: var(--sp-1) var(--sp-4); padding: 6px 0; }
+    .urow .ub { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .meter { display: grid; grid-template-columns: 26px 1fr 40px; align-items: center; gap: var(--sp-2); min-width: 0; }
+    .meter .mk { color: var(--text-3); font-size: var(--fs-xs); }
+    .meter .track { height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+    .meter .fill { display: block; height: 100%; background: var(--text-2); border-radius: 3px; }
+    .meter .fill.warn { background: var(--warn); }
+    .meter .fill.bad { background: var(--bad); }
+    .meter .mv { font: 600 var(--fs-xs) var(--font-mono); text-align: right; }
+    .meter .mv.na { color: var(--text-3); font-weight: 400; }
+    .meter .mr { grid-column: 2 / 4; color: var(--text-3); font: var(--fs-xs) var(--font-mono); }
+
+    /* capabilities: automations and the tools registry of one bot */
+    .cap { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-top: 1px solid var(--line); }
+    .cap .grow { flex: 1; min-width: 0; }
+    .cap .l1 { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--sp-2); }
+    .cap .l1 .h { font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+    .cap .l2 { color: var(--text-2); font-size: var(--fs-xs); line-height: 1.5; margin-top: 2px; overflow-wrap: anywhere; }
+    .cap .l2 .bad { color: var(--bad); font-weight: 600; }
+    .cap .p { font: var(--fs-xs) var(--font-mono); color: var(--text-2); overflow-wrap: anywhere; }
+    .cap .l1 .dim, .urow .dim { color: var(--text-3); font-size: var(--fs-xs); font-weight: 400; }
+    .capseg { margin: 0 0 var(--sp-2); }
+    .caphead { color: var(--text-2); font-size: var(--fs-sm); margin: var(--sp-3) 0 0; font-weight: 600; }
+    .caphead .num { color: var(--text-3); font-weight: 400; }
 
     .empty { flex: 1; display: grid; place-items: center; color: var(--text-2); text-align: center; padding: var(--sp-5); }
     .empty b { display: block; color: var(--text); font-weight: 600; font-size: var(--fs-lg); margin-bottom: var(--sp-1); }
@@ -288,6 +350,18 @@
       .bubble.task { max-width: 100%; }
       .modal { padding: var(--sp-4); }
       .field input:not([type]), .field input[type="password"], .field input[type="text"] { flex: 1 1 100%; }
+      /* sheets rise from the bottom edge; every control in them is a 44px target */
+      .modal-bg.sheet { place-items: end stretch; padding: 0; }
+      .modal-bg.sheet .modal { width: 100%; max-height: 88dvh; border-radius: var(--r-card) var(--r-card) 0 0; border-bottom: 0; }
+      .modal .btn, .drawer .btn, .modal .field input, .drawer .field input { height: 44px; }
+      .drawer .seg { display: grid; grid-template-columns: 1fr 1fr; }
+      .drawer .seg button { height: 44px; }
+      .notice.attn { min-height: 44px; }
+      .aitem { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+      .acts { display: grid; grid-auto-columns: 1fr; grid-auto-flow: column; }
+      .apr .acts .btn { width: 100%; }
+      .cap { flex-direction: column; align-items: stretch; gap: var(--sp-2); }
+      .urow { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -295,10 +369,11 @@
   <aside>
     <div class="brand"><h1>BotCorp</h1><span class="ver" id="ver"></span></div>
     <div class="list" id="list"><p class="loading">Loading bots</p></div>
-    <div class="side-foot"><a href="/guide.html" target="_blank" rel="noopener">guide</a><a href="#" id="chatLink">new chat</a><a href="#" id="updatesLink">updates</a><button class="linkbtn" id="themeBtn" title="light, dark, or follow the system">theme: auto</button></div>
+    <div class="side-foot"><a href="/guide.html" target="_blank" rel="noopener">guide</a><a href="#" id="chatLink">new chat</a><a href="#" id="updatesLink">updates</a><a href="#" id="approvalsLink">approvals</a><a href="#" id="usageLink">usage</a><button class="linkbtn" id="themeBtn" title="light, dark, or follow the system">theme: auto</button></div>
   </aside>
 
   <main id="main">
+    <button class="notice attn" id="attnbar" title="everything a bot is waiting on you for"><span class="cnt" id="attnCount"></span><span class="grow" id="attnTop"></span><span class="go">Review</span></button>
     <header id="header" style="display:none">
       <div class="title"><span id="hName"></span><span class="st" id="hState"></span><span class="chip" id="hTg" style="display:none"></span></div>
       <div class="grow"></div>
@@ -325,9 +400,9 @@
       <button data-drawer="pairing" id="tabPairing">pairing</button>
       <button data-drawer="vault">vault</button>
       <button data-drawer="runs">runs</button>
+      <button data-drawer="caps">capabilities</button>
     </div>
     <div class="drawer" id="drawer"></div>
-    <div class="notice wait" id="waitbar"><span id="waitbarText" class="grow"></span></div>
     <div class="notice" id="linkbar"><span id="linkbarText" class="grow"></span><button class="btn primary" id="linkbarBtn">Open</button><button class="x" id="linkbarClose">dismiss</button></div>
     <div class="notice exit" id="exitbar"><span id="exitbarText" class="grow"></span><button class="btn primary" id="exitRestartBtn">Restart</button><button class="x" id="exitbarClose">dismiss</button></div>
 
@@ -400,6 +475,43 @@
       <p class="hint">Harness updates. Nothing applies itself: Apply / Skip is an admin action, machine-wide.</p>
       <div id="updatesList"></div>
       <div class="modal-foot"><button class="btn" id="updatesClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg sheet" id="attnBg">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="attnTitle">
+      <h2 id="attnTitle">Needs you</h2>
+      <p class="hint">Every bot, one list. Decisions go through the same CLI verbs as your terminal.</p>
+      <div id="attnList"></div>
+      <div class="modal-foot"><button class="btn" id="attnClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg sheet" id="approvalsBg">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="approvalsTitle">
+      <h2 id="approvalsTitle">Approvals</h2>
+      <p class="hint">A bot cannot widen its own permissions: each change waits here until you decide.</p>
+      <div id="approvalsList"></div>
+      <div class="modal-foot"><button class="btn" id="approvalsClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg sheet" id="usageBg">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="usageTitle">
+      <h2 id="usageTitle">Usage</h2>
+      <p class="hint">5-hour and 7-day limits, per account, from each session's own status line.</p>
+      <div id="usageList"></div>
+      <div class="modal-foot"><button class="btn" id="usageClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg sheet" id="tokenBg">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="tokenTitle">
+      <h2 id="tokenTitle">Approval token</h2>
+      <p class="hint">On loopback, a change that widens what a bot may do needs the token this cockpit printed when it started (<code>[cockpit] approval token</code>). It stays in this tab only. Without it, <code>botcorp approve &lt;bot&gt; &lt;id&gt;</code> in your terminal does the same.</p>
+      <div class="field"><input id="tokenInput" class="grow" type="password" placeholder="approval token" autocomplete="off" /></div>
+      <div class="err" id="tokenErr"></div>
+      <div class="modal-foot"><button class="btn" id="tokenCancel">Cancel</button><button class="btn primary" id="tokenSave">Use token</button></div>
     </div>
   </div>
 
