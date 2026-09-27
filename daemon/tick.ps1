@@ -361,6 +361,34 @@ function Get-CcRoll {
     return ''
 }
 
+function Get-AccountRoll {
+    # bot.yaml `account:` (botcorp accounts use): a live bot whose last launch
+    # attempted another account is restarted onto it, only between turns
+    # (Get-AccountRollAction). Attempted = the launch-env.json record of the
+    # session's launcher; a record without `account` (a pre-0.7 launch) = ''.
+    # -> the restart reason, or ''.
+    param([string]$Bot, $Cfg, [hashtable]$Paths, $State)
+    try {
+        $wanted = "$($Cfg.account)"
+        $attempted = ''
+        $lp = $(if ($State -and ($State.PSObject.Properties.Name -contains 'env_launcher_pid')) { "$($State.env_launcher_pid)" } else { '' })
+        $le = Read-JsonFile -Path (Join-Path $Paths.ConfigDir 'botcorp\launch-env.json')
+        if ($lp -and $le -and $le.launches -and ($le.launches.PSObject.Properties.Name -contains $lp)) {
+            $rec = $le.launches.$lp
+            if ($rec.PSObject.Properties.Name -contains 'account') { $attempted = "$($rec.account)" }
+        }
+        $o = $script:Observed[$Bot]
+        $dp = 0; try { $dp = Get-FirstPid ("" + (Get-Content -LiteralPath (Join-Path $Paths.BotStateDir 'inbox.drainer') -Raw -ErrorAction Stop)) } catch {}
+        $lastRoll = $null; try { if ($State -and ($State.PSObject.Properties.Name -contains 'account_roll_at')) { $lastRoll = $State.account_roll_at } } catch {}
+        $a = Get-AccountRollAction -Observed $o -Wanted $wanted -Attempted $attempted -Breakpoint (Test-BreakpointFresh -Bot $Bot) -DrainerLive (Test-ProcAlive $dp @('node')) -LastRollAt $lastRoll
+        if ($a -eq 'none') { return '' }
+        $to = $(if ($wanted) { $wanted } else { 'bot token' })
+        if ($a -eq 'roll') { return "account -> $to" }
+        Write-DaemonLog "account roll -> $to DEFERRED ($($a -replace '^defer:', ''))" -Bot $Bot -Quiet
+    } catch { Write-DaemonLog "account roll: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+    return ''
+}
+
 function Invoke-BoardPoll {
     # gh_projects.py poll diffs the board vs its snapshot; each card that
     # entered the queue gets ONE tg_send.py line. DryRun logs intent only (the
@@ -664,10 +692,14 @@ function Invoke-BotTick {
     $resumeWanted = $false
     if (Test-BotModule $cfg 'usage_resume') { $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun }
     if (Test-BotModule $cfg 'alert_triage') { Invoke-AlertTriage -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
-    $ccRoll = $false
+    $ccRoll = $false; $acctRoll = $false
     if ($action -eq 'none') {
         $ccWhy = Get-CcRoll -Bot $Bot -Paths $P -State $st
         if ($ccWhy) { $action = 'restart'; $why = $ccWhy; $ccRoll = $true }
+        if ($action -eq 'none') {
+            $acctWhy = Get-AccountRoll -Bot $Bot -Cfg $cfg -Paths $P -State $st
+            if ($acctWhy) { $action = 'restart'; $why = $acctWhy; $acctRoll = $true }
+        }
         if (Test-BotModule $cfg 'board') { Invoke-BoardPoll -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'hub') { Invoke-HubPush -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'janitor') { Invoke-Janitor -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
@@ -695,6 +727,7 @@ function Invoke-BotTick {
         $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session idle -> $rel)" -Bot $Bot
         if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
+        if ($acctRoll) { Write-BotState -Bot $Bot -Updates @{ account_roll_at = (Get-Date).ToString('o') } }
         Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ started_by = 'daemon-restart'; updated_at = (Get-Date).ToString('o') }
         $rp = Start-RestartDetached -Bot $Bot -OldPid $claudePid -OldShellPid $shellPid
         if ($service -eq 'bg') {

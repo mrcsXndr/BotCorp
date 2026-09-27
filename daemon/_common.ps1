@@ -614,6 +614,25 @@ function Get-CcRollAction {
     return 'roll'
 }
 
+function Get-AccountRollAction {
+    # Does the tick roll a live bot onto its bot.yaml `account:`? -> none | roll | defer:<why>
+    #   none   not alive, or the last launch already attempted the wanted
+    #          account (Wanted/Attempted: an account id, '' = the bot's own
+    #          token). A fallback or a shared daemon leaves Attempted equal to
+    #          Wanted, so it is never re-rolled; doctor and attention surface it.
+    #   roll / defer:phase|midturn|drainer|backoff   the Get-CcRollAction gates
+    param($Observed, [string]$Wanted, [string]$Attempted, [bool]$Breakpoint, [bool]$DrainerLive, $LastRollAt, [datetime]$Now = (Get-Date), [double]$BackoffMin = 30)
+    if (-not $Observed -or $Observed.alive -ne $true -or $Wanted -eq $Attempted) { return 'none' }
+    if ("$($Observed.phase)" -ne 'idle') { return 'defer:phase' }
+    if (-not ($Breakpoint -or $Observed.awaiting_prompt -eq $true)) { return 'defer:midturn' }
+    if ($DrainerLive) { return 'defer:drainer' }
+    if ($LastRollAt) {
+        $t = ConvertTo-UtcTime $LastRollAt
+        if ($t -ne [datetime]::MinValue -and (($Now.ToUniversalTime() - $t).TotalMinutes -lt $BackoffMin)) { return 'defer:backoff' }
+    }
+    return 'roll'
+}
+
 # --- background sessions (harness.session: bg) -----------------------------------------
 function Get-BgAgents {
     # `claude agents --json` (run under the bot's CLAUDE_CONFIG_DIR) -> array of
