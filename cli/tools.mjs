@@ -15,6 +15,9 @@ import { isShim } from '../daemon/sync.mjs';
 
 export const TOOL_EXTS = ['.py', '.mjs', '.js', '.cjs', '.sh', '.ps1'];
 export const TOOL_ROOTS = ['tools', 'scripts'];
+// Bot files the harness itself loads by a fixed path, so no bot text names them.
+// One explicit list: the harness text names many bot paths generically.
+export const HARNESS_LOADED = [{ path: 'tools/tg_commands_local.py', loader: 'harness/tools/v2/tg_commands.py', kind: 'lib' }];
 const SKIP_DIRS = new Set(['__pycache__', 'node_modules', '.git']);
 const DOC_EXTS = new Set(['.md', '.json', '.yaml', '.yml', '.txt', ...TOOL_EXTS]);
 const MAX_TEXT = 2 * 1024 * 1024;
@@ -158,9 +161,10 @@ export function scanTools(botHome, cfg) {
     const auto = autos.find((a) => hit(a.command.replace(/\\/g, '/')));
     const doc = docs.find((d) => d.rel !== f.rel && hit(d.text));
     const imp = importers.find((o) => o.rel !== f.rel && (hit(o.text) || importedBy(f.rel, o.text)));
-    refs.set(f.rel, { auto, doc, imp });
+    const harness = HARNESS_LOADED.find((h) => h.path === f.rel);
+    refs.set(f.rel, { auto, doc, imp, harness: harness ? harness.loader : null });
   }
-  const referenced = (rel) => { const r = refs.get(rel); return !!(r && (r.auto || r.doc || r.imp)); };
+  const referenced = (rel) => { const r = refs.get(rel); return !!(r && (r.auto || r.doc || r.imp || r.harness)); };
   const textOf = new Map(importers.map((o) => [o.rel, o.text]));
   const reads = new Map(exes.map((f) => [f.rel, secretReads(textOf.get(f.rel) || '', declared)]));
   const readerDirs = new Set(exes.filter((f) => reads.get(f.rel).length).map((f) => path.posix.dirname(f.rel)));
@@ -186,7 +190,7 @@ export function scanTools(botHome, cfg) {
   // The proposal, for the unregistered executables only.
   const exact = [], cliByDir = new Map(), libByDir = new Map(), orphans = [];
   for (const rel of unregistered) {
-    const { auto, doc, imp } = refs.get(rel);
+    const { auto, doc, imp, harness } = refs.get(rel);
     const r = reads.get(rel);
     const { secrets: readSecrets, undeclared } = readKeys(r, declared);
     // A secret reader is always an exact integration entry, whatever references it.
@@ -194,7 +198,10 @@ export function scanTools(botHome, cfg) {
       const secrets = [...new Set([...extra, ...readSecrets])];
       exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: 'integration', purpose: purpose + alsoReads(undeclared), ...(secrets.length ? { secrets } : {}) });
     };
-    if (auto) {
+    if (harness) {
+      if (r.length) integration(`loaded by ${harness}`);
+      else exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: HARNESS_LOADED.find((h) => h.path === rel).kind, purpose: `loaded by ${harness}` });
+    } else if (auto) {
       const secrets = Array.isArray(auto.secrets) ? auto.secrets.map(String) : [];
       if (secrets.length || r.length) integration(`run by automation ${auto.name}`, secrets);
       else exact.push({ name: slug(path.posix.basename(rel)), path: rel, kind: 'monitor', purpose: `run by automation ${auto.name}` });
