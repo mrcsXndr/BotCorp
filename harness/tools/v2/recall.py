@@ -57,14 +57,12 @@ DB_PATH = INDEX_DIR / "recall.db"
 
 
 def _default_memory_dir() -> Path:
-    """Claude Code's auto-memory dir for THIS project. CC derives the folder
-    name from the project path by replacing every non-alphanumeric character
-    with '-'. Overridable with BOT_MEMORY_DIR."""
+    """The bot's auto-memory dir: <bot>/memory/auto, where `botcorp sync`
+    points Claude Code's autoMemoryDirectory. Overridable with BOT_MEMORY_DIR."""
     override = os.environ.get("BOT_MEMORY_DIR")
     if override:
         return Path(override)
-    slug = re.sub(r"[^A-Za-z0-9]", "-", str(REPO_ROOT))
-    return Path.home() / ".claude" / "projects" / slug / "memory"
+    return REPO_ROOT / "memory" / "auto"
 
 
 MEMORY_DIR = _default_memory_dir()

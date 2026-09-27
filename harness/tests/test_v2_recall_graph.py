@@ -249,12 +249,27 @@ def test_bot_memory_dir_env_overrides_the_derived_path(tmp_path, monkeypatch):
     assert recall._default_memory_dir() == override
 
 
-def test_derived_memory_dir_shape(monkeypatch):
+def test_default_memory_dir_is_the_bots_memory_auto(monkeypatch):
+    # v0.7.3: sync points CC's autoMemoryDirectory at <bot>/memory/auto; the
+    # old default (~/.claude/projects/<slug>/memory) does not exist for a bot.
     monkeypatch.delenv("BOT_MEMORY_DIR", raising=False)
-    derived = recall._default_memory_dir()
-    # Environment-agnostic: assert the SHAPE of the CC project-slug derivation
-    # (every non-alnum char of the repo path replaced with '-'), not a
-    # literal "C--Users..." prefix that only holds on one box/OS.
-    import re
-    assert re.fullmatch(r"[A-Za-z0-9-]+", derived.parent.name)
-    assert derived.name == "memory"
+    assert recall._default_memory_dir() == recall.REPO_ROOT / "memory" / "auto"
+
+
+def test_index_finds_memory_auto_without_an_override(tmp_path, monkeypatch):
+    import importlib
+    bot = tmp_path / "bot"
+    (bot / "memory" / "auto").mkdir(parents=True)
+    (bot / "memory" / "auto" / "the-fact.md").write_text(mem("the-fact", "zebra quokka fact", "b"), encoding="utf-8")
+    monkeypatch.setenv("BOT_HOME", str(bot))
+    monkeypatch.delenv("BOT_MEMORY_DIR", raising=False)
+    try:
+        fresh = importlib.reload(recall)
+        assert fresh.cmd_index() == 0
+        con = fresh._connect()
+        assert {r[0] for r in con.execute("SELECT name FROM memory_files")} == {"the-fact"}
+        assert fresh._run_search_query(con, "quokka", 5, 0.0)
+        con.close()
+    finally:
+        monkeypatch.undo()
+        importlib.reload(recall)
