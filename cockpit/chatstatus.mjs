@@ -78,6 +78,17 @@ function accountChip({ claudeJson, sessions, launches, state }) {
   return { na: 'the session uses the config home login, and .claude.json has no oauthAccount email' };
 }
 
+// The bot.yaml account the newest launch attempted (daemon/launch.ps1 records
+// it; state.env_launcher_pid names that launch, as the tick's account roll
+// reads it): an id, '' = the bot's own token (also a pre-0.7 record), null =
+// no launch record.
+function attemptedAccount(launches, state) {
+  const lp = state && state.env_launcher_pid != null ? String(state.env_launcher_pid) : '';
+  const rec = lp ? (launches || {})[lp] : null;
+  if (!rec) return null;
+  return typeof rec.account === 'string' ? rec.account : '';
+}
+
 export function summarizeStatus({ status = null, cfg = null, claudeJson = null, sessions = null, launches = null, state = null, now = Date.now() } = {}) {
   const nowS = now / 1000;
   const model = status && status.model && (status.model.display_name || status.model.id)
@@ -92,6 +103,7 @@ export function summarizeStatus({ status = null, cfg = null, claudeJson = null, 
     ts: status ? num(status.ts) : null,
     context: contextChip(status, cfg),
     account: accountChip({ claudeJson, sessions, launches, state }),
+    accountAttempted: attemptedAccount(launches, state),
     fiveHour: limitChip(status, 'five_hour', '5-hour', nowS),
     sevenDay: limitChip(status, 'seven_day', '7-day', nowS),
     model,

@@ -177,6 +177,14 @@
     .meter .mv { font: 600 var(--fs-xs) var(--font-mono); text-align: right; }
     .meter .mv.na { color: var(--text-3); font-weight: 400; }
     .meter .mr { grid-column: 2 / 4; color: var(--text-3); font: var(--fs-xs) var(--font-mono); }
+    /* switch account: a pending switch in --warn text, the picker as .cap rows on the task tone */
+    .urow .ua { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
+    .urow .ua .sw { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; }
+    .urow .ua .btn { padding: 0 var(--sp-2); margin-left: calc(-1 * var(--sp-2)); }   /* the quiet label lines up with the bot name */
+    .urow .ua .sw + .btn { margin-left: 0; }
+    .upick { grid-column: 1 / -1; background: var(--task); border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--sp-1) var(--sp-3) var(--sp-2); }
+    .upick .cap:first-child { border-top: 0; }
+    .upick .hint { margin: var(--sp-2) 0 0; }
 
     /* capabilities: automations and the tools registry of one bot */
     .cap { display: flex; align-items: center; gap: var(--sp-3); padding: var(--sp-2) 0; border-top: 1px solid var(--line); }

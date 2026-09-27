@@ -8,21 +8,27 @@ bots and a temp BOTCORP_HOME / BOTCORP_BOTS_DIR (never the real runtime):
   then 200 with it; the queue entry is applied, the history names the
   identity, and the audit log has the line;
 - automations run queues a run-now; resume (widening) needs the token too.
+- (R5c) switch account: POST /api/bots/<bot>/account needs the token, runs
+  `accounts use` (bot.yaml account:, audited), and /api/usage marks the switch
+  pending; the attention item fires only for an attempted switch that did not land.
 """
 from __future__ import annotations
 
 import json
+import shutil
 import socket
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
-from test_operator_only import ASSEMBLY, make_bot, needs_node, operator_env, queue
+from test_operator_only import ASSEMBLY, cli, make_bot, needs_node, operator_env, queue
 
 SERVER = ASSEMBLY / "cockpit" / "server.mjs"
 
@@ -176,3 +182,87 @@ def test_automation_run_queues_and_resume_needs_the_token(cockpit):
     assert c.call("POST", "/api/bots/t/automations/job/explode")[0] == 400
     rows = _audit(rt, 5)
     assert rows[0]["automation"] == "job" and rows[0]["action"] == "run" and rows[0]["result"] == 200, rows
+
+
+# --- R5c step 19: switch account ----------------------------------------------------------------
+needs_win_node = pytest.mark.skipif(sys.platform != "win32" or shutil.which("pwsh") is None or shutil.which("node") is None,
+                                    reason="Windows only (DPAPI account vault) with pwsh and node on PATH")
+
+
+@pytest.fixture
+def acockpit(tmp_path):
+    """Bots t and u, two registered accounts (fake tokens) whose token checks are cached ok."""
+    rt, bots = tmp_path / "rt", tmp_path / "bots"
+    (rt / "state").mkdir(parents=True)
+    make_bot(bots, "t")
+    make_bot(bots, "u")
+    stand_in = tmp_path / "claude.exe"   # never a real Claude Code: a cache miss runs this, which cannot start
+    stand_in.write_bytes(b"not a program")
+    env = {**operator_env(rt, bots), "BOTCORP_CLAUDE_EXE": str(stand_in)}
+    for acc, last4 in (("acc1", "A1b2"), ("acc2", "C3d4")):
+        r = subprocess.run(["node", str(ASSEMBLY / "cli" / "botcorp.mjs"), "accounts", "add", acc], input=f"value-for-tests-{acc}-{last4}\n",
+                           capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY), env=env)
+        assert r.returncode == 0, r.stdout + r.stderr
+    rows = json.loads(cli(env, "accounts", "list", "--json").stdout)
+    now = datetime.now(timezone.utc).isoformat()
+    (rt / "state" / "account-checks.json").write_text(json.dumps({a["fp"]: {"ok": True, "at": now, "detail": "haiku replied"} for a in rows}), encoding="utf-8")
+    c = Cockpit(env)
+    try:
+        yield c, rt, bots
+    finally:
+        c.close()
+
+
+@needs_win_node
+def test_account_switch_needs_the_token_then_writes_and_audits(acockpit):
+    c, rt, bots = acockpit
+    yml = bots / "t" / "bot.yaml"
+    before = yml.read_bytes()
+    code, body = c.call("POST", "/api/bots/t/account", {"id": "acc1"})
+    assert code == 403 and body["need"] == "approve-token", body
+    assert yml.read_bytes() == before
+    assert c.call("POST", "/api/bots/t/account", {"id": "Bad!"}, token=True)[0] == 400
+    assert yml.read_bytes() == before
+
+    code, body = c.call("POST", "/api/bots/t/account", {"id": "acc1"}, token=True)
+    assert code == 200 and body["ok"], body
+    assert "account: acc1" in yml.read_text(encoding="utf-8")
+    rows = [r for r in _audit(rt, 3) if r["path"].endswith("/account")]
+    assert [r["result"] for r in rows] == [403, 400, 200], rows
+    assert rows[2]["identity"] == "local" and rows[2]["bot"] == "t" and rows[2]["account"] == "acc1", rows[2]
+    log = json.loads((rt / "logs" / "t" / "accounts.log").read_text(encoding="utf-8").splitlines()[-1])
+    assert log["by"] == "local" and log["to"] == "acc1"
+
+    code, usage = c.call("GET", "/api/usage")
+    by = {r["bot"]: r for r in usage["bots"]}
+    assert by["t"]["account_wanted"] == "acc1" and by["t"]["account_pending"] is True, by["t"]
+    assert by["u"]["account_wanted"] is None and by["u"]["account_pending"] is False, by["u"]
+    assert sorted(g["id"] for g in usage["accounts"] if g["registered"]) == ["acc1", "acc2"], usage["accounts"]
+
+    code, body = c.call("POST", "/api/bots/t/account", {"id": "none"}, token=True)
+    assert code == 200 and body["ok"], body
+    assert "account:" not in yml.read_text(encoding="utf-8")
+
+
+ATTENTION = (ASSEMBLY / "cockpit" / "attention.mjs").as_uri()
+
+
+def _account_items(attempted, last4, running=True):
+    script = ("const { attentionItems } = await import(process.argv[1]);"
+              "console.log(JSON.stringify(attentionItems(JSON.parse(process.argv[2]))));")
+    inp = {"bots": [{"name": "t", "running": running, "account": "acc1"}],
+           "usage": {"t": {"accountAttempted": attempted, "account": {"tokenLast4": last4}}},
+           "accounts": [{"id": "acc1", "masked": "****A1b2"}]}
+    r = subprocess.run(["node", "--input-type=module", "-e", script, ATTENTION, json.dumps(inp)], capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr
+    return [i for i in json.loads(r.stdout) if i["kind"] == "account"]
+
+
+@needs_node
+def test_account_attention_only_when_an_attempted_switch_did_not_land():
+    items = _account_items("acc1", "C3d4")   # the launch attempted acc1, the session runs another token
+    assert len(items) == 1 and items[0]["severity"] == "warn" and items[0]["action"] == {"type": "usage"}, items
+    assert "switch to acc1 did not land" in items[0]["text"] and "botcorp doctor" in items[0]["text"]
+    assert _account_items("acc1", "A1b2") == []      # landed
+    assert _account_items("", "C3d4") == []          # pending: not attempted yet (the Usage sheet says "at next idle")
+    assert _account_items("acc1", "C3d4", running=False) == []

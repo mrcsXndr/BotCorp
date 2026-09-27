@@ -113,6 +113,7 @@ export async function getBot(name) {
     displayName: typeof cfg.name === 'string' && cfg.name ? cfg.name : name,
     persona: typeof cfg.persona === 'string' ? cfg.persona.slice(0, 200) : '',
     model: cfg.model || null,
+    account: typeof cfg.account === 'string' ? cfg.account : null,   // the Claude account it should run on; null = its own token
     telegram: !!modules.telegram,
     remoteControl: !!modules.remote_control,
     modules,

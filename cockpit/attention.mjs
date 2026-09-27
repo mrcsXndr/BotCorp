@@ -13,6 +13,10 @@
 //                       checkout; one item, for the newest
 //   cc_rejected         core/cc.mjs candidate rejected by the canary
 //   usage_blocked       status.json 5 h or 7 d >= 95%
+//   account             bot.yaml account: already attempted by the newest
+//                       launch, but the session runs another token (a
+//                       fallback or a shared daemon); a switch not yet
+//                       attempted is the Usage sheet's "at next idle" line
 // Each item: {bot, kind, severity: warn|bad, text, action}. The action names
 // what the page offers inline; every write still goes through the CLI.
 
@@ -33,7 +37,7 @@ const SCAN_CACHE_MS = 60_000;
 const SEVERITY = { bad: 0, warn: 1 };
 
 // Pure: the inputs gathered below -> the sorted item list (bad first, then as found).
-export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {} } = {}) {
+export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {}, accounts = [] } = {}) {
   const items = [];
   const push = (bot, kind, severity, text, action) => items.push({ bot, kind, severity, text, action });
   for (const a of approvals) push(a.bot, 'approval', 'warn', `${a.bot} asks: ${a.diff}`, { type: 'approve', bot: a.bot, id: a.id });
@@ -61,6 +65,13 @@ export function attentionItems({ bots: list = [], approvals = [], pairing = {}, 
     const u = usage[b.name];
     const hot = u ? [['5 h', u.fiveHour], ['7 d', u.sevenDay]].filter(([, w]) => w && !w.na && w.pct >= USAGE_BLOCK_PCT) : [];
     if (hot.length) push(b.name, 'usage_blocked', 'bad', `${b.name}: ${hot.map(([k, w]) => `${k} limit at ${Math.round(w.pct)}%`).join(', ')}`, { type: 'usage' });
+    if (b.running && b.account && u && u.accountAttempted === b.account) {
+      const acc = accounts.find((a) => a && a.id === b.account);
+      const want = acc && acc.masked ? String(acc.masked).slice(-4) : null;
+      if (want && (u.account && u.account.tokenLast4) !== want) {
+        push(b.name, 'account', 'warn', `${b.name}: switch to ${b.account} did not land (fallback or shared daemon): botcorp doctor`, { type: 'usage' });
+      }
+    }
   }
   const newer = releases.filter((r) => r.status === 'pending' && !isOlder(r.tag, installed)).sort((a, b) => cmpVersion(b.tag, a.tag));
   if (newer.length) push(null, 'release', 'warn', `Release ${newer[0].tag} is ready to apply${newer.length > 1 ? ` (${newer.length} newer releases)` : ''}`, { type: 'release', tag: newer[0].tag });
@@ -82,7 +93,7 @@ export function invalidate() { cache = { at: 0, promise: null }; scans.clear(); 
 
 async function gather() {
   const list = await bots.listBots();
-  const [approvals, status, updates, pairs, autos, regs, usage] = await Promise.all([
+  const [approvals, status, updates, pairs, autos, regs, usage, accounts] = await Promise.all([
     cliJson(['approvals', '--json'], []),
     cliJson(['status', '--json'], []),
     listUpdates(),
@@ -90,13 +101,14 @@ async function gather() {
     Promise.all(list.map(async (b) => [b.name, await bots.automationState(b.name)])),
     Promise.all(list.filter((b) => b.tools !== null).map(async (b) => [b.name, await registryScan(b.name)])),
     Promise.all(list.map(async (b) => [b.name, await chatStatus(b)])),
+    list.some((b) => b.account) ? cliJson(['accounts', 'list', '--json'], []) : [],
   ]);
   let cc = null;
   try { cc = ccStatus(); } catch {}
   const items = attentionItems({
     bots: list, approvals, status: Array.isArray(status) ? status : [status], releases: updates.releases, installed: updates.installed, cc,
     pairing: Object.fromEntries(pairs), autoState: Object.fromEntries(autos),
-    registry: Object.fromEntries(regs.filter(([, r]) => r)), usage: Object.fromEntries(usage),
+    registry: Object.fromEntries(regs.filter(([, r]) => r)), usage: Object.fromEntries(usage), accounts: Array.isArray(accounts) ? accounts : [],
   });
   return { at: new Date().toISOString(), count: items.length, items };
 }
@@ -122,7 +134,9 @@ export async function usageOverview() {
   const list = await bots.listBots();
   const rows = await Promise.all(list.map(async (b) => {
     const s = await chatStatus(b);
-    return { bot: b.name, running: b.running, account: s.account || { na: s.error || 'unreadable' }, fiveHour: s.fiveHour || { na: s.error }, sevenDay: s.sevenDay || { na: s.error }, model: s.model || null, effort: s.effort || null };
+    // account_pending: bot.yaml account: differs from what the newest launch attempted (the tick rolls it at the next idle turn boundary)
+    return { bot: b.name, running: b.running, account: s.account || { na: s.error || 'unreadable' }, account_wanted: b.account,
+      account_pending: (b.account || '') !== (s.accountAttempted || ''), fiveHour: s.fiveHour || { na: s.error }, sevenDay: s.sevenDay || { na: s.error }, model: s.model || null, effort: s.effort || null };
   }));
   const accounts = await cliJson(['accounts', 'list', '--json'], []);
   const groups = (Array.isArray(accounts) ? accounts : []).map((acc) => ({ id: String(acc.id || ''), label: String(acc.label || acc.id || ''), masked: acc.masked ? String(acc.masked) : null, registered: true, bots: [] }));

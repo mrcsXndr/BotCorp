@@ -274,6 +274,16 @@ app.post('/api/bots/:name/tools/retire', withBot(async (req, res, bot) => {
   return decided(res, ['tools', bot.name, 'retire', target, '--by', req.identity], { tool: target, action: 'retire' });
 }));
 
+// Which Claude account the bot runs on (bot.yaml account:). `accounts use`
+// checks the account's token first; the switch lands at the bot's next idle
+// turn boundary, with the conversation kept.
+app.post('/api/bots/:name/account', withBot(async (req, res, bot) => {
+  const id = req.body?.id;
+  if (typeof id !== 'string' || (id !== 'none' && !bots.NAME_RE.test(id))) return res.status(400).json({ error: 'account needs an id (a registered account) or none' });
+  if (!operatorGate(req, res)) return;
+  return decided(res, ['accounts', 'use', bot.name, id, '--by', req.identity], { account: id });
+}));
+
 app.get('/api/bots/:name/pairing', withBot(async (_req, res, bot) => res.json(await pairing.pairingState(bot.name))));
 app.post('/api/bots/:name/pair', withBot(async (req, res, bot) => res.json(await pairing.approve(bot.name, req.body?.senderId))));
 app.post('/api/bots/:name/pair/deny', withBot(async (req, res, bot) => res.json(await pairing.deny(bot.name, req.body?.senderId))));

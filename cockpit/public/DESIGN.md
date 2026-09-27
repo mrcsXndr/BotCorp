@@ -91,6 +91,11 @@ use `--text-2`, which keeps readable contrast on every surface.
   - A usage meter is a 6px `--line` track with a fill in `--text-2`, `--warn`
     from 75% or `--bad` from 90% (the header readouts' `level()`); the value and reset time are mono. Accounts group
     their bots.
+  - Switch account: a quiet "Switch account" under a bot's meters opens a
+    picker on `--task` (`.cap` rows: the account, its masked token, the bots
+    already on it with their 5 h / 7 d, and Use); the bot's own token is the
+    last row. A switch not yet landed is a `--warn` text line, "switching to
+    <id> at next idle", never a badge.
 - **Operator token:** a 403 `need: approve-token` opens the token modal once;
   the token is kept in `sessionStorage` and sent as `X-Approve-Token`.
 - **Chat:**

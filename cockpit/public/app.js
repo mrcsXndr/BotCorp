@@ -997,6 +997,7 @@ function openBot(name, drawer, capsTab) {
 const KIND_LABEL = {
   approval: 'approval', pairing: 'pairing request', vault_locked: 'vault locked', blocked: 'waiting on you', down: 'down',
   automation_failing: 'automation failing', registry: 'tools registry', usage_blocked: 'usage limit', release: 'release', cc_rejected: 'Claude Code canary',
+  account: 'account switch',
 };
 let attnSnap = '';
 async function refreshAttention() {
@@ -1095,23 +1096,63 @@ function meter(k, w) {
   const resets = w.resetsAt ? `resets in ${fmtIn(w.resetsAt - Date.now() / 1000)}` : '';
   return `<div class="meter" title="${esc(`${p}% used${resets ? ', ' + resets : ''}`)}"><span class="mk">${k}</span><span class="track"><span class="fill${level(p)}" style="width:${p}%"></span></span><span class="mv num">${p}%</span>${resets ? `<span class="mr">${esc(resets)}</span>` : ''}</div>`;
 }
+// Switch account (bot.yaml account:): the registered accounts, each with the
+// bots already on it, and the bot's own token. `accounts use` checks the token;
+// the daemon moves the session at its next idle turn boundary.
+let usageData = null;
+let usagePick = null;   // the bot whose picker is open
+const pctOf = (w) => (w && !w.na ? `${Math.round(w.pct)}%` : 'n/a');
+function acctLine(r, registered) {
+  const to = r.account_wanted || 'its own token';
+  const sw = r.account_pending ? `<span class="sw">${r.running ? `switching to ${esc(to)} at next idle` : `switches to ${esc(to)} at next start`}</span>` : '';
+  const btn = registered.length ? `<button class="btn quiet" data-pick="${esc(r.bot)}">${usagePick === r.bot ? 'Hide accounts' : 'Switch account'}</button>` : '';
+  return sw || btn ? `<div class="ua">${sw}${btn}</div>` : '';
+}
+function acctPicker(r, registered, byBot) {
+  const cur = r.account_wanted || 'none';
+  const opts = [...registered.map((g) => ({ id: g.id, name: g.label || g.id, masked: g.masked, bots: g.bots })), { id: 'none', name: 'Its own token', masked: null, bots: [] }];
+  return '<div class="upick">' + opts.map((o) => {
+    const on = o.bots.filter((n) => n !== r.bot && byBot[n]).map((n) => `${n} ${pctOf(byBot[n].fiveHour)} 5 h, ${pctOf(byBot[n].sevenDay)} 7 d`);
+    const meta = on.length ? `on it: ${on.join('; ')}` : o.id === 'none' ? "the token in this bot's own vault" : 'no other bot on it';
+    const act = o.id === cur ? '<span class="out ok">chosen</span>' : `<button class="btn" data-use="${esc(o.id)}" data-name="${esc(o.name)}" data-bot="${esc(r.bot)}">Use</button>`;
+    return `<div class="cap"><div class="grow"><div class="l1"><span class="h">${esc(o.name)}</span>${o.masked ? `<span class="p">${esc(o.masked)}</span>` : ''}</div><div class="l2">${esc(meta)}</div></div>${act}</div>`;
+  }).join('') + '<p class="hint">Applies between turns; the conversation is kept.</p></div>';
+}
+function renderUsage() {
+  const { bots, accounts } = usageData;
+  const byBot = Object.fromEntries(bots.map((r) => [r.bot, r]));
+  const registered = accounts.filter((g) => g.registered);
+  const row = (r) => `<div class="urow"><span class="ub">${esc(r.bot)}${r.running ? '' : ' <span class="dim">stopped</span>'}</span>${meter('5 h', r.fiveHour)}${meter('7 d', r.sevenDay)}`
+    + acctLine(r, registered) + (usagePick === r.bot ? acctPicker(r, registered, byBot) : '') + '</div>';
+  el('usageList').innerHTML = accounts.length ? accounts.map((g) => `<div class="acct"><div class="acct-h"><span class="h">${esc(g.label)}</span>${g.masked ? `<span class="m">${esc(g.masked)}</span>` : ''}<span class="dim">${g.registered ? 'registered account' : 'not in botcorp accounts'}</span></div>`
+    + (g.bots.length ? g.bots.map((n) => row(byBot[n])).join('') : '<p class="hint">No bot runs on it.</p>') + '</div>').join('')
+    : '<p class="hint">No bots yet.</p>';
+}
 async function loadUsage() {
   const box = el('usageList');
-  box.innerHTML = '<p class="loading">Loading usage</p>';
+  if (!usageData) box.innerHTML = '<p class="loading">Loading usage</p>';
   try {
-    const { bots, accounts } = await api('GET', '/api/usage');
-    const byBot = Object.fromEntries(bots.map((r) => [r.bot, r]));
-    const row = (r) => `<div class="urow"><span class="ub">${esc(r.bot)}${r.running ? '' : ' <span class="dim">stopped</span>'}</span>${meter('5 h', r.fiveHour)}${meter('7 d', r.sevenDay)}</div>`;
-    box.innerHTML = accounts.length ? accounts.map((g) => `<div class="acct"><div class="acct-h"><span class="h">${esc(g.label)}</span>${g.masked ? `<span class="m">${esc(g.masked)}</span>` : ''}<span class="dim">${g.registered ? 'registered account' : 'not in botcorp accounts'}</span></div>`
-      + (g.bots.length ? g.bots.map((n) => row(byBot[n])).join('') : '<p class="hint">No bot runs on it.</p>') + '</div>').join('')
-      : '<p class="hint">No bots yet.</p>';
+    usageData = await api('GET', '/api/usage');
+    renderUsage();
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
-function openUsage() { openSheet('usageBg'); loadUsage(); }
+function openUsage() { usageData = null; usagePick = null; openSheet('usageBg'); loadUsage(); }
 el('usageLink').onclick = (e) => { e.preventDefault(); openUsage(); };
 el('usageClose').onclick = () => closeSheet('usageBg');
-// Tooltips do not exist on a phone: a tap on a meter shows its reading as a toast.
-el('usageList').onclick = (e) => { const m = e.target.closest('.meter'); if (m && m.title) toast(m.title); };
+el('usageList').onclick = (e) => {
+  const pick = e.target.closest('[data-pick]');
+  if (pick) { usagePick = usagePick === pick.dataset.pick ? null : pick.dataset.pick; return renderUsage(); }
+  const use = e.target.closest('[data-use]');
+  if (use) {
+    const { bot, name } = use.dataset;
+    if (!confirm(`Switch ${bot} to ${name}? It applies between turns; the conversation is kept.`)) return;
+    use.disabled = true;
+    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/account`, { id: use.dataset.use }, `${bot} switches to ${name} at its next idle turn`, () => { usagePick = null; loadUsage(); });
+  }
+  // Tooltips do not exist on a phone: a tap on a meter shows its reading as a toast.
+  const m = e.target.closest('.meter');
+  if (m && m.title) toast(m.title);
+};
 
 /* ---- boot ---- */
 api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via\xa0Access' : 'loopback\xa0only'].filter(Boolean).join('\xa0· '); }).catch(() => {});
