@@ -9,7 +9,7 @@
 //
 //   node cli/botcorp.mjs <command> [args] [--json]     (docs/cli.md)
 //
-// Exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token.
+// Exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token / operator-only verb run from a bot.
 // Plain text, one fact per line; --json on read commands returns objects.
 // Secrets: never on argv, never printed (children mask, we scrub again).
 
@@ -42,7 +42,7 @@ const { ccStatus, botCc, fileSha256 } = await import('../core/cc.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
-  CliError, fail, usage,
+  CliError, fail, usage, requireOperator,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
@@ -51,7 +51,7 @@ const {
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -627,6 +627,22 @@ function requestedBy(flags) {
   return `operator:${process.env.USERNAME || process.env.USER || 'unknown'}`;
 }
 
+// Who decided (the cockpit passes its Access identity as --by). The decided
+// entry, stamped, goes to state/<bot>.approvals.history.jsonl: the queue only
+// ever holds pending entries.
+function decidedBy(flags) {
+  return flags.by && flags.by !== true ? String(flags.by) : `operator:${process.env.USERNAME || process.env.USER || 'unknown'}`;
+}
+function recordDecision(bot, entry, decision, by, extra = {}) {
+  const stamped = { ...entry, [`${decision}_by`]: by, [`${decision}_at`]: new Date().toISOString(), ...extra };
+  try {
+    const f = path.join(STATE_DIR, `${bot}.approvals.history.jsonl`);
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, JSON.stringify(stamped) + '\n');
+  } catch {}
+  return stamped;
+}
+
 function cmdConfig({ pos, flags }) {
   const [, action, bot, dotted, ...rest] = pos;
   if (!action) usage('config get <bot> <path> | config set <bot> <path> <value>');
@@ -690,14 +706,17 @@ function cmdApprove({ pos, flags }) {
     for (const e of q) out(`${e.id}  ${e.ts}  ${e.path} = ${JSON.stringify(e.value)}  by ${e.requested_by}  (${e.reason || 'widening'})`);
     return 0;
   }
-  if (!id && !flags.all) usage('approve <bot> <id|--all> | approve <bot> --list');
+  if (!id && !flags.all) usage('approve <bot> <id|--all> [--by <who>] | approve <bot> --list');
+  requireOperator('approve');
+  const by = decidedBy(flags);
   const pick = flags.all ? q : q.filter((e) => e.id === id);
   if (!pick.length) { if (flags.all) { out(`approvals: ${bot} queue empty`); return 0; } fail(`approve: no pending entry ${id} for ${bot}`); }
   const remaining = q.filter((e) => !pick.includes(e));
   for (const e of pick) {
     const notes = applyApproved(bot, e);
-    logApproval(bot, `APPROVED ${e.id} ${e.path}=${JSON.stringify(e.value)}`);
-    out(`approved ${e.id}: ${e.path} = ${JSON.stringify(e.value)}`);
+    recordDecision(bot, e, 'approved', by);
+    logApproval(bot, `APPROVED ${e.id} ${e.path}=${JSON.stringify(e.value)} by ${by}`);
+    out(`approved ${e.id}: ${e.path} = ${JSON.stringify(e.value)} (by ${by})`);
     for (const n of notes) out(`  ${n}`);
   }
   writeApprovals(bot, remaining);
@@ -706,16 +725,19 @@ function cmdApprove({ pos, flags }) {
   return 0;
 }
 
-function cmdReject({ pos }) {
+function cmdReject({ pos, flags }) {
   const [, bot, id] = pos;
   requireBot(bot);
-  if (!id) usage('reject <bot> <id>');
+  if (!id) usage('reject <bot> <id> [--by <who>] [--reason <text>]');
+  requireOperator('reject');
+  const by = decidedBy(flags);
   const q = readApprovals(bot);
   const e = q.find((x) => x.id === id);
   if (!e) fail(`reject: no pending entry ${id} for ${bot}`);
   writeApprovals(bot, q.filter((x) => x !== e));
-  logApproval(bot, `REJECTED ${e.id} ${e.path}=${JSON.stringify(e.value)}`);
-  out(`rejected ${e.id}: ${e.path} = ${JSON.stringify(e.value)}`);
+  recordDecision(bot, e, 'rejected', by, flags.reason && flags.reason !== true ? { rejected_reason: String(flags.reason) } : {});
+  logApproval(bot, `REJECTED ${e.id} ${e.path}=${JSON.stringify(e.value)} by ${by}`);
+  out(`rejected ${e.id}: ${e.path} = ${JSON.stringify(e.value)} (by ${by})`);
   return 0;
 }
 
@@ -2564,7 +2586,8 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
       passphrase always on stdin, never argv)
   pair <bot> <senderId> | pair <bot> --list [--json] | pair <bot> --deny <senderId>
   config get <bot> [<dotted.path>] [--json] | config set <bot> <dotted.path> <value>
-  approve <bot> <id|--all> | approve <bot> --list [--json] | reject <bot> <id>
+  approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
+      (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
@@ -2580,7 +2603,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   doctor [--json] [--host] [--no-accounts] [--no-tg-probe]
   help
 
-exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token
+exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token / operator-only verb run from a bot
 env: BOTCORP_HOME (runtime root, default ~/.botcorp), COCKPIT_PORT (default 4477), CLOUDFLARE_API_TOKEN (doctor, integrations.cloudflare)`;
 
 const COMMANDS = {

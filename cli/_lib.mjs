@@ -58,6 +58,14 @@ export class CliError extends Error {
 export function fail(message, code = 1) { throw new CliError(message, code); }
 export function usage(message) { throw new CliError(message, 2); }
 
+// The operator-only verbs (approve, reject) refuse inside a bot: the launcher
+// gives a session BOT_NAME, Claude Code sets CLAUDECODE. Defense in depth, not
+// a boundary (a bot runs as the same user); the cockpit's runCli strips both.
+export function isOperatorContext(env = process.env) { return !env.BOT_NAME && !env.CLAUDECODE; }
+export function requireOperator(verb) {
+  if (!isOperatorContext()) fail(`${verb}: operator-only: run from the cockpit or your own terminal`, 3);
+}
+
 // ---- files ---------------------------------------------------------------------
 export function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return null; }

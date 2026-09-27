@@ -26,6 +26,16 @@ export function scrub(text) {
   return t;
 }
 
+// The CLI's env: the cockpit acts for the operator, so the bot-session markers
+// the operator-only verbs refuse on (cli/_lib.mjs isOperatorContext) never
+// reach it, even when the cockpit itself was started from a bot's shell.
+export function cliEnv(env = process.env) {
+  const e = { ...env };
+  delete e.BOT_NAME;
+  delete e.CLAUDECODE;
+  return e;
+}
+
 // Run the CLI; never throws. { code, out, err, timedOut }. `stdin` (a string)
 // is written and closed - used for secret values so they never appear in argv.
 export function runCli(args, { stdin = null, timeoutMs = 60_000 } = {}) {
@@ -34,7 +44,7 @@ export function runCli(args, { stdin = null, timeoutMs = 60_000 } = {}) {
     const finish = (code) => { if (!done) { done = true; resolve({ code, out: scrub(out).slice(0, 4096), err: scrub(err).slice(0, 4096), timedOut }); } };
     let child;
     try {
-      child = spawn(process.execPath, [CLI, ...args], { cwd: BOTCORP_ROOT, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
+      child = spawn(process.execPath, [CLI, ...args], { cwd: BOTCORP_ROOT, env: cliEnv(), windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] });
     } catch (e) { return resolve({ code: -1, out: '', err: String(e.message || e), timedOut: false }); }
     const timer = setTimeout(() => { timedOut = true; try { child.kill(); } catch {} finish(-2); }, timeoutMs);
     child.stdout.on('data', (d) => { if (out.length < MAX_CAPTURE) out += d; });
