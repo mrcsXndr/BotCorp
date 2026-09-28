@@ -40,6 +40,12 @@ inbound message:
 3. **Synthesize**: journal the outcome, then reply on TG with the answer.
 4. The footer is automatic — don't append your own status line.
 
+## The Telegram reply is the answer
+When a message came in on Telegram, the reply you send there IS your answer.
+The operator reads it on the phone, and the cockpit chat shows it as a sent
+bubble. Don't write the answer a second time as terminal text: end the turn
+with at most one short line (e.g. "replied on TG"), or nothing.
+
 ## Unanswered-backlog gate
 
 A monitor that pushes freely trains the operator to ignore the channel — see
