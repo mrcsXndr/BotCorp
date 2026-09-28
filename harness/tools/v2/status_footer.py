@@ -37,8 +37,38 @@ HOME = Path(os.path.expanduser("~"))
 # Practical context ceiling before Claude Code auto-compacts. The model window
 # is 1M, but compaction fires well before that, so the TG footer % should
 # reflect the real headroom — the denominator is the compaction limit, not
-# the raw window.
+# the raw window. This is the last-resort default; _compact_ceiling() prefers
+# what the session was actually launched with.
 MAX_CONTEXT = 500_000
+
+
+def _compact_ceiling(size: int = 0) -> int:
+    """Where Claude Code compacts, the same rule as statusline.js compactCeiling():
+    env CLAUDE_CODE_AUTO_COMPACT_WINDOW (the launch sets it per bot), else the
+    config home settings.json autoCompactWindow, else the model window `size`,
+    else MAX_CONTEXT; scaled by CLAUDE_AUTOCOMPACT_PCT_OVERRIDE when that is
+    1-100, and never above `size` when it is known."""
+    try:
+        ceiling = int(os.environ.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or 0)
+    except ValueError:
+        ceiling = 0
+    if ceiling <= 0:
+        try:
+            s = json.loads((config_home() / "settings.json").read_text(encoding="utf-8"))
+            ceiling = int(s.get("autoCompactWindow") or 0)
+        except Exception:
+            ceiling = 0
+    if ceiling <= 0:
+        ceiling = size or MAX_CONTEXT
+    try:
+        pct = float(os.environ.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") or 0)
+    except ValueError:
+        pct = 0.0
+    if 1 <= pct <= 100:
+        ceiling = int(ceiling * pct / 100)
+    if size:
+        ceiling = min(ceiling, size)
+    return ceiling
 
 
 def _git_status() -> str:
@@ -135,15 +165,17 @@ def _context_window() -> tuple[int, int, float]:
             used = int(cu.get("input_tokens") or 0) + int(cu.get("cache_read_input_tokens") or 0) \
                 + int(cu.get("cache_creation_input_tokens") or 0)
             _LAST_MODEL = (st.get("model") or {}).get("id") or _LAST_MODEL
-            return (used, size, max(0.0, 1.0 - used / size))
+            ceiling = _compact_ceiling(size)
+            return (used, ceiling, max(0.0, 1.0 - used / ceiling))
     except Exception:
         pass
+    ceiling = _compact_ceiling()
     proj = _project_hash_dir()
     if proj is None:
-        return (0, MAX_CONTEXT, 1.0)
+        return (0, ceiling, 1.0)
     jsonls = sorted(proj.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not jsonls:
-        return (0, MAX_CONTEXT, 1.0)
+        return (0, ceiling, 1.0)
     latest = jsonls[0]
     last_usage: dict | None = None
     try:
@@ -185,17 +217,16 @@ def _context_window() -> tuple[int, int, float]:
         if candidates:
             _ctx, last_usage, _LAST_MODEL = max(candidates, key=lambda c: c[0])
     except Exception:
-        return (0, MAX_CONTEXT, 1.0)
+        return (0, ceiling, 1.0)
     if not last_usage:
-        return (0, MAX_CONTEXT, 1.0)
+        return (0, ceiling, 1.0)
     used = (
         (last_usage.get("input_tokens") or 0)
         + (last_usage.get("cache_read_input_tokens") or 0)
         + (last_usage.get("cache_creation_input_tokens") or 0)
     )
-    max_tokens = MAX_CONTEXT  # compaction ceiling, not the raw 1M window
-    remaining = max(0.0, 1.0 - used / max_tokens)
-    return (used, max_tokens, remaining)
+    remaining = max(0.0, 1.0 - used / ceiling)
+    return (used, ceiling, remaining)
 
 
 def _model_short() -> str:
@@ -317,7 +348,7 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
     sess_short = sess[-8:] if sess else ""
     jcount = _journal_count(sess)
     used, mx, rem = _context_window()  # also stashes _LAST_MODEL
-    pct_used = int((used / mx) * 100) if mx else 0
+    pct_used = round((used / mx) * 100) if mx else 0
     model = _model_short()
     usage = _usage_status()
     tg = _tg_status()

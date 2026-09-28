@@ -81,6 +81,34 @@ function usageStatus(rateLimits) {
   return `${dot}${pct(u5)}/${pct(u7)}` + (hhmm ? `↻${hhmm}` : '');
 }
 
+// Where Claude Code compacts, the same rule as status_footer.py _compact_ceiling():
+// env CLAUDE_CODE_AUTO_COMPACT_WINDOW (the launch sets it per bot), else the
+// config home settings.json autoCompactWindow, else the model window, else
+// 500000; scaled by CLAUDE_AUTOCOMPACT_PCT_OVERRIDE when that is 1-100, and
+// never above the model window when it is known.
+function compactCeiling(size) {
+  let c = Math.trunc(Number(process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW)) || 0;
+  if (c <= 0) {
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(CONFIG_HOME, 'settings.json'), 'utf8'));
+      c = Math.trunc(Number(s.autoCompactWindow)) || 0;
+    } catch (e) {
+      c = 0;
+    }
+  }
+  if (c <= 0) c = size || 500000;
+  const p = Number(process.env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE);
+  if (p >= 1 && p <= 100) c = Math.trunc(c * p / 100);
+  if (size) c = Math.min(c, size);
+  return c;
+}
+
+function fmtTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(0) + 'K';
+  return String(n);
+}
+
 function writeStatusFile(j, harnessV) {
   try {
     const dir = path.join(CONFIG_HOME, 'botcorp');
@@ -134,10 +162,22 @@ process.stdin.on('end', () => {
       g = s.trim() ? `(${b}*)` : `(${b})`;
     } catch (e) {}
 
-    const ctxPct = Math.round((j.context_window && j.context_window.remaining_percentage) || 0);
     const BAR = 10;
-    const filled = Math.round(ctxPct / 100 * BAR);
-    const bar = '[' + '█'.repeat(filled) + '░'.repeat(BAR - filled) + '] ' + ctxPct + '%';
+    const cw = j.context_window || {};
+    const cu = cw.current_usage;
+    let bar;
+    if (cu) {
+      const used = (cu.input_tokens || 0) + (cu.cache_read_input_tokens || 0) + (cu.cache_creation_input_tokens || 0);
+      const ceiling = compactCeiling(Number(cw.context_window_size) || 0);
+      const usedPct = Math.round(used / ceiling * 100);
+      const filled = Math.min(BAR, Math.round(usedPct / 100 * BAR));
+      bar = '[' + '█'.repeat(filled) + '░'.repeat(BAR - filled) + `] ctx ${fmtTokens(used)}/${fmtTokens(ceiling)} (${usedPct}%)`;
+    } else {
+      // No usage yet (before the first API call): the raw-window remaining %.
+      const ctxPct = Math.round(cw.remaining_percentage || 0);
+      const filled = Math.round(ctxPct / 100 * BAR);
+      bar = '[' + '█'.repeat(filled) + '░'.repeat(BAR - filled) + '] ' + ctxPct + '%';
+    }
 
     const totalCost = j.cost && typeof j.cost.total_cost_usd === 'number' ? j.cost.total_cost_usd : null;
     const costStr = totalCost != null ? `$${totalCost.toFixed(2)}` : '';

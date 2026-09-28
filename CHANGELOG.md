@@ -27,6 +27,12 @@ Truth and gates.
   (`memory/sessions/<stamp>.md`, never a session folder).
 - **The subagent cost rollup runs before each hub push**, so
   `subagent_usd_7d` is current.
+- **Context is measured against the compaction ceiling**, not the raw model
+  window: the TG footer and the statusline show `ctx 483K/500K (97%)` where
+  they read `483K/1.0M (48%)`. The ceiling is the session's
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (scaled by
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`), else `autoCompactWindow`, else the
+  model window, and never above the model window.
 - Removed: the unread `harness/automations.yaml`, update_restart's dead
   once-a-day gate, health_sweep's supervisor check, operator-guard's
   `tools approve` pattern, and the tunnel's unread `COCKPIT_ALLOWED_HOSTS`.
