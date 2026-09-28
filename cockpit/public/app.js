@@ -627,7 +627,7 @@ function bubble(turn) {
   if (turn.tools?.length) {
     const t = document.createElement('span');
     t.className = 'tools';
-    t.textContent = 'used: ' + turn.tools.join(', ');
+    t.textContent = 'used: ' + window.CockpitCards.toolsLine(turn.tools);
     d.appendChild(t);
   }
   return d;

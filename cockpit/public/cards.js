@@ -1,7 +1,8 @@
 /* The decisions behind the cockpit's cards, kept free of the DOM so node can
    test them (cockpit/tests/cards.test.mjs): which lifecycle buttons a bot
    gets, how a pending approval reads to a person, the context bar, and the
-   account name. app.js renders what these return. Loaded before app.js. */
+   account name, the tools line. app.js renders what these return (and
+   attention.mjs reuses approvalView for its line). Loaded before app.js. */
 'use strict';
 (function (root) {
   const fmtTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
@@ -72,5 +73,20 @@
     return { name: 'Own token', title: [tok, a.source].filter(Boolean).join(' · ') };
   }
 
-  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, WIDENS };
+  // The "used:" line under a bot message: an MCP tool (mcp__<server>__<tool>)
+  // reads as "<Server> <tool words>", repeats collapse to "Bash ×2".
+  function toolName(t) {
+    const m = /^mcp__(.+?)__(.+)$/.exec(String(t));
+    if (!m) return String(t);
+    const words = m[1].replace(/^plugin_/, '').split(/[_-]+/).filter((w, i, a) => w && w !== a[i - 1]);
+    const server = words.join(' ');
+    return `${server.charAt(0).toUpperCase()}${server.slice(1)} ${m[2].replace(/[_-]+/g, ' ')}`.trim();
+  }
+  function toolsLine(tools) {
+    const counts = new Map();
+    for (const t of tools || []) { const n = toolName(t); counts.set(n, (counts.get(n) || 0) + 1); }
+    return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ');
+  }
+
+  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, toolName, toolsLine, WIDENS };
 })(typeof window !== 'undefined' ? window : globalThis);

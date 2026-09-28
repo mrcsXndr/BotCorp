@@ -20,8 +20,9 @@
 // Each item: {bot, kind, severity: warn|bad, text, action}. The action names
 // what the page offers inline; every write still goes through the CLI.
 
-import { promises as fsp } from 'node:fs';
+import { promises as fsp, readFileSync } from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import * as bots from './bots.mjs';
 import { cliJson } from './cli.mjs';
 import { pairingState } from './pairing.mjs';
@@ -31,6 +32,14 @@ import { ccStatus } from '../core/cc.mjs';
 
 export const STREAK_BAD = 3;        // plan Q6
 export const USAGE_BLOCK_PCT = 98;
+// The page's own card logic (public/cards.js), so the bar names a request the
+// way its approval card does; the raw change stays in the card.
+const CARDS = (() => {
+  const box = {};
+  vm.createContext(box);
+  vm.runInContext(readFileSync(new URL('./public/cards.js', import.meta.url), 'utf-8'), box);
+  return box.CockpitCards;
+})();
 const CACHE_MS = 10_000;            // the page polls; the CLI reads behind it are not free
 const SCAN_CACHE_MS = 60_000;
 
@@ -40,7 +49,7 @@ const SEVERITY = { bad: 0, warn: 1 };
 export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {}, accounts = [] } = {}) {
   const items = [];
   const push = (bot, kind, severity, text, action) => items.push({ bot, kind, severity, text, action });
-  for (const a of approvals) push(a.bot, 'approval', 'warn', `${a.bot} asks: ${a.diff}`, { type: 'approve', bot: a.bot, id: a.id });
+  for (const a of approvals) push(a.bot, 'approval', 'warn', `${a.bot} asks: ${CARDS.approvalView(a).title}`, { type: 'approve', bot: a.bot, id: a.id });
   for (const [bot, p] of Object.entries(pairing)) {
     for (const q of (p && p.pending) || []) push(bot, 'pairing', 'warn', `${bot}: Telegram user ${q.senderId} asks to pair`, { type: 'pair', bot, senderId: q.senderId });
   }

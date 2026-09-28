@@ -13,8 +13,16 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const sandbox = {};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(path.join(HERE, '..', 'public', 'cards.js'), 'utf-8'), sandbox);
-const { lifecycleButtons, approvalView, contextBar, accountName } = sandbox.CockpitCards;
+const { lifecycleButtons, approvalView, contextBar, accountName, toolsLine } = sandbox.CockpitCards;
 const plain = (o) => JSON.parse(JSON.stringify(o));   // across the vm realm
+
+test('tools line: MCP tools read as plain words, repeats collapse', () => {
+  assert.equal(toolsLine(['mcp__plugin_telegram_telegram__reply']), 'Telegram reply');
+  assert.equal(toolsLine(['Bash', 'Bash']), 'Bash ×2');
+  assert.equal(toolsLine(['Bash', 'mcp__github__create_issue', 'Read', 'Bash', 'mcp__plugin_telegram_telegram__download_attachment']),
+    'Bash ×2, Github create issue, Read, Telegram download attachment');
+  assert.equal(toolsLine([]), '');
+});
 
 test('lifecycle: a background bot never gets Stop; Start only while it is stopped', () => {
   for (const phase of ['idle', 'working', 'starting', 'down', 'stopped', null]) {

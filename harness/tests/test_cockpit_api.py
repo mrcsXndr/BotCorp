@@ -122,7 +122,7 @@ def test_get_routes_return_their_shapes(cockpit):
     kinds = {(i["bot"], i["kind"]) for i in att["items"]}
     assert ("u", "approval") in kinds and ("t", "automation_failing") in kinds and ("t", "registry") in kinds, kinds
     appr = next(i for i in att["items"] if i["kind"] == "approval")
-    assert appr["action"] == {"type": "approve", "bot": "u", "id": "abc123"} and "remote_control" in appr["text"]
+    assert appr["action"] == {"type": "approve", "bot": "u", "id": "abc123"} and appr["text"] == "u asks: Enables Remote Control", appr
     assert all(set(i) == {"bot", "kind", "severity", "text", "action"} for i in att["items"])
 
     code, usage = c.call("GET", "/api/usage")
@@ -245,6 +245,19 @@ def test_account_switch_needs_the_token_then_writes_and_audits(acockpit):
 
 
 ATTENTION = (ASSEMBLY / "cockpit" / "attention.mjs").as_uri()
+
+
+@needs_node
+def test_approval_attention_reads_as_the_cards_title_not_the_raw_change():
+    script = ("const { attentionItems } = await import(process.argv[1]);"
+              "console.log(JSON.stringify(attentionItems(JSON.parse(process.argv[2]))));")
+    inp = {"approvals": [
+        {"bot": "t", "id": "a1", "path": "harness.modules.remote_control", "diff": "harness.modules.remote_control: false -> true", "why": "enables Remote Control"},
+        {"bot": "t", "id": "a2", "path": "tools", "diff": "tools: + 2 (x, y)", "why": "widening"}]}
+    r = subprocess.run(["node", "--input-type=module", "-e", script, ATTENTION, json.dumps(inp)], capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr
+    texts = [i["text"] for i in json.loads(r.stdout) if i["kind"] == "approval"]
+    assert texts == ["t asks: Enables Remote Control", "t asks: Change tools"], texts
 
 
 def _account_items(attempted, last4, running=True):
