@@ -40,6 +40,7 @@ import crypto from 'node:crypto';
 import WebSocket from 'ws';
 import { ROOT, STATE_DIR, configDir, pidAlive, spawnDetached, sleep } from '../cli/_lib.mjs';
 import { botHome } from './paths.mjs';
+import { imagePastes } from './attach.mjs';
 import { observeBot, ptyOf } from './observe.mjs';
 import { currentTranscript } from '../cockpit/chat.mjs';
 
@@ -53,6 +54,11 @@ export const HOST_UP_MS = 15_000;   // a started attach host publishes its endpo
 const SETTLE_MS = 1_500;            // output quiet this long = the TUI has drawn
 const READY_MS = 20_000;            // ... or give up waiting for quiet and type anyway
 export const CONFIRM_MS = 30_000;   // the user turn must reach the transcript by then
+// Claude Code reads a pasted image path in the background: an Enter before it
+// has drawn "[Image #n]" submits nothing (reference host 2026-09-28). So after
+// an image paste, Enter waits for IMAGE_MIN_MS, then for IMAGE_QUIET_MS of
+// quiet output, at most IMAGE_MAX_MS.
+const IMAGE_MIN_MS = 1_000, IMAGE_QUIET_MS = 700, IMAGE_MAX_MS = 10_000;
 export const KEEP_ITEMS = 500;
 const pollMs = () => Number(process.env.BOTCORP_INBOX_POLL_MS) || 10_000;
 
@@ -220,7 +226,7 @@ async function deliver(bot, kind, text) {
   const file = await currentTranscript(t);
   let offset = 0;
   if (file) try { offset = fs.statSync(file).size; } catch {}
-  const { ws, err } = await typeInto(ep, text);
+  const { ws, err } = await typeInto(ep, text, imagePastes(text, botHome(bot)));
   try {
     if (err) return { ok: false, detail: err };
     const c = await confirm(t, { file, offset }, text);
@@ -234,7 +240,8 @@ async function deliver(bot, kind, text) {
 }
 
 // Dial, wait for the screen to settle, type, keep the socket for the caller to close.
-function typeInto(ep, text) {
+// `images`: paths pasted after the text, one bracketed paste each (core/attach.mjs).
+function typeInto(ep, text, images = []) {
   return new Promise((resolve) => {
     const ws = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * 1024 * 1024 });
     let last = 0, sent = false, timer = null, done = false;
@@ -250,9 +257,16 @@ function typeInto(ep, text) {
       timer = setInterval(() => {
         if (!(last && Date.now() - last >= SETTLE_MS) && Date.now() < deadline) return;
         sent = true;
-        ws.send(JSON.stringify({ t: 'i', d: bracketed(text) }));
-        ws.send(JSON.stringify({ t: 'i', d: '\r' }));
-        finish(null);
+        ws.send(JSON.stringify({ t: 'i', d: bracketed(text) + images.map((p) => ' ' + bracketed(p)).join('') }));
+        if (!images.length) { ws.send(JSON.stringify({ t: 'i', d: '\r' })); finish(null); return; }
+        clearInterval(timer);
+        const pasted = Date.now();
+        timer = setInterval(() => {
+          const now = Date.now();
+          if (now - pasted < IMAGE_MIN_MS || (now - last < IMAGE_QUIET_MS && now - pasted < IMAGE_MAX_MS)) return;
+          ws.send(JSON.stringify({ t: 'i', d: '\r' }));
+          finish(null);
+        }, 100);
       }, 100);
     });
   });

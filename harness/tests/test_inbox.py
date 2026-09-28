@@ -227,6 +227,29 @@ def test_delivered_through_a_running_pty_host(box):
     assert _endpoint(box)["pid"] == rec["pid"]
 
 
+def test_an_attached_image_is_pasted_after_the_text(box):
+    # Claude Code turns a pasted image path into an image attachment, so an image in the
+    # bot's uploads folder is pasted again after the text, and Enter waits for it to settle
+    # (core/attach.mjs); a PDF, or an image outside the folder, stays a path line only
+    _yaml(box, "pty")
+    up = box["home"] / ".botcorp" / "uploads"
+    up.mkdir(parents=True)
+    (up / "20260928-100000-shot.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (up / "20260928-100000-doc.pdf").write_bytes(b"%PDF")
+    outside = box["home"] / "elsewhere.png"
+    outside.write_bytes(b"\x89PNG\r\n\x1a\n")
+    img, pdf = up / "20260928-100000-shot.png", up / "20260928-100000-doc.pdf"
+    text = f"what is this?\n[attached: {img} (png, 8 B)]\n[attached: {pdf} (pdf, 4 B)]\n[attached: {outside} (png, 8 B)]"
+    h = subprocess.Popen(["node", str(PTY_HOST), "--bot", box["name"], "--botcorp", str(ASSEMBLY), "--continue"],
+                         env=box["env"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    box["procs"].append(h)
+    _wait_for(lambda: _endpoint(box), 20)
+    _idle(box)
+    r = _cli(box, "send", box["name"], "--wait", "--json", stdin=text)
+    assert r.returncode == 0 and json.loads(r.stdout)["status"] == "delivered", r.stdout + r.stderr
+    assert _typed(box) == [f"{text} {img}"], "one submit: the text, then the one image inside the folder"
+
+
 def test_in_order(box, fake_claude_exe):
     _bg_session(box, fake_claude_exe)
     _idle(box)

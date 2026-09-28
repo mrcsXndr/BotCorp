@@ -17,6 +17,9 @@ Purpose: how to choose and invoke tools safely — external writes need a human 
 - Always prefix Python invocations with `PYTHONIOENCODING=utf-8` — otherwise Windows console encoding mangles non-ASCII output.
 - `PYTHONIOENCODING=utf-8 python tools/<dir>/<tool>.py <args>`
 
+## Attached files
+A line `[attached: <path> (<type>, <size>)]` in a message is a file the operator attached in the cockpit: open it with Read, which loads images and PDFs natively (an image already shown as `[Image #n]` is attached as it is).
+
 ## Custom tools
 If the operator asks to use a "custom tool": list `tools/`, confirm which one, execute it. Don't invent a tool that isn't there.
 

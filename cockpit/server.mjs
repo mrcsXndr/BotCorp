@@ -26,7 +26,6 @@
 
 import crypto from 'node:crypto';
 import http from 'node:http';
-import os from 'node:os';
 import path from 'node:path';
 import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -45,6 +44,7 @@ import * as chatLaunch from './chat-launch.mjs';
 import * as attention from './attention.mjs';
 import { runCli, cliJson } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
+import * as attach from '../core/attach.mjs';
 import { ccStatus } from '../core/cc.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
@@ -69,7 +69,8 @@ if (!LOOPBACK_BIND && !accessCfg) {
 const ACCESS = accessCfg ? new AccessVerifier(accessCfg) : null;
 const cookie = new SessionCookie({ secure: !!ACCESS });
 const CSP = [
-  "default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'", "connect-src 'self'",
+  // img-src blob:: attachment thumbnails are object URLs of a local file or of a gated fetch
+  "default-src 'self'", "script-src 'self'", "object-src 'none'", "base-uri 'none'", "connect-src 'self'", "img-src 'self' blob:",
   "style-src 'self' 'unsafe-inline'", `frame-ancestors ${accessCfg ? accessCfg.frameAncestors : "'none'"}`,
 ].join('; ');
 
@@ -186,9 +187,19 @@ app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
 // Chat send: queued in the bot's inbox by `botcorp send` (the text on stdin,
 // never argv), which types it as soon as the session is alive. The response is the
 // queued item; the composer follows it through GET /inbox.
+// `attachments`: ids from POST /uploads, named on a line each after the text.
 app.post('/api/bots/:name/send', withBot(async (req, res, bot) => {
-  const text = req.body?.text;
-  if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'empty message' });
+  const ids = req.body?.attachments ?? [];
+  if (!Array.isArray(ids) || ids.length > 10) return res.status(400).json({ error: 'attachments: a list of at most 10 uploads' });
+  const files = [];
+  for (const id of ids) {
+    const abs = attach.resolveUpload(bot.home, id);
+    if (!abs) return res.status(400).json({ error: `no such upload: ${String(id).slice(0, 80)}` });
+    files.push({ path: abs, bytes: (await fsp.stat(abs)).size });
+  }
+  const typed = req.body?.text ?? '';
+  if (typeof typed !== 'string' || (!typed.trim() && !files.length)) return res.status(400).json({ error: 'empty message' });
+  const text = files.length ? attach.withAttachments(typed, files) : typed;
   if (Buffer.byteLength(text) > inbox.MAX_TEXT_BYTES) return res.status(413).json({ error: `message too large (${inbox.MAX_TEXT_BYTES / 1024} KB max)` });
   const r = await runCli(['send', bot.name, '--source', 'cockpit', '--json'], { stdin: text });
   let item = null;
@@ -365,33 +376,50 @@ app.post('/api/chat/launch', wrap((req, res) => {
   return lifecycle(res, args);
 }));
 
-// Paste / drop bridge: the browser cannot put a file into the pty, so it
-// uploads here; we write it under the OS temp dir and the client types
-// `@<path> ` so Claude Code reads it. 8 MB decoded cap, 10/min per session.
-const EXT_BY_MIME = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp', 'application/pdf': 'pdf', 'text/plain': 'txt', 'text/markdown': 'md', 'application/json': 'json', 'text/csv': 'csv' };
-const PASTE_MAX = 8 * 1024 * 1024;
-const pasteHits = new Map();   // cookie -> [ts]
-function pasteAllowed(req) {
+// Attachments (composer, terminal paste/drop, +file): one file per request, the
+// raw bytes as the body, its name in X-File-Name. Operator-gated (a bot must not
+// fill its own folder through here); an allow-listed type, at most 20 MB, kept
+// under the bot's own <bot>/.botcorp/uploads (core/attach.mjs). 10/min per session.
+const uploadHits = new Map();   // cookie -> [ts]
+function uploadAllowed(req) {
   const key = cookie.read(req) || req.identity;
   const now = Date.now();
-  const hits = (pasteHits.get(key) || []).filter((t) => now - t < 60_000);
-  if (hits.length >= 10) { pasteHits.set(key, hits); return false; }
-  hits.push(now); pasteHits.set(key, hits);
+  const hits = (uploadHits.get(key) || []).filter((t) => now - t < 60_000);
+  if (hits.length >= 10) { uploadHits.set(key, hits); return false; }
+  hits.push(now); uploadHits.set(key, hits);
   return true;
 }
-app.post('/api/bots/:name/paste', withBot(async (req, res, bot) => {
-  if (!pasteAllowed(req)) return res.status(429).json({ error: 'too many uploads (10 per minute)' });
-  const m = /^data:([a-z0-9.+/-]+);base64,([A-Za-z0-9+/=]+)$/i.exec(req.body?.dataUrl || '');
-  if (!m) throw new Error('expected a base64 dataUrl');
-  const buf = Buffer.from(m[2], 'base64');
-  if (buf.length > PASTE_MAX) return res.status(413).json({ error: 'file too large (8 MB max)' });
-  const fromName = /\.([a-z0-9]{1,8})$/i.exec(String(req.body?.name || ''));
-  const ext = (fromName ? fromName[1] : EXT_BY_MIME[m[1].toLowerCase()] || 'bin').toLowerCase();
-  const dir = path.join(os.tmpdir(), 'botcorp-paste', bot.name);
+const rawBody = express.raw({ type: () => true, limit: attach.UPLOAD_MAX });
+const gated = (req, res, next) => { if (operatorGate(req, res)) next(); };
+app.post('/api/bots/:name/uploads', gated, (req, res, next) => rawBody(req, res, (e) => {
+  if (!e) return next();
+  res.status(e.status || 400).json({ error: e.type === 'entity.too.large' ? `file too large (${attach.UPLOAD_MAX / 1024 / 1024} MB max)` : e.message });
+}), withBot(async (req, res, bot) => {
+  if (!uploadAllowed(req)) return res.status(429).json({ error: 'too many uploads (10 per minute)' });
+  let name = '';
+  try { name = decodeURIComponent(String(req.headers['x-file-name'] || '')); } catch { throw new Error('bad file name'); }
+  const stored = attach.storedName(name);   // throws on a refused type
+  if (!Buffer.isBuffer(req.body) || !req.body.length) throw new Error('empty file');
+  const dir = attach.uploadsDir(bot.home);
   await fsp.mkdir(dir, { recursive: true });
-  const file = path.join(dir, `paste-${Date.now()}.${ext}`);
-  await fsp.writeFile(file, buf);
-  res.json({ path: file.replace(/\\/g, '/'), bytes: buf.length });
+  await fsp.writeFile(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }).catch(() => {});
+  let file = path.join(dir, stored);
+  for (let n = 2; ; n++) {
+    try { await fsp.writeFile(file, req.body, { flag: 'wx' }); break; } catch (e) {
+      if (e.code !== 'EEXIST' || n > 50) throw e;
+      file = path.join(dir, stored.replace(/(\.[a-z0-9]+)$/, `-${n}$1`));
+    }
+  }
+  res.locals.audit = { upload: path.basename(file), bytes: req.body.length };
+  res.json({ id: path.basename(file), path: file, type: attach.extOf(file), bytes: req.body.length, image: attach.isImage(file) });
+}));
+// An uploaded image, for the thumbnails (fetched with the approval token, shown as a blob: URL).
+app.get('/api/bots/:name/uploads/:file', gated, withBot(async (req, res, bot) => {
+  const abs = attach.resolveUpload(bot.home, req.params.file);
+  if (!abs || !attach.isImage(abs)) return res.status(404).json({ error: 'no such image' });
+  res.setHeader('Content-Type', attach.IMAGE_MIME[attach.extOf(abs)]);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.send(await fsp.readFile(abs));
 }));
 
 // Body-parser errors (413 over the JSON cap, 400 bad JSON) as JSON, not HTML.

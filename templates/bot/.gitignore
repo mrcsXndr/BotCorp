@@ -21,6 +21,9 @@
 credentials.json
 token.json
 
+# Files the operator attached from the cockpit (the folder also ignores itself)
+.botcorp/uploads/
+
 # Memory internals that are per-machine, not portable content
 memory/index/
 memory/tg/
