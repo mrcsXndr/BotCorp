@@ -345,6 +345,14 @@ fi
 if [ -n "$TDL_OPEN" ]; then
   CONTEXT="$CONTEXT\n\n## Open TDL (persistent backlog — memory/TDL.md; hand-maintained, edit it directly with Edit/Write)\n$TDL_OPEN"
 fi
+# One line, only with the review_board module on and a board recorded (review_board.py gates both).
+BOARD_LINE=""
+if [ -f "$BOT_HOME/.botcorp/review-board.json" ]; then
+  BOARD_LINE=$("$PY" "$HARNESS/tools/v2/review_board.py" line 2>/dev/null || true)
+fi
+if [ -n "$BOARD_LINE" ]; then
+  CONTEXT="$CONTEXT\n\n$BOARD_LINE"
+fi
 if [ -n "$LESSONS_BLOCK" ]; then
   CONTEXT="$CONTEXT\n\n## Harness lessons (index)\n$LESSONS_BLOCK"
 fi

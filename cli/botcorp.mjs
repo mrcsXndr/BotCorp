@@ -1572,6 +1572,7 @@ const MODULE_DESC = {
   memory_sync: 'push memory/ to the bot\'s own remote on Stop',
   sound: 'play a sound on Stop',
   telemetry: 'OpenTelemetry export to the local sink (subagent/usage observability)',
+  review_board: 'one permanent private review Artifact the bot keeps adding to; linked in the cockpit header',
 };
 // Modules a bot configures rather than just switches on: shown once, under integrations.
 const INTEGRATION_MODULES = ['telegram', 'board', 'hub'];

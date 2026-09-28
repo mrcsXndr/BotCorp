@@ -48,7 +48,7 @@ export const DEFAULTS = {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
       alert_triage: false, hub: false, janitor: true /* | 'report' */, remote_control: false,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
-      sound: false, telemetry: true,
+      sound: false, telemetry: true, review_board: false,
     },
     skills: 'all',
     agents: 'all',

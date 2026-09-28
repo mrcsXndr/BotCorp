@@ -45,6 +45,7 @@ harness:
     memory_sync: false            # push memory/ to the bot's OWN remote on Stop
     sound: false                  # play hooks/sounds/done.* on Stop
     telemetry: true               # OpenTelemetry export to the local sink (subagent/usage observability)
+    review_board: false           # ONE permanent private review Artifact the bot keeps adding to (skill review-artifact); linked in the cockpit header
   skills: all                     # or a list; the rest are hidden via disabledSkills in the generated settings
   agents: all
 
