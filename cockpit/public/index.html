@@ -346,7 +346,7 @@
     .compose .btn { height: 42px; padding: 0 var(--sp-4); }
     .compose .btn.clip { padding: 0; }
     /* attachments: the composer's row before send, and the same chips in a sent bubble */
-    .pending { display: none; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-2); }
+    .pending { display: none; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-2); padding-left: calc(42px + var(--sp-2)); }
     .pending.show { display: flex; }
     .achips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
     .bubble > .achips:first-child { margin-top: 0; }
@@ -354,12 +354,12 @@
     .achip .an { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
     .achip .as { flex: none; color: var(--text-3); font: var(--fs-xs) var(--font-mono); }
     .achip img { display: none; }
-    .achip.img.has { width: 64px; height: 64px; padding: 0; overflow: hidden; background: var(--field); }
-    .achip.img.has img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .achip.img.has { height: 64px; padding: 0; overflow: hidden; }
+    .achip.img.has img { display: block; flex: none; width: 62px; height: 100%; object-fit: cover; background: var(--field); }
     .achip.img.has .an, .achip.img.has .as { display: none; }
     .achip .ax { flex: none; width: 24px; height: 24px; margin-left: 2px; border: 0; border-radius: var(--r-xs); background: none; color: var(--text-2); font-size: 16px; line-height: 1; cursor: pointer; }
     .achip .ax:hover { background: var(--hover); color: var(--text); }
-    .achip.img.has .ax { position: absolute; top: 3px; right: 3px; margin: 0; width: 22px; height: 22px; background: var(--surface); border: 1px solid var(--line-strong); }
+    .achip.img.has .ax { margin: 0 4px 0 0; }
     .bubble.user .achip { background: var(--surface); border-color: var(--accent-soft-line); }
 
     /* ==== modals ============================================================== */

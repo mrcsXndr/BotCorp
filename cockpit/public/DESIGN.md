@@ -136,7 +136,9 @@ use `--text-2`, which keeps readable contrast on every surface.
     chips in a row above the input and inside the sent bubble: `--surface`,
     `--line-strong`, `--r-btn`, 36px tall with the name (600) and a mono size;
     an image is a 64px `object-fit: cover` thumbnail instead. A composer chip
-    ends in a × (on a thumbnail, a small surface square in its corner).
+    ends in a × (on a thumbnail, beside the image, never over it). The
+    composer's chip row starts at the input's left edge, not under the
+    paperclip.
   - The chat follows the newest turn. Scrolled up, a round `.btn` with a
     down arrow sits bottom-right of the list (`--shadow-2`, 36px, above the
     composer) and counts the turns that arrived since; it, or scrolling back
