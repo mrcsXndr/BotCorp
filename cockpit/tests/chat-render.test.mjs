@@ -212,13 +212,11 @@ test('currentTranscript: a newer headless (sdk-cli) transcript never replaces th
   assert.equal(path.basename(await currentTranscript(twoTranscripts('pick-b', 'cli'))), 'distill.jsonl');
 });
 
-test('currentTranscript: the daemon state session id wins over a newer interactive transcript', async () => {
+test('currentTranscript: after a /clear the new transcript wins, whatever the daemon state id says', async () => {
   const bot = twoTranscripts('pick-c', 'cli');
   fs.mkdirSync(path.join(process.env.BOTCORP_HOME, 'state'), { recursive: true });
+  // The state id still names the session from before the /clear.
   fs.writeFileSync(path.join(process.env.BOTCORP_HOME, 'state', 'pick-c.json'), JSON.stringify({ session_id: 'live' }));
-  assert.equal(path.basename(await currentTranscript(bot)), 'live.jsonl');
-  // A state id with no file behind it falls back to the newest interactive one.
-  fs.writeFileSync(path.join(process.env.BOTCORP_HOME, 'state', 'pick-c.json'), JSON.stringify({ session_id: 'gone' }));
   assert.equal(path.basename(await currentTranscript(bot)), 'distill.jsonl');
 });
 

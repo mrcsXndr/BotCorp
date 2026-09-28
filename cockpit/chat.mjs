@@ -9,7 +9,7 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { ccProjectSlug, STATE_DIR } from './bots.mjs';
+import { ccProjectSlug } from './bots.mjs';
 
 // Interactive sessions write "entrypoint":"cli"; a headless `claude --print`
 // (a hook's timeline distill, say) writes "sdk-cli". The first entry follows
@@ -30,14 +30,11 @@ async function entrypointOf(file) {
   } catch { return null; } finally { await fh?.close(); }
 }
 
-async function stateSessionId(name) {
-  try { return JSON.parse(await fs.readFile(path.join(STATE_DIR, `${name}.json`), 'utf-8')).session_id || null; } catch { return null; }
-}
-
-// Locate the bot's ACTIVE transcript: the daemon's session id when its file is
-// there, else the newest interactive .jsonl under projects/, preferring the dir
-// whose slug is the bot's own BOT_HOME. Never an SDK (headless) run's. null
-// when there is none yet.
+// Locate the bot's ACTIVE transcript: the newest interactive .jsonl under
+// projects/, preferring the dir whose slug is the bot's own BOT_HOME. Never an
+// SDK (headless) run's. Not the daemon's recorded session id: a /clear starts a
+// new transcript and that id stays stale until the next launch. null when there
+// is none yet.
 export async function currentTranscript(bot) {
   const projectsDir = path.join(bot.configDir, 'projects');
   let dirs;
@@ -58,9 +55,6 @@ export async function currentTranscript(bot) {
     }
   }
   cands.sort((a, b) => (b.own - a.own) || (b.mtime - a.mtime));
-  const sid = await stateSessionId(bot.name);
-  const live = sid && cands.find((c) => path.basename(c.file) === `${sid}.jsonl`);
-  if (live) return live.file;
   for (const c of cands) {
     if (!(await entrypointOf(c.file) || '').startsWith('sdk')) return c.file;
   }

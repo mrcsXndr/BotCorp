@@ -25,8 +25,8 @@ Attachments that arrive, and a terminal that fits its box.
 - **The message box grows** from one line to eight before it scrolls, with no
   scrollbar until then.
 - **The chat shows the live session, not a headless run.** It takes the
-  daemon's session id when that transcript is there, else the newest
-  interactive one, and never a `claude --print` (SDK) transcript. Those came
+  newest interactive transcript (so it follows a `/clear`), and never a
+  `claude --print` (SDK) transcript. Those came
   from the timeline distill, which now runs with `--no-session-persistence`
   and the daemon's pinned Claude Code. Hooks never get the session's OAuth
   token, so without credentials in its env the distill skips straight to the
