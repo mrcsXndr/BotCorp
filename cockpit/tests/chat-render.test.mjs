@@ -23,7 +23,7 @@ const ROOT = path.resolve(COCKPIT, '..');
 // Runtime dir for modules that read BOTCORP_HOME at import time: never ~/.botcorp.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-chat-test-'));
 process.env.BOTCORP_HOME = path.join(TMP, 'rt');
-const { parseChannelText, parseTaskNotifications, chatState } = await import('../chat.mjs');
+const { parseChannelText, parseTaskNotifications, chatState, tgSendTexts } = await import('../chat.mjs');
 const { summarizeStatus, chatStatus } = await import('../chatstatus.mjs');
 const { ccProjectSlug } = await import('../bots.mjs');
 
@@ -188,7 +188,7 @@ const userLine = (content, extra = {}) => ({ type: 'user', timestamp: '2026-09-2
 test('parseChannelText: body + meta, media as labelled items, never paths', () => {
   const r = parseChannelText('<channel source="plugin:telegram:telegram" chat_id="1" message_id="9" user="operator" user_id="1" ts="2026-09-25T14:34:00.000Z" image_path="D:\\bot\\inbox\\snap.jpg">look at this</channel>');
   assert.equal(r.text, 'look at this');
-  assert.deepEqual(r.meta, { source: 'Telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [{ kind: 'photo', label: 'Photo', detail: '' }] });
+  assert.deepEqual(r.meta, { source: 'Telegram', channel: 'telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [{ kind: 'photo', label: 'Photo', detail: '' }] });
   assert.doesNotMatch(JSON.stringify(r), /inbox|snap/);
   const f = parseChannelText('<channel source="plugin:telegram:telegram" attachment_kind="document" attachment_file_id="abc" attachment_name="C:\\tmp\\secret\\report.pdf" user="m"></channel>');
   assert.deepEqual(f.meta.media, [{ kind: 'document', label: 'File', detail: 'report.pdf' }]);
@@ -289,10 +289,47 @@ test('chatState: Telegram turn renders as a user turn; a task-notification as a 
     ['user', 'typed at the box'],
     ['assistant', '## Done\n- one'],
   ]);
-  assert.deepEqual(st.turns[0].meta, { source: 'Telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [] });
+  assert.deepEqual(st.turns[0].meta, { source: 'Telegram', channel: 'telegram', user: 'operator', ts: '2026-09-25T14:34:00.000Z', media: [] });
   assert.equal(st.turns[1].ts, '2026-09-25T14:00:00.000Z');
   assert.doesNotMatch(JSON.stringify(st.turns), /<channel|chat_id|task-notification|system-reminder|output-file/);
   assert.deepEqual(st.turns[3].tools, ['Bash']);
+});
+
+// ---- outbound Telegram ----------------------------------------------------------------
+test('tgSendTexts: the sent text from each real tg_send.py shape; bookkeeping calls send nothing', () => {
+  assert.deepEqual(tgSendTexts('PYTHONIOENCODING=utf-8 python tools/tg/tg_send.py --reply-to 10690 "On it, checking now." 2>&1 | tail -1'),
+    [{ text: 'On it, checking now.', replyTo: '10690' }]);
+  assert.deepEqual(tgSendTexts("python tools/tg/tg_send.py --answered && python tools/tg/tg_send.py --reply-to=7 --no-status 'done'"),
+    [{ text: 'done', replyTo: '7' }]);
+  assert.deepEqual(tgSendTexts('python tools/tg/tg_send.py "$(cat <<\'EOF\'\n**Shipped**\n- one\nEOF\n)"'), [{ text: '**Shipped**\n- one', replyTo: null }]);
+  assert.deepEqual(tgSendTexts("python tools/tg/tg_send.py --quiet <<'EOF'\nfrom stdin\nEOF\n"), [{ text: 'from stdin', replyTo: null }]);
+  assert.deepEqual(tgSendTexts('python tools/tg/tg_send.py "say \\"hi\\" twice"'), [{ text: 'say "hi" twice', replyTo: null }]);
+  for (const none of ['python tools/tg/tg_send.py --answered', 'python tools/tg/tg_send.py --unanswered', 'python tools/tg/tg_send.py --alert "disk full"',
+    'python tools/tg/tg_send.py "$(date)"', 'git status', '', undefined]) assert.deepEqual(tgSendTexts(none), [], String(none));
+});
+
+test('chatState: a Telegram reply renders as an outbound turn after the assistant text, never the chat id', async () => {
+  const bot = transcriptBot([
+    userLine(`<channel ${TG} message_id="40" ts="2026-09-25T15:00:00.000Z">status?</channel>`, { isMeta: true }),
+    { type: 'assistant', timestamp: '2026-09-25T15:00:03.000Z', message: { role: 'assistant', content: [
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'PYTHONIOENCODING=utf-8 python tools/tg/tg_send.py --answered' } },
+      { type: 'tool_use', id: 't2', name: 'Bash', input: { command: 'PYTHONIOENCODING=utf-8 python tools/tg/tg_send.py --reply-to 40 "All green." 2>&1 | tail -1' } },
+    ] } },
+    { type: 'assistant', timestamp: '2026-09-25T15:00:09.000Z', message: { role: 'assistant', content: [
+      { type: 'text', text: 'Sent the status.' },
+      { type: 'tool_use', id: 't3', name: 'mcp__plugin_telegram_telegram__reply', input: { chat_id: 'CHAT', text: 'Chart attached.', reply_to: 40 } },
+    ] } },
+  ]);
+  const st = await chatState(bot, 0);
+  assert.deepEqual(st.turns.map((t) => [t.role, t.text, t.replyTo ?? null]), [
+    ['user', 'status?', null],
+    ['tg_out', 'All green.', '40'],
+    ['assistant', 'Sent the status.', null],
+    ['tg_out', 'Chart attached.', '40'],
+  ]);
+  assert.equal(st.turns[0].meta.channel, 'telegram');
+  assert.equal(st.turns[1].ts, '2026-09-25T15:00:03.000Z');
+  assert.doesNotMatch(JSON.stringify(st.turns), /CHAT|--answered|tg_send/);
 });
 
 // ---- status chips ----------------------------------------------------------------------

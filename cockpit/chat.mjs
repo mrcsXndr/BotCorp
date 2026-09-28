@@ -111,13 +111,14 @@ export function parseChannelText(text) {
     const media = mediaItems(attrs);
     let body = m[2].trim();
     if (media.length && PLACEHOLDER_RE.test(body)) body = '';
-    blocks.push({ body, source: sourceLabel(attrs.source), user: attrs.user || null, ts: attrs.ts || null, media });
+    blocks.push({ body, source: sourceLabel(attrs.source), telegram: /telegram/i.test(attrs.source || ''), user: attrs.user || null, ts: attrs.ts || null, media });
   }
   if (!blocks.length) return null;
-  rest = (rest + text.slice(at)).trim();
+  // a reminder the harness wrapped around the message is not what anyone sent
+  rest = (rest + text.slice(at)).replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
   const first = blocks[0];
   const body = [rest, ...blocks.map((b) => b.body)].filter(Boolean).join('\n\n');
-  return { text: body, meta: { source: first.source, user: first.user, ts: first.ts, media: blocks.flatMap((b) => b.media) } };
+  return { text: body, meta: { source: first.source, channel: first.telegram ? 'telegram' : null, user: first.user, ts: first.ts, media: blocks.flatMap((b) => b.media) } };
 }
 // Background agents and commands report back as a synthetic user entry:
 //   <task-notification><task-id>..</task-id><output-file>..</output-file>
@@ -200,6 +201,85 @@ function transcriptFrom(content) {
   return null;
 }
 
+// Telegram replies the bot sends, both ways it sends them: the channel plugin's
+// reply tool (mcp__plugin_telegram_telegram__reply {chat_id, text, reply_to})
+// and the harness sender run through Bash (`python tools/tg/tg_send.py [flags]
+// "text"`, or the text as a heredoc). Each becomes a `tg_out` turn carrying the
+// sent text only, never the chat id. Read at the call: a send the gate refused
+// still shows, as the call it was.
+const TG_REPLY_TOOL_RE = /^mcp__plugin_telegram[\w-]*__reply$/;
+const TG_SEND_RE = /\btg_send\.py\b/g;
+const TG_VALUE_FLAGS = new Set(['--chat-id', '--reply-to', '--photo']);
+const TG_NO_SEND = new Set(['--answered', '--unanswered', '--check', '--alert']);
+const TG_TEXT_MAX = 8000;
+// The words of one shell command after tg_send.py, up to the first unquoted
+// ; | & < > or newline; null when a word is a command substitution (unknown text).
+function shellWords(s) {
+  const words = [];
+  let cur = null, i = 0;
+  const push = () => { if (cur !== null) words.push(cur); cur = null; };
+  while (i < s.length) {
+    const c = s[i];
+    if (c === "'") {
+      const j = s.indexOf("'", i + 1);
+      if (j < 0) return null;
+      cur = (cur ?? '') + s.slice(i + 1, j);
+      i = j + 1;
+    } else if (c === '"') {
+      let v = '', j = i + 1;
+      for (; j < s.length && s[j] !== '"'; j++) {
+        if (s[j] === '\\' && '"\\$`'.includes(s[j + 1])) v += s[++j];
+        else if ((s[j] === '$' && s[j + 1] === '(') || s[j] === '`') return null;
+        else v += s[j];
+      }
+      if (j >= s.length) return null;
+      cur = (cur ?? '') + v;
+      i = j + 1;
+    } else if (/[;|&<>\n)]/.test(c)) {
+      if (cur !== null && /^\d$/.test(cur) && (c === '>' || c === '<')) cur = null;   // 2>&1
+      break;
+    } else if (/\s/.test(c)) { push(); i++; }
+    else if (c === '\\' && i + 1 < s.length) { cur = (cur ?? '') + s[i + 1]; i += 2; }
+    else { cur = (cur ?? '') + c; i++; }
+  }
+  push();
+  return words;
+}
+export function tgSendTexts(command) {
+  const cmd = String(command || '');
+  const out = [];
+  for (const m of cmd.matchAll(TG_SEND_RE)) {
+    const rest = cmd.slice(m.index + m[0].length);
+    // the text as a heredoc: "$(cat <<'EOF' ... EOF)" as an argument, or on stdin
+    const sub = /^[^\n]*?"\$\(cat <<-?'?(\w+)'?\n([\s\S]*?)\n\s*\1\s*\n?\)"/.exec(rest);
+    const stdin = sub ? null : /^([^\n|;&]*?)<<-?'?(\w+)'?\n([\s\S]*?)\n\2(?:\n|$)/.exec(rest);
+    const words = shellWords(sub ? rest.slice(0, rest.indexOf('"$(cat')) : stdin ? stdin[1] : rest);
+    if (!words) continue;
+    let text = sub ? sub[2] : stdin ? stdin[3] : null, replyTo = null, skip = false;
+    for (let k = 0; k < words.length; k++) {
+      const [w, eq] = words[k].split(/=(.*)/s);
+      if (TG_NO_SEND.has(w)) skip = true;
+      else if (TG_VALUE_FLAGS.has(w)) { const v = eq ?? words[++k]; if (w === '--reply-to') replyTo = v || null; }
+      else if (!w.startsWith('-') && text === null) text = words[k];
+    }
+    if (!skip && text && text.trim()) out.push({ text: text.trim().slice(0, TG_TEXT_MAX), replyTo });
+  }
+  return out;
+}
+function tgSends(content, ts) {
+  if (!Array.isArray(content)) return [];
+  const turns = [];
+  for (const p of content) {
+    if (p?.type !== 'tool_use') continue;
+    if (TG_REPLY_TOOL_RE.test(String(p.name || '')) && typeof p.input?.text === 'string' && p.input.text.trim()) {
+      turns.push({ role: 'tg_out', text: p.input.text.trim().slice(0, TG_TEXT_MAX), replyTo: p.input.reply_to != null ? String(p.input.reply_to) : null, ts });
+    } else if (p.name === 'Bash') {
+      for (const s of tgSendTexts(p.input?.command)) turns.push({ role: 'tg_out', ...s, ts });
+    }
+  }
+  return turns;
+}
+
 function parseLine(line) {
   if (!line || !line.trim()) return null;
   let obj;
@@ -224,7 +304,9 @@ function parseLine(line) {
   if (type === 'assistant') {
     noteTranscribeCalls(content);
     const text = textFromContent(content).trim();
-    if (text) return { role: 'assistant', text, tools: toolsFromContent(content), ts };
+    const sent = tgSends(content, ts);
+    if (text) return sent.length ? [{ role: 'assistant', text, tools: toolsFromContent(content), ts }, ...sent] : { role: 'assistant', text, tools: toolsFromContent(content), ts };
+    if (sent.length) return sent;
   }
   return null;
 }
