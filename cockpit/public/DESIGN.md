@@ -11,7 +11,7 @@ when it builds the xterm theme.
 
 - **Light is the default.**
 - **Dark** applies when the OS prefers dark (`prefers-color-scheme`), or when
-  the viewer picks it. The sidebar's "theme" control cycles auto, light, dark.
+  the viewer picks it. The sidebar's "Theme" row cycles auto, light, dark.
 - The viewer's choice is stored in `localStorage` (`cockpit.theme`). Every
   access is wrapped in try/catch, so blocked storage just falls back to auto.
 - `theme.js` sets `html[data-theme]` before first paint. The dark values are
@@ -22,14 +22,15 @@ when it builds the xterm theme.
 
 | token | light | dark | role |
 |---|---|---|---|
-| `--bg` | #F7F8F6 | #121513 | the page |
-| `--side` | #EEF1EC | #0E110F | the bot column |
-| `--surface` | #FFFFFF | #1A1F1C | cards, assistant bubbles, menus, modals, buttons |
-| `--field` | #FBFCFB | #151916 | inputs, code |
-| `--task` | #F7F8F6 | #121513 | task cards (on the page tone) |
-| `--hover` | text at 5% | text at 5% | hover and selected rows |
-| `--line` / `--line-strong` | #DDE3DC / #C9D1C8 | #29302B / #38413B | hairlines; strong = inputs, buttons, chips |
-| `--text` / `-2` / `-3` | #1C2320 / #56625B / #7F8A83 | #E4E9E5 / #A3AEA7 / #76817A | primary, secondary, meta |
+| `--bg` | #F9FBF8 | #141816 | the page |
+| `--side` | #EAF1EB | #101412 | the bot column (a green step off the page) |
+| `--surface` | #FFFFFF | #1E2521 | cards, assistant bubbles, menus, modals, buttons |
+| `--field` | #FBFCFB | #171C19 | inputs, code |
+| `--task` | #F3F7F3 | #19201C | task cards, approval cards in the sheet |
+| `--hover` | text at 5.5% | text at 6% | hover and selected rows |
+| `--line` / `--line-strong` | #DFE6DF / #C9D1C8 | #2C3530 / #3D4841 | hairlines; strong = inputs, buttons, chips |
+| `--text` / `-2` / `-3` | #17201B / #4C5A52 / #7F8A83 | #EAEFEB / #B1BCB5 / #7F8B83 | primary, secondary, meta |
+| `--sent` / `-line` | #ECF3F5 / #CFDFE3 | #1A2527 / #2B3C3F | a reply the bot sent on Telegram |
 | `--accent` / `--accent-ink` | #2E6A54 / #FFFFFF | #8FC4AB / #0E1A14 | the one accent: primary buttons, links, focus |
 | `--accent-soft` / `-line` | #E4EEE8 / #C8DBD0 | #1E2C25 / #2C4338 | the operator's own bubbles |
 | `--ok` | #2A7A4B | #7FD19B | running, sent |
@@ -48,7 +49,10 @@ use `--text-2`, which keeps readable contrast on every surface.
 - **Faces:** `--font-sans` is the system UI stack. `--font-mono` is for numbers
   and code only: pids, readout values, sizes, run times, code, the terminal.
 - **Scale:** `--fs-xs` 11.5, `--fs-sm` 12.5, `--fs-ui` 13.5, `--fs-body` 14.5
-  (chat text), `--fs-lg` 16, `--fs-xl` 18 (the bot name).
+  (chat text), `--fs-lg` 16, `--fs-xl` 21 (the bot name).
+- **Icons:** one hand-drawn set, inline `<symbol>`s at the top of
+  `index.html` (16px grid, 1.5 stroke in `currentColor`, round caps, one
+  solid part each). An icon sits bare beside its label, never in a tile.
 - **Line height:** `--lh-body` 1.6 for reading, `--lh-ui` 1.4 for controls.
 
 ## Spacing, radii, elevation, motion
@@ -69,8 +73,18 @@ use `--text-2`, which keeps readable contrast on every surface.
 - **Bot row:** the signature. A chamfered stub (`--stub` clip-path) on the
   row's left edge carries the state: `--ok` running, `--warn` waiting on you,
   `--bad` down, `--text-3` stopped.
+- **Sidebar nav:** icon + label rows (Approvals, Usage, Updates, then New
+  chat, Guide, Theme). Approvals with anything pending turns `--warn-soft`
+  with a `--warn-line` inset edge and a mono count; on a phone the rows
+  become one scrolling strip.
 - **Header:** the bot name, then the state as text, then the Telegram chip,
-  then the readouts (values in mono), over a `--line` hairline.
+  then the readouts (values in mono), over a `--line` hairline. Context is a
+  96x6 bar (fill `--accent`, `--warn` from 75%, `--bad` from 90%) with the
+  percent and used / ceiling. The account shows its registered label; the
+  token's last 4 are in the tooltip only.
+- **Lifecycle:** a background bot shows Restart, plus Start (primary) while
+  stopped; never Stop. A pty bot shows Stop and Restart, or Start.
+  `cards.js` decides; buttons not offered are hidden, not disabled.
 - **Buttons:** `--r-btn`, weight 600. Primary = accent fill; secondary =
   surface + `--line-strong`. Disabled, in every variant: transparent,
   `--text-3`, a dashed `--line-strong` border, no shadow.
@@ -84,9 +98,10 @@ use `--text-2`, which keeps readable contrast on every surface.
   dock to the bottom edge, full width, at most 88dvh, top corners `--r-card`.
   - An attention item carries a 16px `--stub` mark (warn or bad) beside its
     kind label, never a full-height bar, then one action and one quiet action.
-  - An approval card sits on `--task`: the bot, who asked, the diff in a mono
-    `--field` box (a bulk append collapses to "show all N"), the reason, then
-    Approve (secondary) and Reject (quiet). "Decided" rows below say
+  - An approval card sits on `--task`: the stamp icon and the request as a
+    title, "Widens: <what>." with one plain sentence, the exact change in a
+    mono `--field` box (a bulk append collapses to "show all N"), who asked,
+    then Approve (primary) and Decline (quiet). "Decided" rows below say
     "approved by <b>who</b>" with the decision as a coloured `.out` word.
   - A usage meter is a 6px `--line` track with a fill in `--text-2`, `--warn`
     from 75% or `--bad` from 90% (the header readouts' `level()`); the value and reset time are mono. Accounts group
@@ -110,8 +125,16 @@ use `--text-2`, which keeps readable contrast on every surface.
   - A task card (a background agent or command reporting back) sits in the
     assistant lane on `--task`. It shows a status word, the summary and a meta
     line; the result is collapsed by default.
-- **Drawers** (details, pairing, vault, runs, capabilities): a tab row with the
-  active tab on `--surface`. Run outcomes are coloured words: sent/exit 0
+  - Telegram: an inbound message is an operator bubble whose meta line
+    carries the paper-plane icon, the sender in `--text` and the time. A reply
+    the bot sent there is a `--sent` bubble in the assistant lane, "Sent on
+    Telegram · time", text only.
+  - A pending approval for this bot is the same card as the sheet's, on
+    `--warn-soft` / `--warn-line`, always last in the chat.
+- **Drawers** (Overview, Telegram access, Secrets, Activity, Automations and
+  tools): a tab row with the active tab on `--surface`; the drawer floats on
+  `--shadow-2` (no border) and opens with its title and one `--text-2` line on
+  what it is for. Raw state sits behind a quiet disclosure. Run outcomes are coloured words: sent/exit 0
   `--ok`, skipped `--warn`, failed `--bad`.
 - **Capabilities:** a two-way seg (Automations, Tools) over `.cap` rows: the
   name, a state word (`.out`: enabled `--ok`, paused `--warn`, missing

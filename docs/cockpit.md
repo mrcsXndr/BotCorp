@@ -251,7 +251,7 @@ account only, so a cockpit the daemon started (no terminal) is usable too.
 
 ### New chat
 
-The side-foot "new chat" link opens a modal: an account `<select>` (label +
+The sidebar's "New chat" row opens a modal: an account `<select>` (label +
 masked, populated from `GET /api/accounts`, disabled with "no accounts:
 botcorp accounts add <id>" when none exist), a Generic / Codebase radio, and
 for Codebase a `<select>` of recent workspaces (`GET /api/chat/recent`) plus a

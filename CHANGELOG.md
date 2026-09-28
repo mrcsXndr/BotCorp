@@ -3,6 +3,38 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.5
+
+A cockpit you can read at a glance.
+
+- **Brighter, with a clear order of reading.** Lighter surfaces in both
+  themes, a larger bot name, and a sidebar nav with a hand-drawn icon per
+  entry; the Approvals entry lights up with a count while anything waits.
+- **Drawers read as cards.** Each opens with its title and one line on what
+  it is for; rows carry human labels (Overview, Telegram access, Secrets,
+  Activity, Automations and tools), the raw daemon state sits behind a
+  disclosure.
+- **A background bot has no Stop button.** It gets Restart, plus Start while
+  it is stopped; the daemon heals it otherwise. A pty bot keeps Stop and
+  Restart.
+- **Context is a bar** toward the compaction ceiling, amber from 75%, red
+  from 90%.
+- **The account shows its name.** The registered account's label replaces
+  the masked token; the token's last 4 appear only on hover.
+- **Approvals arrive in the bot's chat.** A pending request renders as a card
+  at the end of the conversation: what is asked, what it widens, the exact
+  change, who asked, and Approve / Decline behind the same operator token.
+  The Approvals sheet uses the same card.
+- **The requesting bot hears the decision.** `approve` and `reject` (CLI or
+  cockpit, `--source`) drop a notice into the bot's inbox saying what was
+  decided and whether it was applied.
+- **Telegram in the chat, both ways.** An inbound message renders as a
+  Telegram bubble with the sender and time; the bot's reply (`tg_send.py` or
+  the plugin's `reply` tool) renders as a sent bubble with the text only,
+  never the chat id or a bookkeeping call.
+- **Rule: the Telegram reply is the answer.** `harness/rules/telegram.md`
+  tells a bot not to repeat it as terminal text; one short line at most.
+
 ## v0.7.4
 
 Send now.
