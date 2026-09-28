@@ -3,6 +3,35 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.7
+
+One review board per bot, linked from the cockpit.
+
+- **A per-bot switch.** `harness.modules.review_board` (default off, not
+  widening, so `config set` applies it without an approval) gives the bot
+  one permanent private review Artifact it keeps adding to, instead of a new
+  page per question.
+- **One record, one URL.** `harness/tools/v2/review_board.py set-url | status
+  | show` keeps `<bot>/.botcorp/review-board.json` (url, updated, open,
+  answered, sent_at). It takes only a `https://claude.ai/[code/]artifact/<id>`
+  link, refuses a second board without `--replace`, reads the counts from the
+  published page with `status --from-page`, and refuses everything while the
+  module is off.
+- **The skill works the board.** `review-artifact` gains a "One board"
+  section (republish to the recorded URL, add items, move acted-on items to
+  Done) and ships `template.html`: every answer is stamped when given, Send
+  stamps the send and locks each sent answer ("locked 28 Sep 14:52"), a
+  locked answer stays editable and is re-stamped on the next Send, and a
+  sticky bar reads "N open · M answered · last sent <time>". The
+  review-state block gains `answeredAt`, `lockedAt`, `sentAt` and `done`;
+  the old fields are unchanged. Without the artifact capability, Send
+  becomes "Copy answers".
+- **Session start names it.** With the module on and a board recorded, one
+  line gives the URL and the open count.
+- **The cockpit links it.** The bot header shows "Review board" with the
+  open count (new tab), a muted "no board yet" when the module is on with
+  nothing recorded, and nothing when the module is off.
+
 ## v0.7.6
 
 Attachments that arrive, and a terminal that fits its box.

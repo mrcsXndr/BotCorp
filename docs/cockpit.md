@@ -260,6 +260,17 @@ account only, so a cockpit the daemon started (no terminal) is usable too.
 - Remote Control: "Enable Remote Control" types `/login`, "Start Remote
   Control" types `/remote-control`; the link the TUI prints is surfaced in a
   bar with an Open button (login and claude.ai/code URLs).
+- Review board (`harness.modules.review_board`): with the module on, the bot
+  header shows "Review board" plus the open count, linking to the bot's one
+  private review Artifact in a new tab (`rel="noopener noreferrer"`). With
+  the module on and nothing recorded yet it shows a muted "no board yet"; with
+  the module off it shows nothing, even if a record is on disk. `getBot` reads
+  the bot-written `<bot>/.botcorp/review-board.json` (written by
+  `harness/tools/v2/review_board.py`) and passes only a
+  `https://claude.ai/[code/]artifact/<id>` URL and non-negative integer
+  counts; the client checks the URL again. The cockpit reads `bot.yaml` live,
+  so the link follows the switch at once; the session-start line follows at
+  the next launch.
 - Phone: `maximum-scale=1`, chat input `inputmode=text autocapitalize=off`,
   bot list becomes a top strip under 700 px, chat is the default view. Copy on
   select is a setting (off by default) because it fights long-press selection.

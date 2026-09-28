@@ -97,6 +97,19 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
   };
 }
 
+// The bot's ONE review board (harness.modules.review_board), from the record
+// tools/v2/review_board.py writes. The file is bot-written, so nothing in it is
+// trusted: only a private claude.ai artifact link comes through as a link.
+export const BOARD_URL_RE = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9][A-Za-z0-9-]{7,}\/?$/;
+export async function reviewBoard(home, on) {
+  if (!on) return null;
+  const rec = await readJson(path.join(home, '.botcorp', 'review-board.json'));
+  const count = (v) => (Number.isInteger(v) && v >= 0 ? v : null);
+  const url = rec && typeof rec.url === 'string' && BOARD_URL_RE.test(rec.url) ? rec.url : null;
+  const sentAt = url && typeof rec.sent_at === 'string' && !Number.isNaN(Date.parse(rec.sent_at)) ? rec.sent_at : null;
+  return { url, open: url ? count(rec.open) : null, answered: url ? count(rec.answered) : null, sentAt };
+}
+
 export async function getBot(name) {
   if (!HAND_NAME_RE.test(name || '')) return null;
   const home = botHome(name);
@@ -116,6 +129,7 @@ export async function getBot(name) {
     account: typeof cfg.account === 'string' ? cfg.account : null,   // the Claude account it should run on; null = its own token
     telegram: !!modules.telegram,
     remoteControl: !!modules.remote_control,
+    reviewBoard: await reviewBoard(home, !!modules.review_board),   // null = module off
     modules,
     capabilities: cfg.capabilities || null,
     automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false, secrets: Array.isArray(a?.secrets) ? a.secrets.map(String) : [] })) : [],

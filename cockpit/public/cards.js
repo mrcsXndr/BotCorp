@@ -128,6 +128,24 @@
     return { body: body.join('\n').replace(/\s+$/, ''), files };
   }
 
+  // The header's review-board link. rb: getBot's reviewBoard (null = module off).
+  // -> null (show nothing) | {none} (on, nothing recorded yet) | {url, count, title}.
+  // The server already refused a non-artifact URL; this refuses it again before it becomes an href.
+  const BOARD_URL_RE = /^https:\/\/claude\.ai\/(?:code\/)?artifact\/[A-Za-z0-9][A-Za-z0-9-]{7,}\/?$/;
+  function boardLink(rb) {
+    if (!rb || typeof rb !== 'object') return null;
+    if (typeof rb.url !== 'string' || !BOARD_URL_RE.test(rb.url)) {
+      return { none: true, title: 'The review board is on for this bot. It appears here once the bot publishes it.' };
+    }
+    const n = Number.isInteger(rb.open) && rb.open >= 0 ? rb.open : null;
+    const answered = Number.isInteger(rb.answered) && rb.answered >= 0 ? `, ${rb.answered} answered` : '';
+    return {
+      url: rb.url,
+      count: n === null ? '' : `${n} open`,
+      title: `The bot's review board, in a new tab${n === null ? '' : ` (${n} open${answered})`}`,
+    };
+  }
+
   root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, toolName, toolsLine, WIDENS,
-    fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX };
+    fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX, boardLink };
 })(typeof window !== 'undefined' ? window : globalThis);

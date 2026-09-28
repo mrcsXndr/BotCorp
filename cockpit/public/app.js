@@ -69,7 +69,7 @@ async function refresh() {
     const b = await api('GET', `/api/bots/${encodeURIComponent(hash)}`).catch(() => null);
     if (b) state.bots.push(b);
   }
-  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.phase, b.pid, b.telegram, b.poller, b.blocked, b.down]), state.selected]);
+  const snap = JSON.stringify([state.bots.map((b) => [b.name, b.running, b.phase, b.pid, b.telegram, b.poller, b.blocked, b.down, b.reviewBoard]), state.selected]);
   if (snap !== lastSnapshot) { lastSnapshot = snap; renderList(); if (state.selected) renderHeader(); }
   if (!state.selected && state.bots.length) {
     // a fixture that did not load never falls back to the only real bot
@@ -130,6 +130,21 @@ function renderTelegram(b) {
   chip.title = POLLER_WHY[b.poller.state] || String(b.poller.state || '');
 }
 
+// The bot's ONE review board (harness.modules.review_board): a link when it is
+// recorded, a muted "no board yet" while the module is on without one, nothing when off.
+function renderBoard(b) {
+  const v = window.CockpitCards.boardLink(b.reviewBoard);
+  const a = el('hBoard');
+  a.hidden = !v || !!v.none;
+  el('hBoardNone').hidden = !v || !v.none;
+  if (!v) return;
+  if (v.none) { el('hBoardNone').title = v.title; return; }
+  a.href = v.url;
+  a.title = v.title;
+  el('hBoardN').textContent = v.count;
+  el('hBoardN').hidden = !v.count;
+}
+
 function renderHeader() {
   const b = current();
   if (!b) return;
@@ -143,6 +158,7 @@ function renderHeader() {
   st.className = 'st ' + s.cls;
   st.title = b.down || '';
   renderTelegram(b);
+  renderBoard(b);
   st.title = b.running && b.blocked ? b.blocked.detail : st.title;
   // Never Start a live session: a second one means two Telegram pollers. A
   // background bot has no Stop: the daemon heals it, so Restart is the lever.
