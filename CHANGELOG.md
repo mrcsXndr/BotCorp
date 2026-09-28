@@ -25,6 +25,10 @@ A cockpit you can read at a glance.
   at the end of the conversation: what is asked, what it widens, the exact
   change, who asked, and Approve / Decline behind the same operator token.
   The Approvals sheet uses the same card.
+- **Plain words, not config paths.** The "things need you" bar names a request
+  by the card's title ("relay asks: Enables Remote Control"); the raw change
+  shows only in the card. The "used:" line under a bot message reads
+  "Telegram reply" and "Bash ×2" instead of raw tool names.
 - **The requesting bot hears the decision.** `approve` and `reject` (CLI or
   cockpit, `--source`) drop a notice into the bot's inbox saying what was
   decided and whether it was applied.
