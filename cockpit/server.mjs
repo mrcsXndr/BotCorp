@@ -254,7 +254,7 @@ app.post('/api/bots/:name/approvals/:id/:decision', withBot(async (req, res, bot
   if (!APPROVAL_ID_RE.test(id) || !['approve', 'reject'].includes(decision)) return res.status(400).json({ error: 'bad approval id or decision' });
   if (!operatorGate(req, res)) return;
   const reason = typeof req.body?.reason === 'string' && req.body.reason.trim() ? ['--reason', req.body.reason.trim().slice(0, 200)] : [];
-  return decided(res, [decision, bot.name, id, '--by', req.identity, ...(decision === 'reject' ? reason : [])], { approval: id, decision });
+  return decided(res, [decision, bot.name, id, '--by', req.identity, '--source', 'cockpit', ...(decision === 'reject' ? reason : [])], { approval: id, decision });
 }));
 
 app.post('/api/bots/:name/automations/:auto/:action', withBot(async (req, res, bot) => {

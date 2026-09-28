@@ -852,7 +852,31 @@ function applyApproved(bot, entry) {
   return notes;
 }
 
-function cmdApprove({ pos, flags }) {
+// The requesting bot hears every decision through its inbox (core/inbox.mjs),
+// so it knows without polling: one message per decided entry, sent from here,
+// the one path the terminal and the cockpit (`--source cockpit`) share. A
+// request the operator queued (--requested-by) notifies nobody.
+function decisionSource(flags) {
+  const s = flags.source === undefined ? 'cli' : String(flags.source);
+  if (!['cli', 'cockpit'].includes(s)) usage('approve|reject: --source cli|cockpit');
+  return s;
+}
+async function notifyRequester(entry, decision, { source, notes = [], reason = '' }) {
+  const m = /^bot:(.+)$/.exec(String(entry.requested_by || ''));
+  if (!m || !HAND_NAME_RE.test(m[1]) || !fs.existsSync(botYamlPath(m[1]))) return;
+  const what = `${entryText(entry)}${entry.reason ? ` (${entry.reason})` : ''}`;
+  const text = decision === 'approved'
+    ? `BotCorp: the operator approved your request ${entry.id}: ${what}. Applied to bot.yaml and synced${notes.length ? `; ${notes.join('; ')}` : ''}. It takes effect at the next session roll. Nothing to do.`
+    : `BotCorp: the operator declined your request ${entry.id}: ${what}. Nothing was applied.${reason ? ` Reason: ${reason}.` : ''} Do not queue it again unless you are asked to.`;
+  try {
+    const ib = await inboxLib();
+    const item = ib.enqueue(m[1], { text, source });
+    ib.kick(m[1]);
+    out(`  ${m[1]} told through its inbox (${item.id})`);
+  } catch (e) { out(`  could not tell ${m[1]}: ${e.message}`); }
+}
+
+async function cmdApprove({ pos, flags }) {
   const [, bot, id] = pos;
   requireBot(bot);
   const q = readApprovals(bot);
@@ -862,9 +886,10 @@ function cmdApprove({ pos, flags }) {
     for (const e of q) out(`${e.id}  ${e.ts}  ${entryText(e)}  by ${e.requested_by}  (${e.reason || 'widening'})`);
     return 0;
   }
-  if (!id && !flags.all) usage('approve <bot> <id|--all> [--by <who>] | approve <bot> --list');
+  if (!id && !flags.all) usage('approve <bot> <id|--all> [--by <who>] [--source cli|cockpit] | approve <bot> --list');
   requireOperator('approve');
   const by = decidedBy(flags);
+  const source = decisionSource(flags);
   const pick = flags.all ? q : q.filter((e) => e.id === id);
   if (!pick.length) { if (flags.all) { out(`approvals: ${bot} queue empty`); return 0; } fail(`approve: no pending entry ${id} for ${bot}`); }
   for (const e of pick) {
@@ -876,25 +901,29 @@ function cmdApprove({ pos, flags }) {
     logApproval(bot, `APPROVED ${e.id} ${entryText(e)} by ${by}`);
     out(`approved ${e.id}: ${entryText(e)} (by ${by})`);
     for (const n of notes) out(`  ${n}`);
+    await notifyRequester(e, 'approved', { source, notes });
   }
   doSync(bot);
   out(`approvals: ${readApprovals(bot).length} pending`);
   return 0;
 }
 
-function cmdReject({ pos, flags }) {
+async function cmdReject({ pos, flags }) {
   const [, bot, id] = pos;
   requireBot(bot);
-  if (!id) usage('reject <bot> <id> [--by <who>] [--reason <text>]');
+  if (!id) usage('reject <bot> <id> [--by <who>] [--reason <text>] [--source cli|cockpit]');
   requireOperator('reject');
   const by = decidedBy(flags);
+  const source = decisionSource(flags);
+  const reason = flags.reason && flags.reason !== true ? String(flags.reason) : '';
   const q = readApprovals(bot);
   const e = q.find((x) => x.id === id);
   if (!e) fail(`reject: no pending entry ${id} for ${bot}`);
   writeApprovals(bot, q.filter((x) => x !== e));
-  recordDecision(bot, e, 'rejected', by, flags.reason && flags.reason !== true ? { rejected_reason: String(flags.reason) } : {});
+  recordDecision(bot, e, 'rejected', by, reason ? { rejected_reason: reason } : {});
   logApproval(bot, `REJECTED ${e.id} ${entryText(e)} by ${by}`);
   out(`rejected ${e.id}: ${entryText(e)} (by ${by})`);
+  await notifyRequester(e, 'rejected', { source, reason });
   return 0;
 }
 
@@ -2895,9 +2924,10 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   config add <bot> <automations|tools|secrets> <json entry|key> | config remove <bot> <automations|tools|secrets> <name|key>
   approvals [--json]   (every bot's pending widening changes, with a diff and why)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
+      [--source cli|cockpit]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
        accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip,
-       cc rollback and --requested-by)
+       cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
