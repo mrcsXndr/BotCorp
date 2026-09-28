@@ -64,6 +64,10 @@ fix it and report once).
   `review-artifact`): it writes to a log the bot reads and triages, and only
   pushes to the operator's phone for CRITICAL findings — everything else is
   fixed or carded, never pushed.
+- With `harness.modules.review_board` on, "the existing review artifact" is
+  the bot's ONE board. Add the item there, republish to the recorded URL
+  (`tools/v2/review_board.py show`), and send one line with that same link.
+  Never start a second board.
 
 ## Slash commands (auto-intercepted)
 A prompt starting with `/` goes to `tools/v2/tg_commands.py` via the

@@ -1,0 +1,479 @@
+<title>Review board</title>
+<style id="rb-style">
+:root {
+  --bg: #f2f4f0;
+  --surface: #fcfdfb;
+  --ink: #1b211e;
+  --ink-2: #48514b;
+  --ink-3: #69726c;
+  --line: #d5dad2;
+  --accent: #2d5a4d;
+  --accent-ink: #ffffff;
+  --yes: #2d5a4d;
+  --no: #8b3932;
+  --unknown: #735610;
+  --tint-yes: #e1ebe5;
+  --tint-no: #f3e2df;
+  --tint-unknown: #f0e8d4;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #121614;
+    --surface: #1a1f1c;
+    --ink: #e4e9e5;
+    --ink-2: #b0b9b3;
+    --ink-3: #8b948e;
+    --line: #2d3531;
+    --accent: #8cc1ab;
+    --accent-ink: #0e1411;
+    --yes: #8cc1ab;
+    --no: #e59b92;
+    --unknown: #dcbd6e;
+    --tint-yes: #1d2d26;
+    --tint-no: #33201e;
+    --tint-unknown: #2f2918;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121614;
+  --surface: #1a1f1c;
+  --ink: #e4e9e5;
+  --ink-2: #b0b9b3;
+  --ink-3: #8b948e;
+  --line: #2d3531;
+  --accent: #8cc1ab;
+  --accent-ink: #0e1411;
+  --yes: #8cc1ab;
+  --no: #e59b92;
+  --unknown: #dcbd6e;
+  --tint-yes: #1d2d26;
+  --tint-no: #33201e;
+  --tint-unknown: #2f2918;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+#rb {
+  max-width: 44rem;
+  margin: 0 auto;
+  padding: 0 16px 48px;
+  display: grid;
+  gap: 20px;
+}
+.top { padding-top: 20px; }
+.top h1 { font-size: 22px; line-height: 1.25; margin: 0 0 4px; text-wrap: balance; }
+.top p { margin: 0; color: var(--ink-2); max-width: 60ch; }
+.bar {
+  position: sticky;
+  top: env(safe-area-inset-top, 0px);
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+  margin: 0 -16px;
+  padding: 10px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+.tally { margin: 0; font-variant-numeric: tabular-nums; color: var(--ink-2); }
+.tally b { color: var(--ink); font-weight: 650; }
+.send {
+  font: inherit;
+  font-weight: 600;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.send:disabled { background: var(--line); color: var(--ink-3); cursor: default; }
+.notice { margin: 0; color: var(--ink-2); }
+.export { display: grid; gap: 8px; }
+.export p { margin: 0; color: var(--ink-2); }
+.export pre {
+  margin: 0;
+  max-height: 12rem;
+  overflow: auto;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  user-select: all;
+}
+.group { display: grid; gap: 12px; }
+.group h2 { font-size: 16px; margin: 8px 0 0; color: var(--ink-2); font-weight: 650; }
+.item {
+  display: grid;
+  gap: 10px;
+  padding: 14px 16px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.item h3 { font-size: 16px; line-height: 1.35; margin: 0; text-wrap: balance; }
+.item .ref { float: right; margin-left: 12px; font-size: 12px; color: var(--ink-3); font-weight: 400; font-variant-numeric: tabular-nums; }
+.item p { margin: 0; }
+.rec b { font-weight: 650; }
+.effects { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; margin: 0; color: var(--ink-2); }
+.effects dt { font-weight: 600; color: var(--ink); }
+.effects dd { margin: 0; }
+details { color: var(--ink-2); }
+details summary { cursor: pointer; color: var(--ink); font-weight: 500; }
+details[open] summary { margin-bottom: 6px; }
+details ul { margin: 0; padding-left: 20px; }
+.answer { display: grid; gap: 8px; }
+.choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.choices button {
+  font: inherit;
+  min-height: 44px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+.choices button[aria-pressed="true"] { font-weight: 650; }
+.choices button[data-v="yes"][aria-pressed="true"] { background: var(--tint-yes); border-color: var(--yes); color: var(--yes); }
+.choices button[data-v="no"][aria-pressed="true"] { background: var(--tint-no); border-color: var(--no); color: var(--no); }
+.choices button[data-v="unknown"][aria-pressed="true"] { background: var(--tint-unknown); border-color: var(--unknown); color: var(--unknown); }
+.answer label { font-size: 13px; color: var(--ink-3); }
+.answer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  resize: vertical;
+}
+.stamp { font-size: 13px; color: var(--ink-3); font-variant-numeric: tabular-nums; min-height: 1.5em; }
+.stamp.changed { color: var(--unknown); }
+.done .item { background: transparent; }
+.done .did { color: var(--ink-2); }
+button:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>
+
+<!--
+  The ONE review board (skill review-artifact). Copy this file, keep the head,
+  the style and the script as they are, and replace the example items.
+  - An answerable item: <article class="item" id="item-N"> with a
+    <div class="answer" data-for="item-N"></div> slot; list its id in the
+    review-state "items". data-labels="Publish|Reject|Not sure" relabels the
+    three buttons (the stored values stay yes / no / unknown).
+  - An item you only inform about: no answer slot, not in "items".
+  - Acted on: move the article into the Done section, write what you did,
+    drop its id from "items" and add {"id","did","at"} to "done".
+  Republish to the recorded URL every time; never start a second board.
+-->
+<main id="rb">
+  <header class="top">
+    <h1>Review board</h1>
+    <p>Answer what you can, then Send. Send locks your answers in. You can still change one later; the next Send locks it again.</p>
+  </header>
+
+  <div class="bar" role="region" aria-label="Progress">
+    <p class="tally" id="rb-tally" aria-live="polite">2 open · 1 answered · last sent 28 Sep 12:52</p>
+    <button class="send" id="rb-send" type="button" disabled>Send answers</button>
+  </div>
+  <p class="notice" id="rb-notice" hidden></p>
+  <div class="export" id="rb-export" hidden>
+    <p>This view cannot save the page. Copy answers puts them on your clipboard; paste them in chat.</p>
+    <pre id="rb-json"></pre>
+  </div>
+
+  <section class="group" aria-labelledby="h-decisions">
+    <h2 id="h-decisions">Decisions</h2>
+
+    <article class="item" id="item-4">
+      <h3><span class="ref">item-4</span>Delete the 14 preview sites older than 30 days?</h3>
+      <p class="rec"><b>Recommend: Yes.</b> None has had a visit in 30 days and all of them rebuild from git.</p>
+      <dl class="effects">
+        <dt>Yes</dt><dd>I delete them tonight and free 2.1 GB.</dd>
+        <dt>No</dt><dd>They stay; the disk alert comes back in about a week.</dd>
+      </dl>
+      <details>
+        <summary>Evidence and what I did</summary>
+        <ul>
+          <li>Last visit per site: 31 to 88 days ago (access logs, 30-day window).</li>
+          <li>Each one has a clean branch, so a rebuild takes about 3 minutes.</li>
+          <li>I did not touch the two sites with a custom domain.</li>
+        </ul>
+      </details>
+      <div class="answer" data-for="item-4"></div>
+    </article>
+
+    <article class="item" id="item-5">
+      <h3><span class="ref">item-5</span>Move the nightly backup from 02:00 to 04:30?</h3>
+      <p class="rec"><b>Recommend: Yes.</b> The 02:00 run overlaps the index rebuild and failed twice this week.</p>
+      <dl class="effects">
+        <dt>Yes</dt><dd>The next run is at 04:30 tomorrow.</dd>
+        <dt>No</dt><dd>I keep 02:00 and retry failures at 03:00 instead.</dd>
+      </dl>
+      <details>
+        <summary>Evidence and what I did</summary>
+        <p>Failures on 24 and 26 Sep, both "database is locked" at 02:04. I re-ran both by hand; both passed.</p>
+      </details>
+      <div class="answer" data-for="item-5"></div>
+    </article>
+  </section>
+
+  <section class="group" aria-labelledby="h-approvals">
+    <h2 id="h-approvals">Approvals</h2>
+
+    <article class="item" id="item-6">
+      <h3><span class="ref">item-6</span>Merge the dependency update (PR 212)?</h3>
+      <p class="rec"><b>Recommend: Merge.</b> Tests pass and the changelog has no breaking changes.</p>
+      <dl class="effects">
+        <dt>Merge</dt><dd>It deploys to staging on merge; production waits for you.</dd>
+        <dt>Reject</dt><dd>I close the PR and pin the current versions.</dd>
+      </dl>
+      <div class="answer" data-for="item-6" data-labels="Merge|Reject|Not sure"></div>
+    </article>
+  </section>
+
+  <section class="group" aria-labelledby="h-info">
+    <h2 id="h-info">For your information</h2>
+
+    <article class="item" id="item-8">
+      <h3><span class="ref">item-8</span>The certificate for the status page renewed on its own</h3>
+      <p>Valid to 27 Dec. Nothing to do.</p>
+    </article>
+  </section>
+
+  <section class="group done" aria-labelledby="h-done">
+    <h2 id="h-done">Done</h2>
+
+    <article class="item" id="item-3">
+      <h3><span class="ref">item-3</span>Turn off the weekly summary email?</h3>
+      <p class="did">You said Yes on 26 Sep. I turned it off the same day and removed its schedule.</p>
+    </article>
+  </section>
+</main>
+<script id="review-state" type="application/json">{"reviewId":"board","items":["item-4","item-5","item-6"],"answers":{"item-3":{"answer":"yes","comment":"","ts":"2026-09-26T08:10:00Z","answeredAt":"2026-09-26T08:10:00Z","lockedAt":"2026-09-26T08:12:00Z"},"item-4":{"answer":"yes","comment":"keep the two with custom domains","ts":"2026-09-28T12:40:00Z","answeredAt":"2026-09-28T12:40:00Z","lockedAt":"2026-09-28T12:52:00Z"}},"sentAt":"2026-09-28T12:52:00Z","done":[{"id":"item-3","did":"Turned the weekly summary off and removed its schedule.","at":"2026-09-26T09:00:00Z"}]}</script>
+<script id="rb-script">
+(function () {
+  var main = document.getElementById('rb');
+  var snapshot = main.cloneNode(true);            // the page as written, before any viewer input
+  var self = document.currentScript;
+  var stateEl = document.getElementById('review-state');
+  var tallyEl = document.getElementById('rb-tally');
+  var sendBtn = document.getElementById('rb-send');
+  var noticeEl = document.getElementById('rb-notice');
+  var exportEl = document.getElementById('rb-export');
+  var jsonEl = document.getElementById('rb-json');
+  var DEFAULT_LABELS = ['Yes', 'No', "Don't know"];
+  var VALUES = ['yes', 'no', 'unknown'];
+  var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  var DEFAULT_RESET = ':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}' +
+    'body{margin:0;font:14px system-ui,sans-serif;background:#fafafa}img{max-width:100%}[hidden]{display:none!important}';
+
+  var state = {};
+  try { state = JSON.parse(stateEl.textContent) || {}; } catch (e) { state = {}; }
+  if (!state.answers || typeof state.answers !== 'object') state.answers = {};
+  if (!Array.isArray(state.items)) {
+    state.items = Array.prototype.map.call(main.querySelectorAll('.answer[data-for]'), function (el) { return el.getAttribute('data-for'); });
+  }
+  if (!Array.isArray(state.done)) state.done = [];
+  var draftKey = 'review-board-draft:' + (state.reviewId || 'board');
+
+  function now() { return new Date().toISOString(); }
+  function stampOf(a) { return (a && (a.answeredAt || a.ts)) || ''; }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function fmt(iso) {
+    var d = new Date(iso);
+    if (isNaN(d)) return iso;
+    return d.getDate() + ' ' + MONTHS[d.getMonth()] + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  // A draft answer newer than the published one wins; after a Send they carry the same stamp and the page wins.
+  try {
+    var draft = JSON.parse(localStorage.getItem(draftKey) || '{}');
+    Object.keys(draft).forEach(function (id) {
+      if (stampOf(draft[id]) > stampOf(state.answers[id])) state.answers[id] = draft[id];
+    });
+  } catch (e) { /* no storage in this view */ }
+  function saveDraft() {
+    try { localStorage.setItem(draftKey, JSON.stringify(state.answers)); } catch (e) { /* no storage */ }
+  }
+
+  function unsent(s) {
+    return Object.keys(s.answers).filter(function (id) {
+      var a = s.answers[id];
+      // a cleared answer that was locked before is news too
+      return a && (a.answer || a.comment || a.lockedAt) && (!a.lockedAt || stampOf(a) > a.lockedAt);
+    });
+  }
+  function counts(s) {
+    var answered = s.items.filter(function (id) { return s.answers[id] && s.answers[id].answer; }).length;
+    return { open: s.items.length - answered, answered: answered };
+  }
+  function tally(s) {
+    var c = counts(s);
+    return c.open + ' open · ' + c.answered + ' answered · ' + (s.sentAt ? 'last sent ' + fmt(s.sentAt) : 'not sent yet');
+  }
+
+  var api;          // undefined = still asking the viewer, null = this view cannot publish
+  function renderBar() {
+    tallyEl.textContent = tally(state);
+    var n = unsent(state).length;
+    if (api === null) {
+      sendBtn.textContent = 'Copy answers';
+      sendBtn.disabled = false;
+    } else {
+      sendBtn.textContent = n ? 'Send ' + n + (n === 1 ? ' answer' : ' answers') : 'Nothing new to send';
+      sendBtn.disabled = !api || !n;
+    }
+    jsonEl.textContent = JSON.stringify(state, null, 1);
+  }
+  function renderStamp(id) {
+    var el = document.getElementById('s-' + id);
+    if (!el) return;
+    var a = state.answers[id];
+    var filled = a && (a.answer || a.comment);
+    el.classList.remove('changed');
+    if (!a) el.textContent = '';
+    else if (a.lockedAt && stampOf(a) > a.lockedAt) { el.textContent = 'changed since locked ' + fmt(a.lockedAt); el.classList.add('changed'); }
+    else if (a.lockedAt) el.textContent = filled ? 'locked ' + fmt(a.lockedAt) : '';
+    else el.textContent = filled ? 'not sent yet' : '';
+  }
+  function touch(id, patch) {
+    var a = state.answers[id] || { answer: '', comment: '' };
+    Object.keys(patch).forEach(function (k) { a[k] = patch[k]; });
+    a.answeredAt = a.ts = now();
+    if (!a.answer && !a.comment && !a.lockedAt) delete state.answers[id];
+    else state.answers[id] = a;
+    saveDraft();
+    renderStamp(id);
+    renderBar();
+  }
+
+  Array.prototype.forEach.call(main.querySelectorAll('.answer[data-for]'), function (slot) {
+    var id = slot.getAttribute('data-for');
+    var labels = (slot.getAttribute('data-labels') || '').split('|');
+    if (labels.length !== 3) labels = DEFAULT_LABELS;
+    var group = document.createElement('div');
+    group.className = 'choices';
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', 'Your answer');
+    var buttons = VALUES.map(function (v, i) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.id = 'a-' + id + '-' + v;
+      b.setAttribute('data-v', v);
+      b.textContent = labels[i];
+      group.appendChild(b);
+      return b;
+    });
+    function paint() {
+      var cur = (state.answers[id] || {}).answer;
+      buttons.forEach(function (b) { b.setAttribute('aria-pressed', String(b.getAttribute('data-v') === cur)); });
+    }
+    buttons.forEach(function (b) {
+      b.addEventListener('click', function () {
+        var v = b.getAttribute('data-v');
+        touch(id, { answer: (state.answers[id] || {}).answer === v ? '' : v });
+        paint();
+      });
+    });
+    var label = document.createElement('label');
+    label.htmlFor = 'c-' + id;
+    label.textContent = 'Comment (optional)';
+    var ta = document.createElement('textarea');
+    ta.id = 'c-' + id;
+    ta.rows = 2;
+    ta.value = (state.answers[id] || {}).comment || '';
+    ta.addEventListener('input', function () { touch(id, { comment: ta.value }); });
+    var stamp = document.createElement('p');
+    stamp.className = 'stamp';
+    stamp.id = 's-' + id;
+    slot.appendChild(group);
+    slot.appendChild(label);
+    slot.appendChild(ta);
+    slot.appendChild(stamp);
+    paint();
+    renderStamp(id);
+  });
+
+  function documentFor(s) {
+    var page = snapshot.cloneNode(true);
+    var t = page.querySelector('#rb-tally');
+    if (t) t.textContent = tally(s);
+    var title = document.querySelector('title');
+    var reset = document.querySelector('head style:not(#rb-style)');
+    return '<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>' +
+      (reset ? reset.textContent : DEFAULT_RESET) + '</style></head><body>' +
+      (title ? title.outerHTML : '') + document.getElementById('rb-style').outerHTML + page.outerHTML +
+      '<script id="review-state" type="application/json">' + JSON.stringify(s).replace(/</g, '\\u003c') + '<\/script>' +
+      self.outerHTML + '</body></html>';
+  }
+  function say(text) { noticeEl.textContent = text; noticeEl.hidden = !text; }
+  function showExport() { exportEl.hidden = false; renderBar(); }
+  function copy() {
+    var text = JSON.stringify(state);
+    function select() {
+      var r = document.createRange();
+      r.selectNodeContents(jsonEl);
+      var sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(r);
+      say('Selected. Copy it and paste it in chat.');
+    }
+    exportEl.hidden = false;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(function () { say('Copied. Paste it in chat.'); }, select);
+    } else select();
+  }
+
+  sendBtn.addEventListener('click', function () {
+    if (api === null) { copy(); return; }
+    var ids = unsent(state);
+    if (!api || !ids.length) return;
+    var at = now();
+    var next = JSON.parse(JSON.stringify(state));
+    next.sentAt = at;
+    ids.forEach(function (id) { next.answers[id].lockedAt = at; });
+    sendBtn.disabled = true;
+    say('Sending...');
+    api.publish(documentFor(next)).then(function () {
+      state = next;
+      saveDraft();
+      ids.forEach(renderStamp);
+      say('Sent. Your answers are locked in.');
+      renderBar();
+    }, function (err) {
+      var code = err && err.code;
+      if (code === 'conflict') say('A newer version was saved first. The page reloads to it; your unsent answers stay in this browser.');
+      else if (code === 'not_granted' || code === 'not_writer') { api = null; say('This view cannot save the page.'); showExport(); }
+      else say('Could not send (' + (code || (err && err.message) || 'unknown error') + '). Try again.');
+      renderBar();
+    });
+  });
+
+  renderBar();
+  if (window.claude && typeof window.claude.use === 'function') {
+    window.claude.use('artifact').then(function (a) {
+      api = a || null;
+      if (!api) showExport();
+      renderBar();
+    }, function () { api = null; showExport(); });
+  } else {
+    api = null;
+    showExport();
+  }
+})();
+</script>
