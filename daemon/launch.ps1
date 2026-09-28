@@ -372,14 +372,19 @@ $childEnv['GIT_TERMINAL_PROMPT'] = '0'
 # Auto-compact window (bot.yaml harness.context_window, resolved by botyaml.mjs).
 # Claude Code ranks the env var above every autoCompactWindow setting, so a
 # machine-wide one would win over the bot's own; the launch env overrides it,
-# and 'auto' removes it so Claude Code really picks its own.
+# and 'auto' removes it so Claude Code really picks its own. The bot's window
+# is final: an inherited CLAUDE_AUTOCOMPACT_PCT_OVERRIDE would scale it a
+# second time, so it is removed in both cases.
 $machineCw = "$env:CLAUDE_CODE_AUTO_COMPACT_WINDOW"
+$machinePct = "$env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"
+Remove-Item -Path 'env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE' -ErrorAction SilentlyContinue
+$pctNote = $(if ($machinePct) { "; the inherited CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=$machinePct is removed for this session" } else { '' })
 if ($cfg._context_window) {
     $childEnv['CLAUDE_CODE_AUTO_COMPACT_WINDOW'] = "$($cfg._context_window)"
-    Write-LaunchLog "context window: $($cfg._context_window) tokens ($($cfg._context_window_source)) -> CLAUDE_CODE_AUTO_COMPACT_WINDOW$(if ($machineCw -and $machineCw -ne "$($cfg._context_window)") { "; overrides the inherited $machineCw" })"
+    Write-LaunchLog "context window: $($cfg._context_window) tokens ($($cfg._context_window_source)) -> CLAUDE_CODE_AUTO_COMPACT_WINDOW$(if ($machineCw -and $machineCw -ne "$($cfg._context_window)") { "; overrides the inherited $machineCw" })$pctNote"
 } else {
     Remove-Item -Path 'env:CLAUDE_CODE_AUTO_COMPACT_WINDOW' -ErrorAction SilentlyContinue
-    Write-LaunchLog "context window: auto (harness.context_window)$(if ($machineCw) { "; the inherited CLAUDE_CODE_AUTO_COMPACT_WINDOW=$machineCw is removed for this session" })"
+    Write-LaunchLog "context window: auto (harness.context_window)$(if ($machineCw) { "; the inherited CLAUDE_CODE_AUTO_COMPACT_WINDOW=$machineCw is removed for this session" })$pctNote"
 }
 $py = Resolve-Python
 if (Test-Path $py) { $childEnv['BOT_PYTHON'] = $py }

@@ -33,6 +33,11 @@ Truth and gates.
   `CLAUDE_CODE_AUTO_COMPACT_WINDOW` (scaled by
   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`), else `autoCompactWindow`, else the
   model window, and never above the model window.
+- **The bot's context window is final.** A launch drops an inherited
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` (it is logged), which Claude Code applied
+  on top of the bot's already-resolved window: a machine-wide 50 on a
+  `50%` bot compacted at 250K instead of 500K. Doctor names a machine-wide
+  one in the context window row.
 - Removed: the unread `harness/automations.yaml`, update_restart's dead
   once-a-day gate, health_sweep's supervisor check, operator-guard's
   `tools approve` pattern, and the tunnel's unread `COCKPIT_ALLOWED_HOSTS`.

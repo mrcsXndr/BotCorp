@@ -2631,6 +2631,7 @@ async function cmdDoctor({ flags }) {
     // per bot (a bot folder is a plain folder: no per-bot git checks)
     const envLast4 = userEnvTokenLast4();
     const machineCompactWindow = userEnvVar('CLAUDE_CODE_AUTO_COMPACT_WINDOW');
+    const machineCompactPct = userEnvVar('CLAUDE_AUTOCOMPACT_PCT_OVERRIDE');
     const trayEntries = process.platform === 'win32' ? trayRunEntries() : new Set();
     for (const bot of listBots()) {
       let cfg = null;
@@ -2729,7 +2730,7 @@ async function cmdDoctor({ flags }) {
         const se = sessionSecretEnvVerdict({ running: s.running, launch, declaredEnv: declaredSecretEnv(cfg) });
         add(se.level, `${bot}: session secrets env`, se.detail.replace(/<bot>/g, bot), 'bots');
         const us = readJson(path.join(configDir(bot), 'settings.json'));
-        const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, running: s.running, launch });
+        const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, machinePct: machineCompactPct, running: s.running, launch });
         add(cw.level, `${bot}: context window`, cw.detail.replace(/<bot>/g, bot), 'bots');
       }
       {

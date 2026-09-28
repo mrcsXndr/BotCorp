@@ -284,11 +284,15 @@ export function bgPinVerdict({ running, bgId = '', pins = null, pinsError = '' }
 // env, which Claude Code ranks above any autoCompactWindow setting), and the
 // two places it can disagree: the config home's settings.json (a session not
 // started by BotCorp reads that) and the running session's own launch.
-export function contextWindowVerdict({ resolved, settingsValue, machineEnv = '', running = false, launch = null }) {
+// A machine-wide CLAUDE_AUTOCOMPACT_PCT_OVERRIDE is only named: every launch
+// drops it (it would scale the bot's window a second time).
+export function contextWindowVerdict({ resolved, settingsValue, machineEnv = '', machinePct = '', running = false, launch = null }) {
   if (resolved.error) return { level: 'FAIL', detail: `harness.context_window: ${resolved.error}` };
   const machine = machineEnv ? String(machineEnv).trim() : '';
-  if (!resolved.tokens) return { level: 'INFO', detail: `auto: Claude Code picks the window${machine ? `; launches drop the machine-wide CLAUDE_CODE_AUTO_COMPACT_WINDOW=${machine} for this bot` : ''}` };
-  const shape = `${resolved.tokens} tokens (${resolved.source}), set as CLAUDE_CODE_AUTO_COMPACT_WINDOW by every launch${machine && machine !== String(resolved.tokens) ? `; overrides the machine-wide ${machine}` : ''}`;
+  const pct = machinePct ? String(machinePct).trim() : '';
+  const pctNote = pct ? `; launches drop the machine-wide CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=${pct} for this bot` : '';
+  if (!resolved.tokens) return { level: 'INFO', detail: `auto: Claude Code picks the window${machine ? `; launches drop the machine-wide CLAUDE_CODE_AUTO_COMPACT_WINDOW=${machine} for this bot` : ''}${pctNote}` };
+  const shape = `${resolved.tokens} tokens (${resolved.source}), set as CLAUDE_CODE_AUTO_COMPACT_WINDOW by every launch${machine && machine !== String(resolved.tokens) ? `; overrides the machine-wide ${machine}` : ''}${pctNote}`;
   if (settingsValue !== resolved.tokens) return { level: 'WARN', detail: `${shape}; .claude-<bot>/settings.json autoCompactWindow is ${settingsValue ?? 'unset'} (a session not started by BotCorp reads that): botcorp sync <bot>` };
   if (running && launch && Object.prototype.hasOwnProperty.call(launch, 'auto_compact_window') && launch.auto_compact_window !== resolved.tokens) {
     return { level: 'WARN', detail: `${shape}; the running session started with ${launch.auto_compact_window ?? 'auto'} - it applies at the next session start` };

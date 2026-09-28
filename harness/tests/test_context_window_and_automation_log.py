@@ -83,6 +83,23 @@ def test_context_window_doctor_verdict():
     assert no_record["level"] == "PASS"                                            # a pre-v0.1.14 launch record: nothing to compare
     assert auto["level"] == "INFO" and "drop the machine-wide" in auto["detail"]
     assert bad["level"] == "FAIL"
+    for v in (same, over, stale, old_session, no_record, auto):
+        assert "PCT_OVERRIDE" not in v["detail"]
+
+
+@needs_node
+def test_context_window_doctor_names_a_machine_pct_override():
+    script = ("const m = await import(" + json.dumps(LIB) + ");"
+              "const R = {tokens: 500000, source: '50% of 1000000 (claude-opus-5-5)', error: ''};"
+              "console.log(JSON.stringify(["
+              " m.contextWindowVerdict({resolved: R, settingsValue: 500000, machineEnv: '1000000', machinePct: '50'}),"
+              " m.contextWindowVerdict({resolved: {tokens: null, source: 'auto', error: ''}, settingsValue: null, machinePct: '50'})]));")
+    r = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr
+    setv, auto = json.loads(r.stdout.strip().splitlines()[-1])
+    note = "launches drop the machine-wide CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50 for this bot"
+    assert setv["level"] == "PASS" and note in setv["detail"] and "overrides the machine-wide 1000000" in setv["detail"]
+    assert auto["level"] == "INFO" and note in auto["detail"]
 
 
 @pytest.fixture
@@ -128,6 +145,35 @@ def test_config_set_percent_from_pwsh_and_bash_then_sync_and_launch(repo_bot):
     assert r.returncode == 0, r.stderr + r.stdout
     assert "env : CLAUDE_CODE_AUTO_COMPACT_WINDOW=600000" in r.stdout
     assert "overrides the inherited 500000" in r.stdout
+    assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in r.stdout                         # none inherited, none named
+    # the bot's window is final: an inherited percent override is dropped, set or auto
+    env3 = dict(env2, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE="50")
+    for window in ("60%", "auto"):
+        (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  context_window: {window}\n  modules:\n    telegram: false\n", encoding="utf-8")
+        r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "launch.ps1"),
+                            "-Bot", name, "-Bg", "-DryRun", "-StartedBy", "cli"], capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env3)
+        assert r.returncode == 0, r.stderr + r.stdout
+        assert "the inherited CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50 is removed for this session" in r.stdout, (window, r.stdout)
+        assert "env : CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in r.stdout
+
+
+@needs_win
+def test_a_removed_process_env_var_does_not_reach_the_child():
+    # launch.ps1 drops an inherited var from its OWN env (Remove-Item env:), and
+    # the session is started by Invoke-Bounded (ProcessStartInfo: this process's
+    # env plus $childEnv) or, in the foreground, inherits this process's env.
+    body = ("$childEnv = @{ BOT_NAME = 'x' }\n"
+            "$env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '50'\n"
+            "$before = (Invoke-Bounded -Exe 'cmd.exe' -Arguments @('/c', 'set CLAUDE_AUTOCOMPACT') -Capture -Env $childEnv -TimeoutSec 30).Output\n"
+            "Remove-Item -Path 'env:CLAUDE_AUTOCOMPACT_PCT_OVERRIDE' -ErrorAction SilentlyContinue\n"
+            "$after = (Invoke-Bounded -Exe 'cmd.exe' -Arguments @('/c', 'set CLAUDE_AUTOCOMPACT') -Capture -Env $childEnv -TimeoutSec 30).Output\n"
+            "@{ before = \"$before\"; after = \"$after\" } | ConvertTo-Json -Compress")
+    r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", f". '{ASSEMBLY / 'daemon' / '_common.ps1'}'\n{body}"],
+                       capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr + r.stdout
+    got = json.loads(r.stdout.strip().splitlines()[-1])
+    assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50" in got["before"]                      # positive control
+    assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in got["after"], got["after"]
 
 
 @needs_win
