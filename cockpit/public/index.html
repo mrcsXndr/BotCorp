@@ -220,7 +220,11 @@
     /* ==== terminal (dark in both themes: it is the TUI's own surface) ========== */
     .termwrap { flex: 1; min-height: 0; display: none; flex-direction: column; padding: var(--sp-3) var(--sp-6); }
     .termwrap.show { display: flex; }
-    #term { flex: 1; min-height: 0; background: var(--term-bg); border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px; }
+    /* the fit addon sizes xterm to its PARENT's computed height, which for a
+       border-box with padding includes the padding: so xterm lives in an
+       unpadded inner box, and the frame clips whatever is left over */
+    #term { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; background: var(--term-bg); border: 1px solid var(--line); border-radius: var(--r-card); padding: 10px; }
+    #termScreen { flex: 1; min-height: 0; min-width: 0; }
     .xterm .xterm-viewport { background: transparent !important; }
     .keys { display: flex; gap: 6px; flex-wrap: wrap; padding: var(--sp-2) 0 0; }
     .keys button { height: 32px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-btn); color: var(--text-2); padding: 0; min-width: 44px; font: var(--fs-xs) var(--font-mono); cursor: pointer; touch-action: manipulation; box-shadow: var(--shadow-1); }
@@ -327,10 +331,30 @@
     .stat .bar .fill.bad { background: var(--bad); }
     .stats.stale .bar .fill { background: var(--text-3); }
     .compose { display: flex; gap: var(--sp-2); align-items: flex-end; padding-top: var(--sp-2); }
-    .compose textarea { flex: 1; resize: none; max-height: 160px; min-height: 42px; background: var(--field); border: 1px solid var(--line-strong); border-radius: var(--r-btn); padding: 10px var(--sp-3); font: var(--fs-body)/1.45 var(--font-sans); color: var(--text); }
+    .compose .clip { width: 42px; color: var(--text-2); }
+    .compose .clip .ic { width: 18px; height: 18px; }
+    /* app.js growInput sets the height, 1 to 8 lines, and the scrollbar past that */
+    .compose textarea { flex: 1; min-width: 0; resize: none; overflow-y: hidden; height: 42px; min-height: 42px; background: var(--field); border: 1px solid var(--line-strong); border-radius: var(--r-btn); padding: 10px var(--sp-3); font: var(--fs-body)/1.45 var(--font-sans); color: var(--text); }
     .compose textarea::placeholder { color: var(--text-3); }
     .compose textarea:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
     .compose .btn { height: 42px; padding: 0 var(--sp-4); }
+    .compose .btn.clip { padding: 0; }
+    /* attachments: the composer's row before send, and the same chips in a sent bubble */
+    .pending { display: none; flex-wrap: wrap; gap: var(--sp-2); padding-top: var(--sp-2); }
+    .pending.show { display: flex; }
+    .achips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+    .bubble > .achips:first-child { margin-top: 0; }
+    .achip { position: relative; display: inline-flex; gap: 6px; max-width: 240px; min-width: 0; height: 36px; align-items: center; padding: 0 var(--sp-2) 0 10px; background: var(--surface); border: 1px solid var(--line-strong); border-radius: var(--r-btn); font-size: var(--fs-sm); color: var(--text); }
+    .achip .an { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+    .achip .as { flex: none; color: var(--text-3); font: var(--fs-xs) var(--font-mono); }
+    .achip img { display: none; }
+    .achip.img.has { width: 64px; height: 64px; padding: 0; overflow: hidden; background: var(--field); }
+    .achip.img.has img { display: block; width: 100%; height: 100%; object-fit: cover; }
+    .achip.img.has .an, .achip.img.has .as { display: none; }
+    .achip .ax { flex: none; width: 24px; height: 24px; margin-left: 2px; border: 0; border-radius: var(--r-xs); background: none; color: var(--text-2); font-size: 16px; line-height: 1; cursor: pointer; }
+    .achip .ax:hover { background: var(--hover); color: var(--text); }
+    .achip.img.has .ax { position: absolute; top: 3px; right: 3px; margin: 0; width: 22px; height: 22px; background: var(--surface); border: 1px solid var(--line-strong); }
+    .bubble.user .achip { background: var(--surface); border-color: var(--accent-soft-line); }
 
     /* ==== modals ============================================================== */
     .modal-bg { position: fixed; inset: 0; background: var(--scrim); display: none; grid-template-columns: minmax(0, 1fr); place-items: center; z-index: 10; padding: var(--sp-4); }
@@ -423,6 +447,7 @@
     <symbol id="i-new" viewBox="0 0 16 16"><path d="M2.5 3h11v7.3H8.2L5 12.8v-2.5H2.5z"/><path d="M8 4.9v3.5M6.25 6.65h3.5"/></symbol>
     <symbol id="i-guide" viewBox="0 0 16 16"><path d="M8 4.3C6.6 3.3 4.6 2.9 2.5 2.9v8.8c2.1 0 4.1.4 5.5 1.4 1.4-1 3.4-1.4 5.5-1.4V2.9c-2.1 0-4.1.4-5.5 1.4z"/><path class="solid" d="M7.3 4.3h1.4v8.8H7.3z"/></symbol>
     <symbol id="i-theme" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path class="solid" d="M8 2.5a5.5 5.5 0 0 1 0 11z"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 16 16"><path d="M10.6 5.2v5.6a2.6 2.6 0 0 1-5.2 0V4.3a1.7 1.7 0 0 1 3.4 0v6.3a.8.8 0 0 1-1.6 0V5.4"/></symbol>
     <symbol id="i-tg" viewBox="0 0 16 16"><path d="M13.8 2.4L2 7.1l4 1.5 1.5 4.5 2.2-2.8 3.3 2.4z"/><path class="solid" d="M6 8.6l7.8-6.2-5.1 7.3z"/></symbol>
   </svg>
   <aside>
@@ -476,7 +501,7 @@
     <div class="empty" id="empty"><div><b>No bot selected</b>Pick one on the left.</div></div>
 
     <div class="termwrap" id="termwrap">
-      <div id="term"></div>
+      <div id="term"><div id="termScreen"></div></div>
       <div class="keys" id="keys">
         <button data-seq="\x1b" title="Escape">Esc</button>
         <button data-seq="\x03" title="Ctrl+C">^C</button>
@@ -489,13 +514,16 @@
         <button data-seq="\x1b[A">&uarr;</button>
         <button data-seq="\x1b[B">&darr;</button>
         <button data-seq="\x1b[C">&rarr;</button>
-        <button id="attachBtn" class="wide" title="attach an image or file">+file</button>
-        <input type="file" id="fileInput" hidden />
+        <button id="attachBtn" class="wide" title="attach images or files (or paste, or drop them here)">+file</button>
+        <input type="file" id="fileInput" multiple hidden />
       </div>
     </div>
     <div class="chatwrap" id="chatwrap">
       <div class="msgs" id="msgs"></div>
+      <div class="pending" id="pending"></div>
       <div class="compose">
+        <button class="btn quiet clip" id="clipBtn" aria-label="Attach files" title="attach images or files (or paste, or drop them here)"><svg class="ic"><use href="#i-clip"/></svg></button>
+        <input type="file" id="chatFiles" multiple hidden />
         <textarea id="chatInput" rows="1" inputmode="text" autocapitalize="off" autocomplete="off" spellcheck="false" placeholder="Message the bot" title="Enter sends, Shift+Enter for a new line"></textarea>
         <button class="btn primary" id="chatSend">Send</button>
       </div>

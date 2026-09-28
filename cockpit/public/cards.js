@@ -1,7 +1,7 @@
 /* The decisions behind the cockpit's cards, kept free of the DOM so node can
    test them (cockpit/tests/cards.test.mjs): which lifecycle buttons a bot
    gets, how a pending approval reads to a person, the context bar, and the
-   account name, the tools line. app.js renders what these return (and
+   account name, the tools line, attachments. app.js renders what these return (and
    attention.mjs reuses approvalView for its line). Loaded before app.js. */
 'use strict';
 (function (root) {
@@ -88,5 +88,46 @@
     return [...counts].map(([n, c]) => (c > 1 ? `${n} ×${c}` : n)).join(', ');
   }
 
-  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, toolName, toolsLine, WIDENS };
+  // Attachments. core/attach.mjs holds the same types and cap and has the last
+  // word; this only refuses early, before anything is uploaded.
+  const ATTACH_IMAGE = ['png', 'jpg', 'jpeg', 'gif', 'webp'];
+  const ATTACH_EXT = [...ATTACH_IMAGE, 'pdf', 'txt', 'md', 'csv', 'json', 'log',
+    'js', 'mjs', 'cjs', 'ts', 'tsx', 'jsx', 'py', 'rb', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'hpp', 'cs', 'php', 'sh', 'ps1', 'sql', 'html', 'css', 'scss', 'xml', 'yaml', 'yml', 'toml', 'ini', 'diff', 'patch'];
+  const ATTACH_MAX = 20 * 1024 * 1024, ATTACH_COUNT = 10;
+  const extOf = (name) => { const m = /\.([A-Za-z0-9]{1,8})$/.exec(String(name || '')); return m ? m[1].toLowerCase() : ''; };
+  function fmtBytes(b) {
+    const n = Number(b) || 0;
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${Math.max(1, Math.round(n / 1024))} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1).replace(/\.0$/, '')} MB`;
+  }
+  // f: a File ({name, size}); count: how many are already on the message.
+  // -> {name, size, image, why}: why is the refusal, '' when the file is taken.
+  function attachView(f, count) {
+    const name = String((f && f.name) || 'pasted');
+    const ext = extOf(name);
+    let why = '';
+    if ((count || 0) >= ATTACH_COUNT) why = `At most ${ATTACH_COUNT} files per message.`;
+    else if (!ATTACH_EXT.includes(ext)) why = `${name}: ${ext ? `.${ext} files are` : 'a file without an extension is'} not accepted. Images, PDF, text and code files are.`;
+    else if (f.size > ATTACH_MAX) why = `${name} is over ${ATTACH_MAX / 1024 / 1024} MB.`;
+    else if (!f.size) why = `${name} is empty.`;
+    return { name, size: fmtBytes(f && f.size), image: ATTACH_IMAGE.includes(ext), why };
+  }
+  // A user turn as the session recorded it: the typed text, then one
+  // "[attached: <path> (<type>, <size>)]" line per file, where Claude Code
+  // appends "[Image #n]" after an image it attached. -> {body, files}.
+  const ATT_LINE = /^\[attached: (.+) \(([a-z0-9]{1,8}), ([0-9.]+ [KM]?B)\)\]$/;
+  function splitAttached(text) {
+    const files = [], body = [];
+    for (const line of String(text || '').split('\n')) {
+      const m = ATT_LINE.exec(line.replace(/\s*\[Image #\d+\]/g, '').trim());
+      if (!m) { body.push(line); continue; }
+      const id = m[1].split(/[\\/]/).pop();
+      files.push({ id, name: id.replace(/^\d{8}-\d{6}-/, ''), size: m[3], image: ATTACH_IMAGE.includes(m[2]) });
+    }
+    return { body: body.join('\n').replace(/\s+$/, ''), files };
+  }
+
+  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, toolName, toolsLine, WIDENS,
+    fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX };
 })(typeof window !== 'undefined' ? window : globalThis);

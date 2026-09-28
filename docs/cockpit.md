@@ -18,8 +18,8 @@ Two things it deliberately does NOT do:
 - **It never changes a bot's state itself.** Every bot or config write goes
   through the CLI (`node cli/botcorp.mjs ...`), so the daemon, the operator's
   terminal and the cockpit share one implementation of each rule. The server
-  writes only its own files: the audit log, paste uploads and the
-  approve-token file; it reads `updates.json` directly for the release list.
+  writes only its own files: the audit log, attachments (in the bot's
+  `.botcorp/uploads`, behind the approval token) and the approve-token file; it reads `updates.json` directly for the release list.
 
 ## Layout
 
@@ -239,9 +239,24 @@ account only, so a cockpit the daemon started (no terminal) is usable too.
   with `textContent` only (`public/inbox.js`), like the message itself.
 - A terminal paste containing a newline is sent as ONE bracketed paste
   (`\x1b[200~ ... \x1b[201~`), then `\r`.
-- Image / file paste, drop, or +file: `POST /api/bots/:name/paste` stores it at
-  `%TEMP%/botcorp-paste/<bot>/paste-<ms>.<ext>`; the client types
-  `@<forward-slash path> ` with no Enter.
+- Attachments (`core/attach.mjs`): the chat's paperclip, a paste (Ctrl/Cmd+V
+  of files or a copied image) or a drop add chips above the chat input; the
+  terminal's +file, paste or drop upload at once. `POST
+  /api/bots/:name/uploads` takes one file as the raw body (name in
+  `X-File-Name`), needs the approval token (`operatorGate`), accepts images
+  (png, jpg, gif, webp), PDF, text and common code files up to 20 MB (10 per
+  minute), and stores `<bot>/.botcorp/uploads/<yyyymmdd-hhmmss>-<safe name>`
+  (the folder ignores itself for git). Chat: `POST /send {text, attachments:
+  [ids]}` queues the text plus one `[attached: <abs path> (<type>, <size>)]`
+  line per file; the inbox also pastes each image path on its own (a bracketed
+  paste), which Claude Code turns into `[Image #n]`, and waits for the screen
+  to settle before Enter. PDFs and text stay path lines (the harness rule says
+  to Read them). Terminal: the path is pasted into the prompt, no Enter.
+  Thumbnails come from `GET /api/bots/:name/uploads/<id>` (gated, images only)
+  as `blob:` URLs, hence `img-src 'self' blob:` in the CSP.
+- The terminal fits xterm inside an unpadded inner box (`#termScreen`) and
+  re-fits on every size change of that box (a `ResizeObserver`), not only on
+  window resize.
 - Remote Control: "Enable Remote Control" types `/login`, "Start Remote
   Control" types `/remote-control`; the link the TUI prints is surfaced in a
   bar with an Open button (login and claude.ai/code URLs).

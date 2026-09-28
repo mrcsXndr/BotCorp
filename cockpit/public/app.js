@@ -21,7 +21,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const state = {
   bots: [], selected: null, term: null, fit: null, ws: null, wsGen: 0,
   view: window.innerWidth <= 700 ? 'chat' : 'chat', drawer: null,
-  reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null,
+  reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null, attached: [],
   lastAuthUrl: '', linkIntent: '', attn: null, capsTab: 'autos', toolsScan: null,
 };
 let settings = { copyOnSelect: false };
@@ -401,10 +401,9 @@ function ensureTerm() {
   const fit = new FitAddonCtor();
   term.loadAddon(fit);
   if (WebLinksAddonCtor) term.loadAddon(new WebLinksAddonCtor((_e, uri) => window.open(uri, '_blank', 'noopener')));
-  term.open(el('term'));
+  term.open(el('termScreen'));
   fit.fit();
   term.onData((d) => sendInput(d));
-  window.addEventListener('resize', () => doFit());
 
   // Copy on select is a SETTING: it fights long-press selection on phones.
   term.onSelectionChange(() => {
@@ -421,19 +420,30 @@ function ensureTerm() {
     return true;
   });
 
-  // Paste into the terminal: files upload; multi-line text goes in as ONE
+  // Paste into the terminal: files and clipboard images upload (Alt+V reads the
+  // host's clipboard, never this browser's); multi-line text goes in as ONE
   // bracketed paste so each newline does not submit a separate prompt.
   const holder = el('term');
   holder.addEventListener('paste', (e) => {
-    const items = e.clipboardData?.items || [];
-    for (const it of items) {
-      if (it.kind === 'file') { e.preventDefault(); const f = it.getAsFile(); if (f) uploadFile(f); return; }
-    }
+    const files = clipFiles(e.clipboardData);
+    if (files.length) { e.preventDefault(); e.stopPropagation(); termAttach(files); return; }
     const text = e.clipboardData?.getData('text') || '';
     if (text.includes('\n')) { e.preventDefault(); sendInput(bracketed(text)); }
   }, true);
 
   state.term = term; state.fit = fit;
+  // Re-fit whenever the screen's box changes (a window resize, the tab shown, a
+  // notice or the key rows wrapping above or below it), not only on resize.
+  let fitFrame = 0;
+  new ResizeObserver(() => { cancelAnimationFrame(fitFrame); fitFrame = requestAnimationFrame(() => doFit()); }).observe(el('termScreen'));
+}
+
+// The files on a paste or a drop (a copied screenshot arrives as an image/png item).
+function clipFiles(dt) {
+  const out = [];
+  for (const it of dt?.items || []) if (it.kind === 'file') { const f = it.getAsFile(); if (f) out.push(f); }
+  if (!out.length) for (const f of dt?.files || []) out.push(f);
+  return out;
 }
 
 function bracketed(text) { return '\x1b[200~' + text.replace(/\r\n?/g, '\n') + '\x1b[201~'; }
@@ -443,11 +453,14 @@ function sendInput(d) {
   else toast('not attached: start the bot first', true);
 }
 
-function doFit() {
+// The pty hears the size when it changed, or on `force` (a new socket).
+function doFit(force) {
   if (!state.fit) return;
   try {
     state.fit.fit();
-    if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify({ t: 'r', cols: state.term.cols, rows: state.term.rows }));
+    const size = `${state.term.cols}x${state.term.rows}`;
+    if (!force && size === state.sentSize) return;
+    if (state.ws && state.ws.readyState === 1) { state.ws.send(JSON.stringify({ t: 'r', cols: state.term.cols, rows: state.term.rows })); state.sentSize = size; }
   } catch {}
 }
 
@@ -464,7 +477,7 @@ function openTerminal(name) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(`${proto}://${location.host}/term/${name}`);
   state.ws = ws;
-  ws.onopen = () => { state.reconnectDelay = 1000; setTimeout(doFit, 60); };
+  ws.onopen = () => { state.reconnectDelay = 1000; setTimeout(() => doFit(true), 60); };
   ws.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
     if (msg.t === 'o') { state.term.write(msg.d); scanForAuthUrl(msg.d); }
@@ -514,29 +527,55 @@ el('keys').querySelectorAll('button[data-seq]').forEach((btn) => {
   btn.addEventListener('click', (e) => { e.preventDefault(); sendInput(seq); state.term?.focus(); });
 });
 el('attachBtn').onclick = () => el('fileInput').click();
-el('fileInput').onchange = () => { const f = el('fileInput').files?.[0]; if (f) uploadFile(f); el('fileInput').value = ''; };
+el('fileInput').onchange = () => { termAttach([...(el('fileInput').files || [])]); el('fileInput').value = ''; };
 
-/* drop a file anywhere on the main area */
+/* drop files anywhere on the main area: onto the message in the chat view, into the session in the terminal */
 const mainEl = el('main');
 mainEl.addEventListener('dragover', (e) => { e.preventDefault(); mainEl.classList.add('drop'); });
 mainEl.addEventListener('dragleave', () => mainEl.classList.remove('drop'));
-mainEl.addEventListener('drop', (e) => { e.preventDefault(); mainEl.classList.remove('drop'); const f = e.dataTransfer?.files?.[0]; if (f) uploadFile(f); });
+mainEl.addEventListener('drop', (e) => {
+  e.preventDefault();
+  mainEl.classList.remove('drop');
+  const files = clipFiles(e.dataTransfer);
+  if (!files.length || !state.selected) return;
+  if (state.view === 'term') termAttach(files); else addPending(files);
+});
 
-// Upload, then type `@<forward-slash path> ` (no Enter) so the model reads it.
-function uploadFile(file) {
-  if (!state.selected) return;
-  if (file.size > 8 * 1024 * 1024) { toast('file over 8 MB', true); return; }
+// One file to the bot's uploads folder (POST /uploads, the operator's approval
+// token like every widening write) -> {id, path, type, bytes, image}.
+async function uploadFile(name, file) {
+  const headers = { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name || 'pasted.png') };
+  const tok = approveToken();
+  if (tok) headers['X-Approve-Token'] = tok;
+  const res = await fetch(`/api/bots/${encodeURIComponent(name)}/uploads`, { method: 'POST', headers, body: file });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 403 && data.need === 'approve-token') {
+    await askToken(tok ? 'That token was not accepted: the cockpit prints a new one each time it starts.' : 'Attaching a file needs the approval token.');
+    return uploadFile(name, file);
+  }
+  if (!res.ok) throw new Error(data.error || `${res.status} ${res.statusText}`);
+  return data;
+}
+
+// Terminal: upload, then paste each path into the prompt (no Enter). Claude
+// Code turns a pasted image path into an image attachment; any other file
+// stays a path it reads.
+async function termAttach(files) {
   const name = state.selected;
-  const reader = new FileReader();
-  reader.onload = async () => {
-    try {
-      toast('uploading');
-      const { path } = await api('POST', `/api/bots/${name}/paste`, { dataUrl: reader.result, name: file.name });
-      sendInput(`@${path} `);
-      toast('attached. Add your message and press Enter');
-    } catch (e) { toast('upload failed: ' + e.message, true); }
-  };
-  reader.readAsDataURL(file);
+  if (!name || !files.length) return;
+  for (const [i, f] of files.entries()) {
+    const v = window.CockpitCards.attachView(f, i);
+    if (v.why) { toast(v.why, true); return; }
+  }
+  try {
+    toast(files.length > 1 ? `uploading ${files.length} files` : 'uploading');
+    for (const f of files) {
+      const up = await uploadFile(name, f);
+      if (name !== state.selected) return;
+      sendInput(bracketed(up.path) + ' ');
+    }
+    toast('attached. Add your message and press Enter');
+  } catch (e) { toast('upload failed: ' + e.message, true); }
 }
 
 /* ---- chat view (turns pushed by the server over the terminal socket) ---- */
@@ -553,6 +592,9 @@ el('vtTerm').onclick = () => setView('term');
 
 function resetChat() {
   state.sent = []; state.chatFile = null; state.status = null;
+  for (const p of state.attached) if (p.url) URL.revokeObjectURL(p.url);
+  state.attached = [];
+  renderPending();
   el('msgs').innerHTML = '<div class="cempty">Loading the conversation</div>';
   renderStats();
 }
@@ -614,15 +656,28 @@ function bubble(turn) {
       if (item.kind === 'voice') d.classList.add('voice');
     }
   }
-  if (turn.text) {
+  // A message sent with attachments: its "[attached: ...]" lines become chips.
+  const att = turn.role === 'user' && !turn.meta ? window.CockpitCards.splitAttached(turn.text) : null;
+  const text = att && att.files.length ? att.body : turn.text;
+  if (text) {
     const body = document.createElement('div');
     body.className = 'md';
     // Transcript text is untrusted. md.js escapes every input character and emits
     // only its own fixed tag set, so its output is the one thing that may go
     // through innerHTML here; without it, plain text.
-    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(turn.text);
-    else body.textContent = turn.text;
+    if (window.CockpitMarkdown) body.innerHTML = window.CockpitMarkdown.renderMarkdown(text);
+    else body.textContent = text;
     d.appendChild(body);
+  }
+  if (att && att.files.length) {
+    const row = document.createElement('div');
+    row.className = 'achips';
+    for (const f of att.files) {
+      const c = window.CockpitInbox.chip(document, f);
+      if (c.thumb) loadThumb(c.thumb, state.selected, f.id);
+      row.appendChild(c.node);
+    }
+    d.appendChild(row);
   }
   if (turn.tools?.length) {
     const t = document.createElement('span');
@@ -715,7 +770,8 @@ function onChatPush(msg) {
   for (const turn of msg.turns) {
     // A message sent from here reaching the transcript: its bubble moves to
     // where the session took it instead of rendering twice.
-    const mine = turn.role === 'user' && state.sent.find((s) => !s.seen && s.text === turn.text.trim());
+    const sp = turn.role === 'user' ? window.CockpitCards.splitAttached(turn.text) : null;
+    const mine = sp && state.sent.find((s) => !s.seen && s.text === sp.body.trim() && s.ids.join('\n') === sp.files.map((f) => f.id).join('\n'));
     if (mine) { mine.seen = true; box.appendChild(mine.node); continue; }
     if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
     box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
@@ -727,26 +783,85 @@ function onChatPush(msg) {
 // Chat send goes through the bot's inbox (POST /send -> `botcorp send`): it is
 // typed into the session as soon as it is alive, and its status line follows
 // it (queued, held, delivered, expired, not delivered).
+// With attachments, each file is uploaded first, then the message names them.
 async function sendChat() {
   const ta = el('chatInput');
   const text = ta.value.replace(/\s+$/, '');
   const name = state.selected;
-  if (!text || !name) return;
+  const pending = state.attached;
+  if ((!text && !pending.length) || !name) return;
   const box = el('msgs');
   box.querySelector('.cempty')?.remove();
-  const s = { text: text.trim(), id: null, st: 'sending', seen: false, ...window.CockpitInbox.sentBubble(document, text) };
+  const s = { text: text.trim(), ids: [], id: null, st: 'sending', seen: false, ...window.CockpitInbox.sentBubble(document, text, pending.map((p) => p.view)) };
+  pending.forEach((p, i) => { if (s.thumbs[i]) showThumb(s.thumbs[i], p.url); });
   state.sent.push(s);
   box.appendChild(s.node);
   box.scrollTop = box.scrollHeight;
   ta.value = '';
-  ta.style.height = 'auto';
+  growInput();
+  state.attached = [];
+  renderPending();
   try {
-    const it = await api('POST', `/api/bots/${encodeURIComponent(name)}/send`, { text });
+    if (pending.length) s.status.textContent = 'uploading';
+    for (const p of pending) s.ids.push((await uploadFile(name, p.file)).id);
+    const it = await api('POST', `/api/bots/${encodeURIComponent(name)}/send`, { text, attachments: s.ids });
     s.id = it.id;
     s.st = window.CockpitInbox.setStatus(s.status, it);
     pollInbox();
   } catch (e) { s.st = window.CockpitInbox.setStatus(s.status, { status: 'failed', detail: e.message }); }
 }
+
+// The composer's attachments before send (state.attached): {file, view, url}
+// each, a chip above the input.
+function addPending(files) {
+  for (const f of files) {
+    const view = window.CockpitCards.attachView(f, state.attached.length);
+    if (view.why) { toast(view.why, true); continue; }
+    state.attached.push({ file: f, view, url: view.image ? URL.createObjectURL(f) : '' });
+  }
+  renderPending();
+}
+function renderPending() {
+  const row = el('pending');
+  row.replaceChildren();
+  state.attached.forEach((p, i) => {
+    const c = window.CockpitInbox.chip(document, p.view, () => {
+      if (p.url) URL.revokeObjectURL(p.url);
+      state.attached.splice(i, 1);
+      renderPending();
+      el('chatInput').focus();
+    });
+    if (c.thumb) showThumb(c.thumb, p.url);
+    row.appendChild(c.node);
+  });
+  row.classList.toggle('show', state.attached.length > 0);
+}
+function showThumb(img, url) {
+  if (!url) return;
+  img.onload = () => img.parentElement?.classList.add('has');
+  img.src = url;
+}
+
+// A sent image's thumbnail, fetched with the approval token (an <img> cannot
+// send it) and shown as a blob: URL. Without a token the chip keeps its name.
+const thumbs = new Map();   // "<bot>/<id>" -> Promise<blob url>
+function loadThumb(img, bot, id) {
+  const key = `${bot}/${id}`;
+  const tok = approveToken();
+  if (!thumbs.has(key)) {
+    if (!tok) return;
+    thumbs.set(key, fetch(`/api/bots/${encodeURIComponent(bot)}/uploads/${encodeURIComponent(id)}`, { headers: { 'X-Approve-Token': tok } })
+      .then((r) => (r.ok ? r.blob() : null)).then((b) => (b ? URL.createObjectURL(b) : '')).catch(() => ''));
+  }
+  thumbs.get(key).then((u) => { if (u) showThumb(img, u); else thumbs.delete(key); });
+}
+
+el('clipBtn').onclick = () => el('chatFiles').click();
+el('chatFiles').onchange = () => { addPending([...(el('chatFiles').files || [])]); el('chatFiles').value = ''; };
+el('chatInput').addEventListener('paste', (e) => {
+  const files = clipFiles(e.clipboardData);
+  if (files.length) { e.preventDefault(); addPending(files); }
+});
 
 // Refreshes the status line of every sent message still open, while one is.
 let inboxTimer = null;
@@ -768,7 +883,19 @@ function pollInbox() {
 }
 el('chatSend').onclick = sendChat;
 el('chatInput').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); } });
-el('chatInput').addEventListener('input', function () { this.style.height = 'auto'; this.style.height = Math.min(160, this.scrollHeight) + 'px'; });
+// 1 line up to 8, then it scrolls: no scrollbar before the text needs one.
+function growInput() {
+  const ta = el('chatInput');
+  const cs = getComputedStyle(ta);
+  const line = parseFloat(cs.lineHeight) || 22;
+  const chrome = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const max = Math.round(line * 8 + chrome);
+  ta.style.height = 'auto';
+  const want = ta.scrollHeight + parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  ta.style.height = Math.min(max, Math.ceil(want)) + 'px';
+  ta.style.overflowY = want > max ? 'auto' : 'hidden';
+}
+el('chatInput').addEventListener('input', growInput);
 
 /* ---- status chips: pushed by the server (cockpit/chatstatus.mjs) over the same
    socket when they change; ages and reset countdowns are computed here. A value

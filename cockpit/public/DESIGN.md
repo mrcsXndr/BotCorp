@@ -131,6 +131,15 @@ use `--text-2`, which keeps readable contrast on every surface.
     Telegram · time", text only.
   - A pending approval for this bot is the same card as the sheet's, on
     `--warn-soft` / `--warn-line`, always last in the chat.
+  - Composer: a quiet paperclip button left of the input; the input grows
+    from one line to eight, then scrolls. Files attached from the cockpit are
+    chips in a row above the input and inside the sent bubble: `--surface`,
+    `--line-strong`, `--r-btn`, 36px tall with the name (600) and a mono size;
+    an image is a 64px `object-fit: cover` thumbnail instead. A composer chip
+    ends in a × (on a thumbnail, a small surface square in its corner).
+- **Terminal:** the xterm screen is an unpadded box inside the padded `#term`
+  (the fit addon sizes to its parent's full height, padding included), refitted by a
+  ResizeObserver, so the last row always ends above the key row.
 - **Drawers** (Overview, Telegram access, Secrets, Activity, Automations and
   tools): a tab row with the active tab on `--surface`; the drawer floats on
   `--shadow-2` (no border) and opens with its title and one `--text-2` line on
