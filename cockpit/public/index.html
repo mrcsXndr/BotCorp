@@ -372,7 +372,7 @@
 
     /* ==== phone =============================================================== */
     @media (max-width: 700px) {
-      body { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
+      body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
       /* three short rows: brand, the bot strip (scrolls sideways), the links */
       aside { border-right: 0; border-bottom: 1px solid var(--line); }
       .brand { padding: 10px var(--sp-4) 0; flex-direction: row; align-items: baseline; gap: var(--sp-2); }

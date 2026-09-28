@@ -1110,7 +1110,7 @@ function aprBody(p, withBot) {
     ? `<div class="diff">${esc(bulk[1])}: + ${esc(bulk[2])}</div><details><summary>show all ${esc(bulk[2])}</summary>${esc(bulk[3])}</details>`
     : `<div class="diff">${esc(v.change)}</div>`;
   const d = `data-bot="${esc(p.bot)}" data-id="${esc(p.id)}"`;
-  const meta = [withBot ? `For ${p.bot}` : '', v.asker, fmtWhen(p.at)].filter(Boolean).join(' · ');
+  const meta = [withBot && p.requested_by !== `bot:${p.bot}` ? `For ${p.bot}` : '', v.asker, fmtWhen(p.at)].filter(Boolean).join(' · ');
   return `<div class="apr-h"><svg class="ic"><use href="#i-apr"/></svg><span class="apr-t">${esc(v.title)}</span></div>`
     + `<p class="apr-w"><b>Widens: ${esc(v.widensLabel)}.</b> ${esc(v.widensText)}</p>`
     + `<div class="apr-x">The exact change${diff}</div>`
