@@ -23,7 +23,7 @@ const ROOT = path.resolve(COCKPIT, '..');
 // Runtime dir for modules that read BOTCORP_HOME at import time: never ~/.botcorp.
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-chat-test-'));
 process.env.BOTCORP_HOME = path.join(TMP, 'rt');
-const { parseChannelText, parseTaskNotifications, chatState, tgSendTexts } = await import('../chat.mjs');
+const { parseChannelText, parseTaskNotifications, chatState, tgSendTexts, currentTranscript } = await import('../chat.mjs');
 const { summarizeStatus, chatStatus } = await import('../chatstatus.mjs');
 const { ccProjectSlug } = await import('../bots.mjs');
 
@@ -184,6 +184,43 @@ function transcriptBot(lines) {
   return { name: 'demo', home, configDir };
 }
 const userLine = (content, extra = {}) => ({ type: 'user', timestamp: '2026-09-25T14:00:00.000Z', message: { role: 'user', content }, ...extra });
+
+// ---- which transcript is the live one ----------------------------------------------
+function twoTranscripts(name, newerEntrypoint) {
+  const dir = fs.mkdtempSync(path.join(TMP, 'pick-'));
+  const home = path.join(dir, 'home');
+  const configDir = path.join(dir, 'config');
+  const proj = path.join(configDir, 'projects', ccProjectSlug(home));
+  fs.mkdirSync(proj, { recursive: true });
+  const write = (file, ep, lines, secsAgo) => {
+    const p = path.join(proj, file);
+    fs.writeFileSync(p, lines.concat([userLine('hi', { entrypoint: ep })]).map((l) => JSON.stringify(l)).join('\n') + '\n');
+    const t = Date.now() / 1000 - secsAgo;
+    fs.utimesSync(p, t, t);
+  };
+  write('live.jsonl', 'cli', [{ type: 'mode', mode: 'normal' }], 600);
+  // A distill run: its first line is the whole prompt (tens of KB), which quotes an entrypoint as text.
+  write('distill.jsonl', newerEntrypoint, [{ type: 'queue-operation', content: '"entrypoint":"cli" '.repeat(4000) }], 5);
+  return { name, home, configDir };
+}
+
+test('currentTranscript: a newer headless (sdk-cli) transcript never replaces the older live one', async () => {
+  const bot = twoTranscripts('pick-a', 'sdk-cli');
+  assert.equal(path.basename(await currentTranscript(bot)), 'live.jsonl');
+  assert.equal((await chatState(bot, 0)).file, 'live');
+  // Positive control: the same newer file as an interactive one does win.
+  assert.equal(path.basename(await currentTranscript(twoTranscripts('pick-b', 'cli'))), 'distill.jsonl');
+});
+
+test('currentTranscript: the daemon state session id wins over a newer interactive transcript', async () => {
+  const bot = twoTranscripts('pick-c', 'cli');
+  fs.mkdirSync(path.join(process.env.BOTCORP_HOME, 'state'), { recursive: true });
+  fs.writeFileSync(path.join(process.env.BOTCORP_HOME, 'state', 'pick-c.json'), JSON.stringify({ session_id: 'live' }));
+  assert.equal(path.basename(await currentTranscript(bot)), 'live.jsonl');
+  // A state id with no file behind it falls back to the newest interactive one.
+  fs.writeFileSync(path.join(process.env.BOTCORP_HOME, 'state', 'pick-c.json'), JSON.stringify({ session_id: 'gone' }));
+  assert.equal(path.basename(await currentTranscript(bot)), 'distill.jsonl');
+});
 
 test('parseChannelText: body + meta, media as labelled items, never paths', () => {
   const r = parseChannelText('<channel source="plugin:telegram:telegram" chat_id="1" message_id="9" user="operator" user_id="1" ts="2026-09-25T14:34:00.000Z" image_path="D:\\bot\\inbox\\snap.jpg">look at this</channel>');

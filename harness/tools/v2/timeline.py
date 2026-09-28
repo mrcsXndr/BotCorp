@@ -37,12 +37,32 @@ TIMELINES_DIR = REPO_ROOT / "memory" / "timelines"
 
 DISTILL_MODEL = os.environ.get("BOT_DISTILL_MODEL", "claude-opus-4-8")
 DISTILL_TIMEOUT = int(os.environ.get("BOT_DISTILL_TIMEOUT", "180"))
+# The daemon's pinned CC when it names one; a bare `claude` on PATH is whatever
+# install the operator has.
+CLAUDE_EXE = os.environ.get("BOTCORP_CLAUDE_EXE") or "claude"
 
 # When this script runs DETACHED (precompact_timeline.py spawns it with no
 # console), the inner claude.exe would otherwise get a NEW visible console
 # window (2026-07-13: "2 empty claude windows" incident). CREATE_NO_WINDOW
 # keeps the headless run silent; harmless when a console exists.
 _NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
+def _claude_auth_available() -> bool:
+    """False when an inner `claude --print` could only fail with "Not logged in".
+
+    The distill runs from hooks (PreCompact, TG /compact), and Claude Code
+    strips CLAUDE_CODE_OAUTH_TOKEN from its hooks' env, so a bot that runs on
+    its vault token has no credentials here. Its config dir holds no /login
+    either. macOS keeps a /login in the keychain, which this cannot see, so
+    there claude decides.
+    """
+    if os.environ.get("CLAUDE_CODE_OAUTH_TOKEN") or os.environ.get("ANTHROPIC_API_KEY"):
+        return True
+    if sys.platform == "darwin":
+        return True
+    cfg = os.environ.get("CLAUDE_CONFIG_DIR") or str(Path.home() / ".claude")
+    return (Path(cfg) / ".credentials.json").is_file()
 
 
 def _now_iso() -> str:
@@ -203,13 +223,19 @@ def _llm_distill(session_id: str) -> int:
         previous=previous_timeline,
     )
 
+    if not _claude_auth_available():
+        print("distill skipped: no Claude credentials in this env (hooks don't get the session's token); structural build", file=sys.stderr)
+        return _structural_build(session_id)
+
     try:
         result = subprocess.run(
             # --setting-sources user: skip PROJECT settings so this headless
             # run can't load the repo-local telegram plugin and steal the
             # poller slot from the live bot (2026-07-13 incident).
-            ["claude", "--print", "--model", DISTILL_MODEL,
-             "--setting-sources", "user"],
+            # --no-session-persistence: no transcript in the bot's projects/
+            # dir, where the cockpit chat would take it for the live session.
+            [CLAUDE_EXE, "--print", "--model", DISTILL_MODEL,
+             "--setting-sources", "user", "--no-session-persistence"],
             input=prompt,
             capture_output=True,
             text=True,
@@ -299,12 +325,15 @@ Apply the 5-band credibility rubric. Deduplicate.
 {bundled}
 """
     try:
+        if not _claude_auth_available():
+            raise RuntimeError("no Claude credentials in this env")
         result = subprocess.run(
             # --setting-sources user: skip PROJECT settings so this headless
             # run can't load the repo-local telegram plugin and steal the
             # poller slot from the live bot (2026-07-13 incident).
-            ["claude", "--print", "--model", DISTILL_MODEL,
-             "--setting-sources", "user"],
+            # --no-session-persistence: no transcript in the bot's projects/.
+            [CLAUDE_EXE, "--print", "--model", DISTILL_MODEL,
+             "--setting-sources", "user", "--no-session-persistence"],
             input=prompt,
             capture_output=True,
             text=True,

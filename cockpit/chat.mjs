@@ -9,16 +9,41 @@
 
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
-import { ccProjectSlug } from './bots.mjs';
+import { ccProjectSlug, STATE_DIR } from './bots.mjs';
 
-// Locate the bot's ACTIVE transcript: newest .jsonl under projects/, preferring
-// the dir whose slug is the bot's own BOT_HOME. null when there is none yet.
+// Interactive sessions write "entrypoint":"cli"; a headless `claude --print`
+// (a hook's timeline distill, say) writes "sdk-cli". The first entry follows
+// the first prompt, which can be long, so up to 1 MB of head is read. The
+// unescaped pattern cannot match inside a JSON string. An entrypoint never
+// changes, so a found one is cached per file.
+const entrypoints = new Map();
+async function entrypointOf(file) {
+  if (entrypoints.has(file)) return entrypoints.get(file);
+  let fh;
+  try {
+    fh = await fs.open(file, 'r');
+    const buf = Buffer.alloc(1 << 20);
+    const { bytesRead } = await fh.read(buf, 0, buf.length, 0);
+    const m = /"entrypoint":"([^"]+)"/.exec(buf.toString('utf8', 0, bytesRead));
+    if (m) entrypoints.set(file, m[1]);
+    return m ? m[1] : null;
+  } catch { return null; } finally { await fh?.close(); }
+}
+
+async function stateSessionId(name) {
+  try { return JSON.parse(await fs.readFile(path.join(STATE_DIR, `${name}.json`), 'utf-8')).session_id || null; } catch { return null; }
+}
+
+// Locate the bot's ACTIVE transcript: the daemon's session id when its file is
+// there, else the newest interactive .jsonl under projects/, preferring the dir
+// whose slug is the bot's own BOT_HOME. Never an SDK (headless) run's. null
+// when there is none yet.
 export async function currentTranscript(bot) {
   const projectsDir = path.join(bot.configDir, 'projects');
   let dirs;
   try { dirs = await fs.readdir(projectsDir, { withFileTypes: true }); } catch { return null; }
   const ownSlug = ccProjectSlug(bot.home).toLowerCase();
-  let best = null;
+  const cands = [];
   for (const d of dirs) {
     if (!d.isDirectory()) continue;
     const own = d.name.toLowerCase() === ownSlug;
@@ -29,13 +54,17 @@ export async function currentTranscript(bot) {
       if (!f.endsWith('.jsonl')) continue;
       let st;
       try { st = await fs.stat(path.join(dir, f)); } catch { continue; }
-      const cand = { file: path.join(dir, f), mtime: st.mtimeMs, own };
-      if (!best) { best = cand; continue; }
-      if (cand.own && !best.own) { best = cand; continue; }
-      if (cand.own === best.own && cand.mtime > best.mtime) best = cand;
+      cands.push({ file: path.join(dir, f), mtime: st.mtimeMs, own });
     }
   }
-  return best ? best.file : null;
+  cands.sort((a, b) => (b.own - a.own) || (b.mtime - a.mtime));
+  const sid = await stateSessionId(bot.name);
+  const live = sid && cands.find((c) => path.basename(c.file) === `${sid}.jsonl`);
+  if (live) return live.file;
+  for (const c of cands) {
+    if (!(await entrypointOf(c.file) || '').startsWith('sdk')) return c.file;
+  }
+  return null;
 }
 
 function textFromContent(content) {
