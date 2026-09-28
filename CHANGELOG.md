@@ -32,6 +32,9 @@ Attachments that arrive, and a terminal that fits its box.
   token, so without credentials in its env the distill skips straight to the
   structural timeline instead of spawning a `claude` that fails with "Not
   logged in".
+- **The chat follows the newest turn** until you scroll up. Then a down
+  arrow bottom right counts what arrived since; it, or scrolling back to the
+  bottom, follows again.
 
 ## v0.7.5
 

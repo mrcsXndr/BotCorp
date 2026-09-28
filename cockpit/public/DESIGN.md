@@ -137,6 +137,10 @@ use `--text-2`, which keeps readable contrast on every surface.
     `--line-strong`, `--r-btn`, 36px tall with the name (600) and a mono size;
     an image is a 64px `object-fit: cover` thumbnail instead. A composer chip
     ends in a × (on a thumbnail, a small surface square in its corner).
+  - The chat follows the newest turn. Scrolled up, a round `.btn` with a
+    down arrow sits bottom-right of the list (`--shadow-2`, 36px, above the
+    composer) and counts the turns that arrived since; it, or scrolling back
+    down, resumes following.
 - **Terminal:** the xterm screen is an unpadded box inside the padded `#term`
   (the fit addon sizes to its parent's full height, padding included), refitted by a
   ResizeObserver, so the last row always ends above the key row.

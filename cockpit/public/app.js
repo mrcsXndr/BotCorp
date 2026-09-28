@@ -21,7 +21,7 @@ const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const state = {
   bots: [], selected: null, term: null, fit: null, ws: null, wsGen: 0,
   view: window.innerWidth <= 700 ? 'chat' : 'chat', drawer: null,
-  reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null, attached: [],
+  reconnectDelay: 1000, reconnectTimer: null, sent: [], chatFile: null, attached: [], follow: true, unseen: 0,
   lastAuthUrl: '', linkIntent: '', attn: null, capsTab: 'autos', toolsScan: null,
 };
 let settings = { copyOnSelect: false };
@@ -586,6 +586,7 @@ function setView(view) {
   el('chatwrap').classList.toggle('show', view === 'chat');
   el('termwrap').classList.toggle('show', view === 'term');
   if (view === 'term') setTimeout(doFit, 30);
+  if (view === 'chat' && state.follow) el('msgs').scrollTop = el('msgs').scrollHeight;
 }
 el('vtChat').onclick = () => setView('chat');
 el('vtTerm').onclick = () => setView('term');
@@ -596,8 +597,37 @@ function resetChat() {
   state.attached = [];
   renderPending();
   el('msgs').innerHTML = '<div class="cempty">Loading the conversation</div>';
+  toLatest();
   renderStats();
 }
+
+// The chat follows the newest turn until the operator scrolls up; from then
+// new turns are counted on the jump button instead. The button, or scrolling
+// back to the bottom by hand, resumes following. Only a real scroll changes
+// the mode: content growing under a following view does not.
+function toLatest() {
+  const box = el('msgs');
+  state.follow = true; state.unseen = 0;
+  box.scrollTop = box.scrollHeight;
+  renderJump();
+}
+function renderJump() {
+  const b = el('jumpLatest');
+  b.classList.toggle('show', !state.follow);
+  el('jumpCount').textContent = state.unseen ? (state.unseen > 99 ? '99+' : String(state.unseen)) : '';
+  b.setAttribute('aria-label', state.unseen ? `Jump to latest, ${state.unseen} new` : 'Jump to latest');
+}
+el('msgs').addEventListener('scroll', () => {
+  const box = el('msgs');
+  const at = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  if (at === state.follow) return;
+  state.follow = at;
+  if (at) state.unseen = 0;
+  renderJump();
+});
+// An image that loads after its turn was placed grows the list under a following view.
+el('msgs').addEventListener('load', () => { if (state.follow) el('msgs').scrollTop = el('msgs').scrollHeight; }, true);
+el('jumpLatest').onclick = toLatest;
 
 function fmtWhen(ts) {
   const d = new Date(ts);
@@ -763,21 +793,23 @@ function onChatPush(msg) {
   if (msg.available === false) { box.innerHTML = `<div class="cempty err">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
   if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.sent = []; return; }
   if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; renderChatApprovals(); return; }
-  if (msg.initial) box.innerHTML = '';
+  if (msg.initial) { box.innerHTML = ''; state.follow = true; }
   const ph = box.querySelector('.cempty');
   if (ph && msg.turns.length) ph.remove();
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  let added = 0;
   for (const turn of msg.turns) {
     // A message sent from here reaching the transcript: its bubble moves to
     // where the session took it instead of rendering twice.
     const sp = turn.role === 'user' ? window.CockpitCards.splitAttached(turn.text) : null;
     const mine = sp && state.sent.find((s) => !s.seen && s.text === sp.body.trim() && s.ids.join('\n') === sp.files.map((f) => f.id).join('\n'));
     if (mine) { mine.seen = true; box.appendChild(mine.node); continue; }
+    added++;
     if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
     box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
   renderChatApprovals();
-  if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
+  if (state.follow) toLatest();
+  else { state.unseen += added; renderJump(); }
 }
 
 // Chat send goes through the bot's inbox (POST /send -> `botcorp send`): it is
@@ -796,7 +828,7 @@ async function sendChat() {
   pending.forEach((p, i) => { if (s.thumbs[i]) showThumb(s.thumbs[i], p.url); });
   state.sent.push(s);
   box.appendChild(s.node);
-  box.scrollTop = box.scrollHeight;
+  toLatest();
   ta.value = '';
   growInput();
   state.attached = [];
