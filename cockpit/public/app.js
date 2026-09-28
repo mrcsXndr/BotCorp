@@ -455,7 +455,7 @@ function openTerminal(name) {
     if (msg.t === 'o') { state.term.write(msg.d); scanForAuthUrl(msg.d); }
     else if (msg.t === 'hello') { el('exitbar').classList.remove('show'); }
     else if (msg.t === 'stopped') {
-      // no pty-host; a live bg session has none by design
+      // no pty-host: the session is down, or its attach host did not come up
       const b = current();
       state.term.writeln(b && b.running
         ? `\x1b[90mbackground session, no terminal attached here (on the host: claude attach ${String(b.bgId || '<bg id>').replace(/[^\w<> -]/g, '')}). The chat view follows it.\x1b[0m`
@@ -688,7 +688,7 @@ function onChatPush(msg) {
 }
 
 // Chat send goes through the bot's inbox (POST /send -> `botcorp send`): it is
-// typed into the session once the session is idle, and its status line follows
+// typed into the session as soon as it is alive, and its status line follows
 // it (queued, held, delivered, expired, not delivered).
 async function sendChat() {
   const ta = el('chatInput');

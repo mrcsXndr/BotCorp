@@ -11,8 +11,10 @@ Locked behaviour:
   pty-host and the run is `sent` once the user entry reaches the transcript.
   A bg session gets an attach host that stays up for the next message (it
   exits on its own idle ttl); the session itself keeps running.
-- a prompt that waits in the inbox past its ttl (half the run's timeout) is
-  `failed: expired ...`, and is never typed afterwards.
+- a prompt queued behind another message is typed right after it, even
+  though that message made the session busy (the inbox types into any live
+  session; its ttl, half the run's timeout, bounds only a down or starting
+  session).
 
 The session is a stub hosted by the real pty-host (BOTCORP_PTY_COMMAND): it
 writes each line typed into it to a fake transcript as a user entry, in
@@ -248,9 +250,11 @@ def test_sent_to_a_bg_session_through_an_attach_host(bot, fake_claude_exe):
 
 
 @needs_win
-def test_a_prompt_that_waits_past_its_ttl_fails_and_is_never_typed(bot):
+def test_a_prompt_queued_behind_a_message_is_typed_after_it(bot):
     # A cockpit message ahead of it in the queue: the drainer types that one,
-    # the session turns busy, and the prompt waits past its ttl (timeout 0.6 min -> 18 s).
+    # the session turns busy, and the prompt is still typed at once, in order
+    # (Claude Code queues mid-turn input itself; the inbox waits only while
+    # the session is down or starting).
     entry = _prompt_entry().replace("timeout_min: 0.5", "timeout_min: 0.6")
     (bot["home"] / "bot.yaml").write_text(_yaml(bot["name"], "pty", entry), encoding="utf-8")
     _start_pty_host(bot)
@@ -268,7 +272,5 @@ def test_a_prompt_that_waits_past_its_ttl_fails_and_is_never_typed(bot):
             break
         assert time.time() < deadline, runs
         time.sleep(1)
-    assert re.match(r"^failed: expired \S+: waited past its ttl \(18s\)$", runs[-1]["result"]), runs
-    assert runs[-1]["exit"] == 1, runs
-    time.sleep(2)
-    assert _typed(bot) == ["a message from the cockpit"], "the expired prompt is never typed"
+    assert runs[-1]["result"] == "sent" and runs[-1]["exit"] == 0, runs
+    assert _typed(bot) == ["a message from the cockpit", PROMPT]

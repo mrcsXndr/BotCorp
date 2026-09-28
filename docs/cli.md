@@ -661,8 +661,9 @@ the supervisor restarted under a new pid; it writes the config home's
 Queues a message for the bot's session (`core/inbox.mjs`); the text is the
 words after `<bot>`, else stdin (the cockpit and automations always use
 stdin), at most 64 KB. One drainer per bot, detached, types each message in
-order (bracketed paste, then Enter), and only while `observe` says the phase
-is `idle` or `awaiting_prompt` is true. A bg session is typed into through an attach host (`pty-host
+order (bracketed paste, then Enter) as soon as the session is alive, working
+or not: Claude Code queues input that arrives mid-turn, as it does a Telegram
+message. It waits only while the phase is `down` or `starting`. A bg session is typed into through an attach host (`pty-host
 --attach`), started when none is up and shared with the cockpit terminal; it
 exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no
 client. A pty session goes through its own pty-host. Each message ends:

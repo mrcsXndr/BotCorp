@@ -50,9 +50,39 @@ export const QUIET_MIN = 5;
 // the absolute cwd with '-' (no drive-letter special case).
 function projectSlug(absPath) { return String(absPath).replace(/[^A-Za-z0-9]/g, '-'); }
 
-// ms since the newest *.jsonl under the bot's project dir, RECURSIVE (subagents
-// write <session>/subagents/**/agent-*.jsonl while the main transcript is quiet);
-// null = no transcript.
+// The time of the last turn event in a transcript. Claude Code also rewrites
+// bookkeeping rows outside any turn, and those carry no `timestamp` (the artifact
+// auto-react ledger is re-saved every few minutes while artifacts are watched;
+// title, mode and permission rows too). By file mtime alone such a session read
+// as working forever, so a queued cockpit message never drained. The newest
+// top-level `timestamp` in the file's tail is the answer, capped at the mtime.
+// No timestamp in the tail keeps the mtime, which reads as busy (the safe side).
+export const TAIL_BYTES = 256 * 1024;
+export function lastEventMs(file, mtimeMs) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, TAIL_BYTES);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    const lines = buf.toString('utf8').split('\n');
+    if (len < size) lines.shift();   // the first row is cut by the tail window
+    let best = 0;
+    for (const l of lines) {
+      if (!l.trim()) continue;
+      let row; try { row = JSON.parse(l); } catch { continue; }
+      const t = row && typeof row.timestamp === 'string' ? Date.parse(row.timestamp) : NaN;
+      if (Number.isFinite(t) && t > best) best = t;
+    }
+    return best ? Math.min(best, mtimeMs) : mtimeMs;
+  } catch { return mtimeMs; } finally { if (fd !== undefined) { try { fs.closeSync(fd); } catch {} } }
+}
+
+// ms since the newest turn event in any *.jsonl under the bot's project dir,
+// RECURSIVE (subagents write <session>/subagents/**/agent-*.jsonl while the main
+// transcript is quiet); null = no transcript. Only a file touched within QUIET_MIN
+// is read (lastEventMs); an older mtime already reads idle.
 export function transcriptQuietMs(name, now = Date.now()) {
   const dir = path.join(configDir(name), 'projects', projectSlug(botHome(name)));
   let newest = 0;
@@ -60,7 +90,12 @@ export function transcriptQuietMs(name, now = Date.now()) {
   try { files = fs.readdirSync(dir, { recursive: true }); } catch { return null; }
   for (const f of files) {
     if (!String(f).endsWith('.jsonl')) continue;
-    try { const m = fs.statSync(path.join(dir, String(f))).mtimeMs; if (m > newest) newest = m; } catch {}
+    const p = path.join(dir, String(f));
+    try {
+      let m = fs.statSync(p).mtimeMs;
+      if (now - m < QUIET_MIN * 60_000) m = lastEventMs(p, m);
+      if (m > newest) newest = m;
+    } catch {}
   }
   return newest ? Math.max(0, now - newest) : null;
 }

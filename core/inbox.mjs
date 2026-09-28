@@ -1,8 +1,8 @@
 // inbox.mjs - one queue per bot: the one way text reaches a bot's session.
 // Producers (`botcorp send`, the cockpit composer, `kind: prompt` automations)
-// append; one drainer per bot types the items into the session in order, each
-// only while observe (core/observe.mjs) says the phase is idle or the session
-// awaits its next prompt.
+// append; one drainer per bot types the items into the session in order, as
+// soon as the session is alive (core/observe.mjs), working or not: Claude Code
+// queues input that arrives mid-turn, as it does a Telegram message.
 //
 //   <BOTCORP_HOME>/state/<bot>/inbox.jsonl          {id, text, source, ttl_s, at}
 //   <BOTCORP_HOME>/state/<bot>/inbox.results.jsonl  {id, status, at, detail}
@@ -10,7 +10,7 @@
 // An item is `queued` until a result line says otherwise (the newest wins):
 //   held       the session is blocked (observe's hard block: a login, a usage
 //              limit); it stays at the head of the queue and goes out once
-//              that clears (back to `queued` until the session is idle)
+//              that clears (back to `queued`, then typed)
 //   delivered  typed (bracketed paste, then Enter) and its user turn reached
 //              the transcript within CONFIRM_MS
 //   expired    its ttl ran out while it waited
@@ -189,9 +189,10 @@ export async function drain(bot) {
           continue;
         }
         if (item.status === 'held') record(bot, item.id, 'queued', 'block cleared');
-        // down (the daemon restarts it), starting, working, unknown: wait for
-        // idle, or for the job record to say it waits for its next prompt
-        if (o.phase !== 'idle' && !o.awaiting_prompt) { await sleep(pollMs()); continue; }
+        // down (the daemon restarts it) or starting: no session to type into
+        // yet. Alive (idle, working, unknown): type now; Claude Code queues
+        // input that arrives mid-turn itself, as it does a Telegram message.
+        if (o.phase === 'down' || o.phase === 'starting') { await sleep(pollMs()); continue; }
         const r = await deliver(bot, o.kind, item.text);
         record(bot, item.id, r.ok ? 'delivered' : 'failed', r.detail);
         if (r.ok) delivered++;
@@ -201,15 +202,20 @@ export async function drain(bot) {
   return delivered;
 }
 
-async function deliver(bot, kind, text) {
+// The bot's pty-host endpoint; for a bg session an attach host is started when
+// none is up (the cockpit terminal shares it) -> {ep, started} or {err}.
+export async function attachHost(bot, kind) {
   let ep = ptyOf(bot);
-  const started = !ep;
-  if (!ep) {
-    if (kind !== 'bg') return { ok: false, detail: 'no pty-host endpoint (the session is down)' };
-    spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, '--attach']);
-    for (const end = Date.now() + HOST_UP_MS; !ep && Date.now() < end;) { await sleep(250); ep = ptyOf(bot); }
-    if (!ep) return { ok: false, detail: `the attach host did not come up within ${HOST_UP_MS / 1000}s` };
-  }
+  if (ep) return { ep, started: false };
+  if (kind !== 'bg') return { err: 'no pty-host endpoint (the session is down)' };
+  spawnDetached(process.execPath, [PTY_HOST, '--bot', bot, '--botcorp', ROOT, '--attach']);
+  for (const end = Date.now() + HOST_UP_MS; !ep && Date.now() < end;) { await sleep(250); ep = ptyOf(bot); }
+  return ep ? { ep, started: true } : { err: `the attach host did not come up within ${HOST_UP_MS / 1000}s` };
+}
+
+async function deliver(bot, kind, text) {
+  const { ep, started, err: hostErr } = await attachHost(bot, kind);
+  if (hostErr) return { ok: false, detail: hostErr };
   const t = { configDir: configDir(bot), home: botHome(bot) };
   const file = await currentTranscript(t);
   let offset = 0;

@@ -1,7 +1,9 @@
 // ptybridge.mjs - bridge one browser WebSocket to a bot's pty-host.
 //
-// The cockpit never spawns a pty. For each browser attach it dials the bot's
-// pty-host (endpoint from state/<bot>.pty.json) and pipes frames both ways:
+// The cockpit never spawns a session. For each browser attach it dials the
+// bot's pty-host (endpoint from state/<bot>.pty.json; for a live bg session
+// the attach host core/inbox.mjs shares, started when none is up) and pipes
+// frames both ways:
 //   pty-host -> browser : hello / o (scrollback then live) / exit / err, as-is
 //   browser  -> pty-host: i (input, 1 MB cap re-checked here) / r (resize)
 // plus cockpit-side pushes on the same socket, so the client needs no polling
@@ -14,6 +16,7 @@ import WebSocket from 'ws';
 import { ptyEndpoint } from './bots.mjs';
 import { chatState } from './chat.mjs';
 import { chatStatus } from './chatstatus.mjs';
+import { attachHost } from '../core/inbox.mjs';
 
 const MAX_INPUT_FRAME = 1024 * 1024;
 const CHAT_TICK_MS = 1500;
@@ -22,7 +25,14 @@ const STATUS_TICK_MS = 5000;
 function send(ws, obj) { try { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {} }
 
 export async function bridge(bot, browser, { chat = true } = {}) {
-  const ep = await ptyEndpoint(bot.name);
+  let ep = await ptyEndpoint(bot.name);
+  // a live bg session has no pty-host of its own: start the attach host the
+  // inbox shares (it exits on its own once no client is left)
+  if (!ep && bot.kind === 'bg' && bot.running) {
+    const r = await attachHost(bot.name, 'bg');
+    if (r.err) send(browser, { t: 'err', m: r.err });
+    ep = r.ep || null;
+  }
   let upstream = null;
   let chatTimer = null;
   let chatCursor = 0;

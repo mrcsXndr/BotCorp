@@ -3,6 +3,24 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.4
+
+Send now.
+
+- **`botcorp send` and the cockpit composer type at once.** A message goes
+  into the session as soon as it is alive, working or not; Claude Code
+  queues input that arrives mid-turn, as it does a Telegram message. The
+  inbox waits only while the session is down or starting, and still holds on
+  a hard block (a login, a usage limit).
+- **The cockpit terminal attaches to a background session.** It starts the
+  attach host the inbox shares when none is up, instead of printing "no
+  terminal attached here".
+- **A timestampless transcript row no longer reads as a turn.** Claude Code
+  rewrites `artifact-autoreact-ledger` rows every few minutes, which kept a
+  bot with watched artifacts `working` forever (and its restart and update
+  gates closed). `observe` now takes the newest row timestamp in the last
+  256 KB of a fresh transcript, capped by its mtime.
+
 ## v0.7.3
 
 Truth and gates.

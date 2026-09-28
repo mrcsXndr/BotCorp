@@ -2,8 +2,8 @@
 
 Locked behaviour:
 - `botcorp send <bot> [text | stdin]` queues; one detached drainer per bot types
-  each item in order, and only while observe says the phase is `idle` or the job
-  record says the session awaits its next prompt (`awaiting_prompt`);
+  each item in order as soon as the session is alive, working or not (Claude
+  Code queues input that arrives mid-turn, as it does a Telegram message);
 - a bg session gets an attach host (`pty-host --attach`) that the drainer starts
   and nobody stops: it exits on its own after BOTCORP_ATTACH_IDLE_MIN with no
   client, and the session keeps running; a pty session is typed into through its
@@ -269,8 +269,9 @@ def test_a_warn_block_does_not_hold(box, fake_claude_exe):
 
 
 # The job record's own shapes (test_bg_pin_boot_poller.py). The transcript was
-# written just now and there is no breakpoint: the quiet rule reads `working`,
-# and only `awaiting_prompt` lets the item go out before the ttl.
+# written just now and there is no breakpoint: the quiet rule reads `working`.
+# A working session is typed into at once whatever the record says; only the
+# hard block (a login) holds the item until its ttl.
 @pytest.mark.parametrize("job, activity, awaiting", [
     ({"state": "working", "tempo": "blocked", "needs": "send a prompt to start"}, "working", True),
     ({"tempo": "blocked", "needs": "confirm tg_send.py executed with 'back online after reboot'"}, "working", True),   # WARN
@@ -283,7 +284,7 @@ def test_a_warn_block_does_not_hold(box, fake_claude_exe):
     # ... or a background task still runs
     ({"state": "done", "tempo": "idle", "inFlight": {"tasks": 1, "queued": 0}, "updatedAt": "NOW"}, "working", False),
 ])
-def test_a_session_awaiting_its_next_prompt_takes_it_at_once(box, fake_claude_exe, job, activity, awaiting):
+def test_a_working_session_takes_it_at_once(box, fake_claude_exe, job, activity, awaiting):
     _bg_session(box, fake_claude_exe)
     stamp = {"NOW": time.time(), "OLD": time.time() - 60}
     if job.get("updatedAt") in stamp:
@@ -294,7 +295,7 @@ def test_a_session_awaiting_its_next_prompt_takes_it_at_once(box, fake_claude_ex
     assert (o["activity"], o["phase"], o["awaiting_prompt"]) == (activity, activity, awaiting), o
     r = _cli(box, "send", box["name"], "--wait", "--json", "--ttl", "10s", "right away")
     out = json.loads(r.stdout)
-    if awaiting:
+    if activity != "blocked":
         assert r.returncode == 0 and out["status"] == "delivered", out
         assert _typed(box) == ["right away"]
     else:
@@ -302,13 +303,60 @@ def test_a_session_awaiting_its_next_prompt_takes_it_at_once(box, fake_claude_ex
         assert _typed(box) == [] and _endpoint(box) is None
 
 
-def test_expires_while_the_session_is_working(box, fake_claude_exe):
+def test_typed_while_the_session_is_working(box, fake_claude_exe):
+    # a turn is in flight (written just now, no breakpoint, no job record):
+    # typed at once, never held until the turn ends (the 2026-09-28 stuck queue)
     _bg_session(box, fake_claude_exe)
-    os.utime(box["transcript"], None)            # written just now, no breakpoint: a turn is in flight
-    r = _cli(box, "send", box["name"], "--wait", "--ttl", "2s", "not now")
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert r.stdout.startswith("expired ") and "waited past its ttl (2s)" in r.stdout, r.stdout
-    assert _typed(box) == [] and _endpoint(box) is None
+    os.utime(box["transcript"], None)
+    o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)
+    assert o["phase"] == "working", o
+    r = _cli(box, "send", box["name"], "--wait", "--ttl", "20s", "mid-turn")
+    assert r.returncode == 0 and r.stdout.startswith("delivered "), r.stdout + r.stderr
+    assert _typed(box) == ["mid-turn"]
+
+
+BRIDGE = r"""
+import { EventEmitter } from 'node:events';
+import { pathToFileURL } from 'node:url';
+const { bridge } = await import(pathToFileURL(process.argv[2]).href);
+const ws = new EventEmitter();
+ws.readyState = 1;
+ws.send = (s) => { const m = JSON.parse(s); console.log(m.t); if (m.t === 'hello') process.exit(0); };
+ws.close = () => {};
+await bridge({ name: process.argv[3], kind: 'bg', running: true }, ws, { chat: false });
+setTimeout(() => process.exit(3), 20000);
+"""
+
+
+def test_the_cockpit_terminal_attaches_to_a_live_bg_session(box, fake_claude_exe, tmp_path):
+    # it used to print "no terminal attached here" and never connect
+    _bg_session(box, fake_claude_exe)
+    assert _endpoint(box) is None
+    js = tmp_path / "bridge.mjs"
+    js.write_text(BRIDGE, encoding="utf-8")
+    r = subprocess.run(["node", str(js), str(ASSEMBLY / "cockpit" / "ptybridge.mjs"), box["name"]], capture_output=True, text=True,
+                       timeout=60, cwd=str(ASSEMBLY), env=box["env"])
+    assert r.returncode == 0 and "hello" in r.stdout.split(), r.stdout + r.stderr
+    assert "stopped" not in r.stdout.split()
+    assert _endpoint(box)["mode"] == "attach"
+
+
+def test_a_timestampless_row_does_not_read_as_a_turn(box, fake_claude_exe):
+    # Claude Code rewrites `artifact-autoreact-ledger` rows (no timestamp) every
+    # few minutes: the file mtime is fresh, but the last event is 10 min old
+    _bg_session(box, fake_claude_exe)
+    old = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime(time.time() - 600))
+    rows = [{"type": "user", "message": {"role": "user", "content": "hi"}, "timestamp": old},
+            {"type": "artifact-autoreact-ledger", "entries": []}]
+    box["transcript"].write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+    o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)
+    assert o["phase"] == "idle" and o["quiet_s"] >= 590, o
+    # positive control: a row stamped just now reads as a turn in flight
+    now = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
+    with box["transcript"].open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"type": "assistant", "timestamp": now}) + "\n")
+    o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)
+    assert o["phase"] == "working", o
 
 
 def test_expires_while_the_session_is_down(box):

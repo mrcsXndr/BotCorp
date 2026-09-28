@@ -2905,7 +2905,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
-  send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order once the session is idle)
+  send <bot> [--wait] [--ttl 30m] [--source cli|cockpit|automation] [--json] [text]   (no text: stdin; queued, then typed in order as soon as the session is alive)
   inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
   (start, stop, restart, sync, secrets, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause|disable <name> | resume|enable <name> | run <name>]   (a bot's enable queues for approval)

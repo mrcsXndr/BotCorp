@@ -184,7 +184,7 @@ app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
   res.json(await chat.chatState(bot, after));
 }));
 // Chat send: queued in the bot's inbox by `botcorp send` (the text on stdin,
-// never argv), which types it once the session is idle. The response is the
+// never argv), which types it as soon as the session is alive. The response is the
 // queued item; the composer follows it through GET /inbox.
 app.post('/api/bots/:name/send', withBot(async (req, res, bot) => {
   const text = req.body?.text;
