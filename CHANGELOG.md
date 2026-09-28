@@ -32,6 +32,9 @@ A cockpit you can read at a glance.
   Telegram bubble with the sender and time; the bot's reply (`tg_send.py` or
   the plugin's `reply` tool) renders as a sent bubble with the text only,
   never the chat id or a bookkeeping call.
+- **The usage-limit alert fires at 98%, not 95%.** `USAGE_BLOCK_PCT` in
+  `cockpit/attention.mjs`: a 5 h or 7 d reading at 98% or more puts the bot
+  in "things need you".
 - **Rule: the Telegram reply is the answer.** `harness/rules/telegram.md`
   tells a bot not to repeat it as terminal text; one short line at most.
 

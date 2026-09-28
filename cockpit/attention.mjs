@@ -12,7 +12,7 @@
 //   release             <rt>/state/updates.json pending AND newer than the
 //                       checkout; one item, for the newest
 //   cc_rejected         core/cc.mjs candidate rejected by the canary
-//   usage_blocked       status.json 5 h or 7 d >= 95%
+//   usage_blocked       status.json 5 h or 7 d >= 98%
 //   account             bot.yaml account: already attempted by the newest
 //                       launch, but the session runs another token (a
 //                       fallback or a shared daemon); a switch not yet
@@ -30,7 +30,7 @@ import { chatStatus } from './chatstatus.mjs';
 import { ccStatus } from '../core/cc.mjs';
 
 export const STREAK_BAD = 3;        // plan Q6
-export const USAGE_BLOCK_PCT = 95;
+export const USAGE_BLOCK_PCT = 98;
 const CACHE_MS = 10_000;            // the page polls; the CLI reads behind it are not free
 const SCAN_CACHE_MS = 60_000;
 
