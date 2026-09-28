@@ -3,6 +3,28 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.7.6
+
+Attachments that arrive, and a terminal that fits its box.
+
+- **Attach files in the chat.** A paperclip, a paste (a copied screenshot
+  too) or a drop adds chips above the message: a thumbnail for an image,
+  name and size otherwise, each with a remove button. Send uploads them and
+  the sent bubble keeps them. Images, PDF, text and code files up to 20 MB;
+  anything else is refused with the reason.
+- **They reach the session as files.** Uploads go to the bot's own
+  `.botcorp/uploads` (the folder ignores itself) behind the approval token.
+  The message names each file on an `[attached: <path> (<type>, <size>)]`
+  line, and each image is also pasted on its own, which Claude Code turns
+  into a real image attachment (`[Image #1]`); PDFs and text files stay a
+  path the session opens with Read. The old ungated paste upload is gone.
+- **Terminal attach uses the same path.** +file, a file paste or a drop
+  uploads and puts the path in the prompt; plain-text paste is unchanged.
+- **The terminal's last row sits above the key row** at every size and after
+  a resize or a tab switch.
+- **The message box grows** from one line to eight before it scrolls, with no
+  scrollbar until then.
+
 ## v0.7.5
 
 A cockpit you can read at a glance.
