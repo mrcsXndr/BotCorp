@@ -17,7 +17,12 @@
     button, input, select, textarea { font: inherit; color: inherit; }
     ::selection { background: var(--selection); }
     :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+    [hidden] { display: none !important; }
     .num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+    /* the house icons (the sprite at the top of <body>): bare marks, 1.5 stroke, round
+       joins, each with one solid part (a pivot, a base, a half) as its own detail */
+    .ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+    .ic .solid { fill: currentColor; stroke: none; }
 
     /* ==== bot column ========================================================== */
     aside { background: var(--side); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
@@ -28,6 +33,7 @@
     .bot { position: relative; display: block; width: 100%; text-align: left; background: none; border: 0; border-radius: var(--r-btn); padding: 8px var(--sp-3) 8px 18px; cursor: pointer; color: var(--text-2); transition: background var(--t-fast) var(--ease); }
     .bot:hover { background: var(--hover); }
     .bot.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow-1); }
+    .bot.active .n { font-weight: 700; }
     /* the signature: a chamfered stub on the left edge carries the state */
     .bot::before { content: ''; position: absolute; left: 6px; top: 9px; bottom: 9px; width: 4px; background: var(--text-3); clip-path: var(--stub); }
     .bot.on::before { background: var(--ok); }
@@ -38,9 +44,16 @@
     .bot.on .s { color: var(--ok); }
     .bot.blocked .s { color: var(--warn); }
     .bot.down .s { color: var(--bad); }
-    .side-foot { padding: var(--sp-3) var(--sp-5) var(--sp-4); display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-4); font-size: var(--fs-sm); }
-    .side-foot a, .side-foot .linkbtn { color: var(--text-2); text-decoration: none; background: none; border: 0; padding: 0; cursor: pointer; }
-    .side-foot a:hover, .side-foot .linkbtn:hover { color: var(--text); text-decoration: underline; text-underline-offset: 2px; }
+    /* the machine-wide places: icon + label rows; Approvals turns into the call to act */
+    .nav { padding: var(--sp-2) var(--sp-3) var(--sp-4); display: flex; flex-direction: column; gap: 1px; }
+    .nav-i { display: flex; align-items: center; gap: 10px; width: 100%; height: 34px; padding: 0 var(--sp-3); background: none; border: 0; border-radius: var(--r-btn); color: var(--text-2); font-size: var(--fs-ui); text-decoration: none; text-align: left; cursor: pointer; transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease); }
+    .nav-i:hover { background: var(--hover); color: var(--text); }
+    .nav-i .ic { color: var(--text-3); transition: color var(--t-fast) var(--ease); }
+    .nav-i:hover .ic { color: var(--text); }
+    .nav-i .nav-n { margin-left: auto; font: 600 var(--fs-xs) var(--font-mono); font-variant-numeric: tabular-nums; }
+    .nav-i.due { background: var(--warn-soft); color: var(--text); font-weight: 650; box-shadow: inset 0 0 0 1px var(--warn-line); }
+    .nav-i.due .ic, .nav-i.due .nav-n { color: var(--warn); }
+    .nav-sep { height: var(--sp-2); }
     .list .none { color: var(--text-2); font-size: var(--fs-sm); padding: var(--sp-3) var(--sp-2); line-height: var(--lh-body); }
     .list .none code { font: var(--fs-xs) var(--font-mono); color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: var(--r-xs); padding: 0 4px; }
 
@@ -84,8 +97,14 @@
     .tabs button { background: none; border: 0; padding: 5px 10px; border-radius: var(--r-btn); color: var(--text-2); font-size: var(--fs-sm); cursor: pointer; }
     .tabs button:hover { color: var(--text); background: var(--hover); }
     .tabs button.active { color: var(--text); font-weight: 600; background: var(--surface); box-shadow: var(--shadow-1); }
-    .drawer { display: none; margin: var(--sp-2) var(--sp-6) 0; padding: var(--sp-3) var(--sp-4); background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-card); box-shadow: var(--shadow-1); font-size: var(--fs-sm); max-height: 40vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
+    .drawer { display: none; margin: var(--sp-2) var(--sp-6) 0; padding: var(--sp-4) var(--sp-5); background: var(--surface); border-radius: var(--r-card); box-shadow: var(--shadow-2); font-size: var(--fs-sm); max-height: 44vh; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--line-strong) transparent; }
     .drawer.show { display: block; }
+    /* every drawer opens as a card: what it is, in one line, then the content */
+    .dhead { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--sp-3); margin: 0 0 var(--sp-3); }
+    .dhead b { font-size: var(--fs-lg); font-weight: 650; color: var(--text); }
+    .dhead span { color: var(--text-2); font-size: var(--fs-sm); }
+    .drawer details.raw { margin-top: var(--sp-3); color: var(--text-2); }
+    .drawer details.raw summary { cursor: pointer; width: max-content; font-size: var(--fs-xs); color: var(--text-3); }
     .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px var(--sp-5); }
     .kv .k { color: var(--text-3); }
     .kv .v { font: var(--fs-xs)/1.5 var(--font-mono); color: var(--text-2); word-break: break-all; }
@@ -146,13 +165,9 @@
     .aitem .who { display: block; color: var(--text-3); font-size: var(--fs-xs); margin-bottom: 2px; }
     .acts { flex: none; display: flex; gap: var(--sp-2); }
     .apr { background: var(--task); border: 1px solid var(--line); border-radius: var(--r-card); padding: var(--sp-3) var(--sp-4); margin-top: var(--sp-3); }
-    .apr .top { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px var(--sp-2); }
-    .apr .top .h { font-weight: 650; }
-    .apr .top .dim { color: var(--text-3); font-size: var(--fs-xs); }
     .diff { font: var(--fs-sm)/1.5 var(--font-mono); color: var(--text); background: var(--field); border: 1px solid var(--line); border-radius: var(--r-btn); padding: var(--sp-2) var(--sp-3); margin: var(--sp-2) 0; overflow-wrap: anywhere; }
     .apr details { margin: 0 0 var(--sp-2); font-size: var(--fs-sm); color: var(--text-2); }
     .apr summary { cursor: pointer; width: max-content; }
-    .apr .why { color: var(--text-2); font-size: var(--fs-sm); line-height: 1.5; margin: 0 0 var(--sp-3); }
     .dec { display: flex; align-items: baseline; gap: var(--sp-2); padding: var(--sp-2) 0; border-top: 1px solid var(--line); font-size: var(--fs-sm); flex-wrap: wrap; }
     .dec .out { flex: none; }
     .dec .d { flex: 1 1 200px; min-width: 0; font: var(--fs-xs)/1.5 var(--font-mono); color: var(--text-2); overflow-wrap: anywhere; }
@@ -222,9 +237,25 @@
     .msgs .cempty.err { color: var(--bad); }
     .bubble { max-width: min(78%, 720px); min-width: 0; padding: 10px 13px; border-radius: var(--r-card); font-size: var(--fs-body); line-height: var(--lh-body); overflow-wrap: anywhere; }
     .bubble.user { align-self: flex-end; background: var(--accent-soft); border: 1px solid var(--accent-soft-line); }
-    .bubble.assistant { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--shadow-1); }
+    .bubble.assistant { align-self: flex-start; background: var(--surface); box-shadow: var(--shadow-1); }
     .bubble .tools { display: block; margin-top: 6px; color: var(--text-3); font-size: var(--fs-xs); }
-    .bubble .meta { color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-ui); margin-bottom: 3px; }
+    .bubble .meta { color: var(--text-3); font-size: var(--fs-xs); line-height: var(--lh-ui); margin-bottom: 3px; display: flex; align-items: center; gap: 5px; }
+    .bubble .meta .ic { width: 13px; height: 13px; }
+    /* Telegram, both ways: the plane marks the channel; what the bot sent there sits
+       in its own lane on a cool tone, so it never reads as terminal-only text */
+    .bubble.tg .meta { color: var(--text-2); }
+    .bubble.tg .meta b { font-weight: 600; color: var(--text); }
+    .bubble.tgout { align-self: flex-start; background: var(--sent); border: 1px solid var(--sent-line); }
+    .bubble.tgout .meta { color: var(--text-2); font-weight: 600; }
+    /* a pending approval in the bot's chat: the decision card, on the warn tone */
+    .bubble.apr-chat { align-self: stretch; max-width: min(100%, 720px); font-size: var(--fs-ui); line-height: var(--lh-ui); background: var(--warn-soft); border: 1px solid var(--warn-line); }
+    .apr-h { display: flex; align-items: center; gap: var(--sp-2); color: var(--warn); }
+    .apr-t { font-size: var(--fs-body); font-weight: 650; color: var(--text); }
+    .apr-w { margin: 6px 0 0; color: var(--text-2); line-height: 1.5; }
+    .apr-w b { color: var(--text); font-weight: 600; }
+    .apr-x { margin: var(--sp-2) 0 0; font-size: var(--fs-xs); color: var(--text-3); }
+    .apr-x .diff { margin: 2px 0 0; font-size: var(--fs-xs); background: var(--surface); }
+    .apr-m { margin: var(--sp-2) 0 var(--sp-3); color: var(--text-3); font-size: var(--fs-xs); }
     /* an attachment on a channel message: a labelled line, never a path or file id */
     .att { display: flex; align-items: baseline; gap: var(--sp-2); font-size: var(--fs-ui); line-height: var(--lh-ui); color: var(--text); }
     .att + .att, .att + .md, .md + .att { margin-top: 6px; }
@@ -288,6 +319,13 @@
     .stat .v.bad { color: var(--bad); }
     .stat .r { font: var(--fs-xs) var(--font-mono); color: var(--text-3); }
     .stats.stale .v { color: var(--text-3); }
+    /* context: a bar of used over the compaction ceiling, the numbers beside it */
+    .stat.ctx { align-items: center; }
+    .stat .bar { width: 96px; height: 6px; border-radius: 3px; background: var(--line); overflow: hidden; align-self: center; }
+    .stat .bar .fill { display: block; height: 100%; border-radius: 3px; background: var(--accent); }
+    .stat .bar .fill.warn { background: var(--warn); }
+    .stat .bar .fill.bad { background: var(--bad); }
+    .stats.stale .bar .fill { background: var(--text-3); }
     .compose { display: flex; gap: var(--sp-2); align-items: flex-end; padding-top: var(--sp-2); }
     .compose textarea { flex: 1; resize: none; max-height: 160px; min-height: 42px; background: var(--field); border: 1px solid var(--line-strong); border-radius: var(--r-btn); padding: 10px var(--sp-3); font: var(--fs-body)/1.45 var(--font-sans); color: var(--text); }
     .compose textarea::placeholder { color: var(--text-3); }
@@ -342,7 +380,10 @@
       .bot { width: auto; white-space: nowrap; padding: 6px 10px 6px 16px; }
       .bot::before { left: 5px; top: 8px; bottom: 8px; }
       .bot .s { display: none; }
-      .side-foot { padding: 0 var(--sp-4) var(--sp-2); gap: var(--sp-1) var(--sp-4); }
+      /* the places: one sideways row, like the bot strip */
+      .nav { flex-direction: row; overflow-x: auto; gap: var(--sp-1); padding: 0 var(--sp-2) var(--sp-2); scrollbar-width: none; }
+      .nav-i { width: auto; flex: none; height: 32px; padding: 0 10px; gap: 6px; font-size: var(--fs-sm); }
+      .nav-sep { display: none; }
       header { padding: var(--sp-3) var(--sp-4) var(--sp-2); gap: 6px; }
       header .title { font-size: var(--fs-lg); flex-basis: 100%; margin-bottom: var(--sp-1); }
       header .grow { display: none; }
@@ -375,10 +416,27 @@
   </style>
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <symbol id="i-apr" viewBox="0 0 16 16"><path d="M6.4 2.5h3.2v3l1.6 2.3H4.8l1.6-2.3z"/><path class="solid" d="M2.5 9.3h11v2.6h-11z"/><path d="M4 14h8"/></symbol>
+    <symbol id="i-use" viewBox="0 0 16 16"><path d="M2.5 11.5a5.5 5.5 0 1 1 11 0"/><path d="M8 11.5l2.7-3.6"/><circle class="solid" cx="8" cy="11.5" r="1.4"/></symbol>
+    <symbol id="i-upd" viewBox="0 0 16 16"><path d="M8 2.5v6.8"/><path d="M5.2 6.6L8 9.4l2.8-2.8"/><path class="solid" d="M2.5 11h11v2.5h-11z"/></symbol>
+    <symbol id="i-new" viewBox="0 0 16 16"><path d="M2.5 3h11v7.3H8.2L5 12.8v-2.5H2.5z"/><path d="M8 4.9v3.5M6.25 6.65h3.5"/></symbol>
+    <symbol id="i-guide" viewBox="0 0 16 16"><path d="M8 4.3C6.6 3.3 4.6 2.9 2.5 2.9v8.8c2.1 0 4.1.4 5.5 1.4 1.4-1 3.4-1.4 5.5-1.4V2.9c-2.1 0-4.1.4-5.5 1.4z"/><path class="solid" d="M7.3 4.3h1.4v8.8H7.3z"/></symbol>
+    <symbol id="i-theme" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5.5"/><path class="solid" d="M8 2.5a5.5 5.5 0 0 1 0 11z"/></symbol>
+    <symbol id="i-tg" viewBox="0 0 16 16"><path d="M13.8 2.4L2 7.1l4 1.5 1.5 4.5 2.2-2.8 3.3 2.4z"/><path class="solid" d="M6 8.6l7.8-6.2-5.1 7.3z"/></symbol>
+  </svg>
   <aside>
     <div class="brand"><h1>BotCorp</h1><span class="ver" id="ver"></span></div>
     <div class="list" id="list"><p class="loading">Loading bots</p></div>
-    <div class="side-foot"><a href="/guide.html" target="_blank" rel="noopener">guide</a><a href="#" id="chatLink">new chat</a><a href="#" id="updatesLink">updates</a><a href="#" id="approvalsLink">approvals</a><a href="#" id="usageLink">usage</a><button class="linkbtn" id="themeBtn" title="light, dark, or follow the system">theme: auto</button></div>
+    <nav class="nav" aria-label="cockpit">
+      <button class="nav-i" id="approvalsLink" title="changes a bot asked for that wait on you"><svg class="ic"><use href="#i-apr"/></svg><span>Approvals</span><span class="nav-n" id="aprCount"></span></button>
+      <button class="nav-i" id="usageLink" title="5-hour and 7-day limits per account"><svg class="ic"><use href="#i-use"/></svg><span>Usage</span></button>
+      <button class="nav-i" id="updatesLink" title="harness releases"><svg class="ic"><use href="#i-upd"/></svg><span>Updates</span></button>
+      <div class="nav-sep"></div>
+      <button class="nav-i" id="chatLink" title="a plain Claude in a terminal tab on this machine"><svg class="ic"><use href="#i-new"/></svg><span>New chat</span></button>
+      <a class="nav-i" href="/guide.html" target="_blank" rel="noopener"><svg class="ic"><use href="#i-guide"/></svg><span>Guide</span></a>
+      <button class="nav-i" id="themeBtn" title="light, dark, or follow the system"><svg class="ic"><use href="#i-theme"/></svg><span id="themeLabel">Theme: auto</span></button>
+    </nav>
   </aside>
 
   <main id="main">
@@ -405,13 +463,13 @@
       <div class="stats" id="stats"></div>
     </header>
     <div class="tabs" id="tabs" style="display:none">
-      <button data-drawer="details">details</button>
-      <button data-drawer="pairing" id="tabPairing">pairing</button>
-      <button data-drawer="vault">vault</button>
-      <button data-drawer="runs">runs</button>
-      <button data-drawer="caps">capabilities</button>
+      <button data-drawer="details">Overview</button>
+      <button data-drawer="pairing" id="tabPairing">Telegram access</button>
+      <button data-drawer="vault">Secrets</button>
+      <button data-drawer="runs">Activity</button>
+      <button data-drawer="caps">Automations and tools</button>
     </div>
-    <div class="drawer" id="drawer"></div>
+    <div class="drawer" id="drawer"><div class="dhead" id="dhead"></div><div id="drawerBody"></div></div>
     <div class="notice" id="linkbar"><span id="linkbarText" class="grow"></span><button class="btn primary" id="linkbarBtn">Open</button><button class="x" id="linkbarClose">dismiss</button></div>
     <div class="notice exit" id="exitbar"><span id="exitbarText" class="grow"></span><button class="btn primary" id="exitRestartBtn">Restart</button><button class="x" id="exitbarClose">dismiss</button></div>
 
@@ -531,6 +589,7 @@
   <script src="/vendor/xterm-links/addon-web-links.js"></script>
   <script src="/md.js"></script>
   <script src="/inbox.js"></script>
+  <script src="/cards.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

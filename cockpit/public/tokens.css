@@ -6,16 +6,16 @@
 :root {
   color-scheme: light;
   /* colour roles */
-  --bg: #F7F8F6;              /* the page */
-  --side: #EEF1EC;            /* the bot column */
+  --bg: #F9FBF8;              /* the page */
+  --side: #EAF1EB;            /* the bot column */
   --surface: #FFFFFF;         /* cards, assistant bubbles, menus, modals, buttons */
   --field: #FBFCFB;           /* inputs, code */
-  --task: #F7F8F6;            /* task cards: on the page tone */
-  --hover: rgba(28, 35, 32, .05);
-  --line: #DDE3DC;            /* hairline edges */
+  --task: #F3F7F3;            /* task cards: a step under the surface */
+  --hover: rgba(28, 35, 32, .055);
+  --line: #DFE6DF;            /* hairline edges */
   --line-strong: #C9D1C8;     /* inputs, buttons, chips */
-  --text: #1C2320;
-  --text-2: #56625B;
+  --text: #17201B;
+  --text-2: #4C5A52;
   --text-3: #7F8A83;
   --accent: #2E6A54;          /* the one accent: a deep, quiet green */
   --accent-hover: #255845;
@@ -30,6 +30,8 @@
   --bad-soft: #FCEEEC;
   --bad-line: #EBB8B3;
   --bad-ink: #FFFFFF;         /* text on --bad */
+  --sent: #ECF3F5;            /* a reply the bot sent on Telegram: a cool step off the surface */
+  --sent-line: #CFDFE3;
   --selection: #CFE2D7;
   --scrim: rgba(28, 35, 32, .38);
   /* the terminal: the TUI's own dark surface in both themes */
@@ -45,7 +47,7 @@
   --fs-ui: 13.5px;            /* controls, lists */
   --fs-body: 14.5px;          /* chat text */
   --fs-lg: 16px;              /* modal titles */
-  --fs-xl: 18px;              /* the bot name */
+  --fs-xl: 21px;              /* the bot name */
   --lh-body: 1.6;
   --lh-ui: 1.4;
   /* spacing */
@@ -67,10 +69,11 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --bg: #121513; --side: #0E110F; --surface: #1A1F1C; --field: #151916; --task: #121513;
-    --hover: rgba(228, 233, 229, .05);
-    --line: #29302B; --line-strong: #38413B;
-    --text: #E4E9E5; --text-2: #A3AEA7; --text-3: #76817A;
+    --bg: #141816; --side: #101412; --surface: #1E2521; --field: #171C19; --task: #19201C;
+    --hover: rgba(228, 233, 229, .06);
+    --line: #2C3530; --line-strong: #3D4841;
+    --text: #EAEFEB; --text-2: #B1BCB5; --text-3: #7F8B83;
+    --sent: #1A2527; --sent-line: #2B3C3F;
     --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
     --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
     --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;
@@ -81,10 +84,11 @@
 }
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: #121513; --side: #0E110F; --surface: #1A1F1C; --field: #151916; --task: #121513;
-  --hover: rgba(228, 233, 229, .05);
-  --line: #29302B; --line-strong: #38413B;
-  --text: #E4E9E5; --text-2: #A3AEA7; --text-3: #76817A;
+  --bg: #141816; --side: #101412; --surface: #1E2521; --field: #171C19; --task: #19201C;
+  --hover: rgba(228, 233, 229, .06);
+  --line: #2C3530; --line-strong: #3D4841;
+  --text: #EAEFEB; --text-2: #B1BCB5; --text-3: #7F8B83;
+  --sent: #1A2527; --sent-line: #2B3C3F;
   --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
   --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
   --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;

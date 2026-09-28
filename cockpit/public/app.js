@@ -30,7 +30,7 @@ function saveSettings() { try { localStorage.setItem('cockpit.settings', JSON.st
 
 // Theme (theme.js applied it before first paint): auto -> light -> dark.
 const THEMES = ['auto', 'light', 'dark'];
-function renderThemeBtn() { el('themeBtn').textContent = 'theme: ' + (window.CockpitTheme ? window.CockpitTheme.get() : 'auto'); }
+function renderThemeBtn() { el('themeLabel').textContent = 'Theme: ' + (window.CockpitTheme ? window.CockpitTheme.get() : 'auto'); }
 el('themeBtn').onclick = () => {
   if (!window.CockpitTheme) return;
   window.CockpitTheme.set(THEMES[(THEMES.indexOf(window.CockpitTheme.get()) + 1) % THEMES.length]);
@@ -144,10 +144,14 @@ function renderHeader() {
   st.title = b.down || '';
   renderTelegram(b);
   st.title = b.running && b.blocked ? b.blocked.detail : st.title;
-  // Never Start a live session: a second one means two Telegram pollers.
-  el('startBtn').disabled = b.running;
-  el('stopBtn').disabled = !b.running;
-  el('restartBtn').disabled = !b.running;
+  // Never Start a live session: a second one means two Telegram pollers. A
+  // background bot has no Stop: the daemon heals it, so Restart is the lever.
+  const lc = window.CockpitCards.lifecycleButtons(b);
+  el('startBtn').hidden = !lc.start;
+  el('stopBtn').hidden = !lc.stop;
+  el('restartBtn').hidden = !lc.restart;
+  el('startBtn').classList.toggle('primary', lc.primary === 'start');
+  ['startBtn', 'stopBtn', 'restartBtn'].forEach((id) => { el(id).disabled = false; });
   el('tabPairing').style.display = b.telegram ? '' : 'none';
   location.hash = b.name;
   if (state.drawer) renderDrawer(state.drawer);
@@ -179,31 +183,42 @@ document.querySelectorAll('.tabs button').forEach((t) => {
   };
 });
 
+// Each drawer opens with what it is for, in one line, before any data.
+const DRAWER_HEAD = {
+  details: ['Overview', 'Where the bot lives, how it runs, and what is switched on.'],
+  pairing: ['Telegram access', 'Who may message the bot. New senders wait here for you.'],
+  vault: ['Secrets', 'Keys the bot and its jobs can read. Values never leave the vault.'],
+  runs: ['Activity', 'What the bot\'s scheduled jobs did, newest first.'],
+  caps: ['Automations and tools', 'Jobs the bot runs on its own, and the outside tools it may call.'],
+};
 async function renderDrawer(which) {
   const b = current();
-  const box = el('drawer');
+  const box = el('drawerBody');
   if (!b) return;
-  box.className = 'drawer show';
+  el('drawer').className = 'drawer show';
+  const [title, why] = DRAWER_HEAD[which] || [which, ''];
+  el('dhead').innerHTML = `<b>${esc(title)}</b><span>${esc(why)}</span>`;
   try {
     if (which === 'details') {
       const rows = [
-        ['bot home', b.home], ['config home', b.configDir], ['model', b.model || 'default'],
-        ['telegram', b.telegram ? 'enabled' : 'off'], ['remote control', b.remoteControl ? 'enabled' : 'off'],
-        ['modules', Object.entries(b.modules || {}).filter(([, v]) => v).map(([k]) => k).join(', ') || 'none'],
-        ['daemon state', b.state ? JSON.stringify(b.state) : 'none written yet'],
-        ['session', b.running ? `${b.kind === 'bg' ? 'background' : 'pty'}, pid ${b.pid}${b.startedAt ? `, since ${new Date(b.startedAt).toLocaleString()}` : ''}` : (b.down || 'not running')],
+        ['Session', b.running ? `${b.kind === 'bg' ? 'Background' : 'Terminal (pty)'}, pid ${b.pid}${b.startedAt ? `, since ${new Date(b.startedAt).toLocaleString()}` : ''}` : (b.down || 'Not running')],
+        ['Model', b.model || 'Default'],
+        ['Telegram', b.telegram ? 'On' : 'Off'], ['Remote Control', b.remoteControl ? 'On' : 'Off'],
+        ['Modules', Object.entries(b.modules || {}).filter(([, v]) => v).map(([k]) => k).join(', ') || 'None'],
+        ['Bot folder', b.home], ['Config folder', b.configDir],
       ];
-      if (b.running && b.kind === 'pty') rows.push(['pty host', `pid ${b.hostPid}`]);
-      if (b.poller) rows.push(['telegram poller', `${b.poller.state}: ${POLLER_WHY[b.poller.state] || ''}`]);
-      if (b.blocked) rows.push(['blocked', b.blocked.detail]);
-      if (b.yamlError) rows.push(['bot.yaml', 'PARSE ERROR: ' + b.yamlError, 'bad']);
-      box.innerHTML = `<div class="kv">${rows.map(([k, v, cls]) => `<span class="k">${esc(k)}</span><span class="v${cls ? ' ' + cls : ''}">${esc(v)}</span>`).join('')}</div>`;
+      if (b.running && b.kind === 'pty') rows.push(['Terminal host', `pid ${b.hostPid}`]);
+      if (b.poller) rows.push(['Telegram listener', POLLER_WHY[b.poller.state] || b.poller.state]);
+      if (b.blocked) rows.push(['Waiting on you', b.blocked.detail]);
+      if (b.yamlError) rows.push(['bot.yaml', 'Cannot be read: ' + b.yamlError, 'bad']);
+      box.innerHTML = `<div class="kv">${rows.map(([k, v, cls]) => `<span class="k">${esc(k)}</span><span class="v${cls ? ' ' + cls : ''}">${esc(v)}</span>`).join('')}</div>`
+        + `<details class="raw"><summary>Daemon state (raw)</summary><pre>${esc(b.state ? JSON.stringify(b.state, null, 2) : 'none written yet')}</pre></details>`;
     } else if (which === 'pairing') {
       box.innerHTML = '<p class="loading">Loading pairing</p>';
       const p = await api('GET', `/api/bots/${b.name}/pairing`);
       if (!p.present) { box.innerHTML = `<p class="hint">${esc(p.reason)}</p>`; return; }
       const age = (s) => s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
-      let html = `<p class="hint">policy ${esc(p.dmPolicy || '?')} · allowed: ${p.allowFrom.length ? esc(p.allowFrom.join(', ')) : 'nobody yet'}</p>`;
+      let html = `<div class="kv"><span class="k">Who may write</span><span class="v">${p.dmPolicy === 'allowlist' ? 'Only the people allowed below' : p.dmPolicy === 'pairing' ? 'Anyone who pairs with a code you approve' : p.dmPolicy === 'disabled' ? 'Nobody (direct messages are off)' : esc(p.dmPolicy || 'Unknown')}</span><span class="k">Allowed</span><span class="v">${p.allowFrom.length ? esc(p.allowFrom.join(', ')) : 'Nobody yet'}</span></div>`;
       html += '<p class="hint">Approvals happen only here or in the terminal, never from a chat message.</p>';
       if (!p.pending.length) html += '<p class="hint">No pending senders. Whoever messages the bot gets a pairing code and shows up here.</p>';
       for (const q of p.pending) {
@@ -256,8 +271,8 @@ async function renderDrawer(which) {
       box.innerHTML = '<p class="loading">Loading runs</p>';
       const r = await api('GET', `/api/bots/${b.name}/automations`);
       let html = '';
-      if (r.declared.length) html += `<p class="hint">declared: ${r.declared.map((a) => `${esc(a.name)} (${esc(typeof a.trigger === 'object' ? JSON.stringify(a.trigger) : a.trigger)}${a.kind === 'prompt' ? ', prompt' : ''}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
-      if (!r.present) html += '<p class="hint">No runs recorded yet (the daemon writes them).</p>';
+      if (r.declared.length) html += `<p class="hint">Jobs: ${r.declared.map((a) => `${esc(a.name)} (${esc(fmtTrigger(a.trigger))}${a.kind === 'prompt' ? ', prompt' : ''}${a.enabled ? '' : ', paused'})`).join(' · ')}</p>`;
+      if (!r.present) html += '<p class="hint">No runs yet. Each run shows up here once the daemon has started it.</p>';
       for (const run of r.runs.slice().reverse()) {
         // a prompt automation records `result` (sent / skipped: why / failed: why); a command, its exit code
         const res = typeof run.result === 'string' ? run.result : '';
@@ -549,16 +564,37 @@ function fmtWhen(ts) {
   return d.toDateString() === new Date().toDateString() ? t : `${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${t}`;
 }
 
+function icon(id) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('class', 'ic');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', '#' + id);
+  svg.appendChild(use);
+  return svg;
+}
+
 function bubble(turn) {
   const d = document.createElement('div');
-  d.className = 'bubble ' + (turn.role === 'user' ? 'user' : 'assistant');
-  // Channel messages (Telegram, ...): "Telegram · user · 16:34", then one
-  // labelled line per attachment ("Voice note 0:12", "File report.pdf"). The
-  // server sends labels, never a path or a file id.
+  const tg = turn.meta?.channel === 'telegram';
+  d.className = 'bubble ' + (turn.role === 'tg_out' ? 'tgout' : turn.role === 'user' ? 'user' + (tg ? ' tg' : '') : 'assistant');
+  // A reply the bot sent on Telegram: what the person on the phone read.
+  if (turn.role === 'tg_out') {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.append(icon('i-tg'), document.createTextNode(['Sent on Telegram', fmtWhen(turn.ts)].filter(Boolean).join(' · ')));
+    d.appendChild(m);
+  }
+  // Channel messages (Telegram, ...): "user · 16:34" under the channel's icon,
+  // then one labelled line per attachment ("Voice note 0:12", "File report.pdf").
+  // The server sends labels, never a path or a file id.
   if (turn.meta) {
     const m = document.createElement('div');
     m.className = 'meta';
-    m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts)].filter(Boolean).join(' · ');
+    if (tg) {
+      const who = document.createElement('b');
+      who.textContent = String(turn.meta.user || 'Telegram');
+      m.append(icon('i-tg'), who, document.createTextNode([turn.meta.user ? 'on Telegram' : '', fmtWhen(turn.meta.ts)].filter(Boolean).map((s) => ' · ' + s).join('')));
+    } else m.textContent = [turn.meta.source, turn.meta.user, fmtWhen(turn.meta.ts)].filter(Boolean).join(' · ');
     d.appendChild(m);
     for (const it of turn.meta.media || []) {
       const item = typeof it === 'string' ? { label: it } : it;
@@ -671,7 +707,7 @@ function onChatPush(msg) {
   const box = el('msgs');
   if (msg.available === false) { box.innerHTML = `<div class="cempty err">Chat view unavailable: ${esc(msg.reason || '')}<br>The terminal still works.</div>`; return; }
   if (msg.rotated) { box.innerHTML = '<div class="cempty">New session, reloading</div>'; state.sent = []; return; }
-  if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; return; }
+  if (!msg.hasSession) { if (msg.initial) box.innerHTML = '<div class="cempty">No conversation yet. Say hello below.</div>'; renderChatApprovals(); return; }
   if (msg.initial) box.innerHTML = '';
   const ph = box.querySelector('.cempty');
   if (ph && msg.turns.length) ph.remove();
@@ -684,6 +720,7 @@ function onChatPush(msg) {
     if (turn.role === 'transcript') { addTranscript(box, turn); continue; }
     box.appendChild(turn.role === 'task' ? taskCard(turn) : bubble(turn));
   }
+  renderChatApprovals();
   if (atBottom || msg.initial) box.scrollTop = box.scrollHeight;
 }
 
@@ -736,7 +773,7 @@ el('chatInput').addEventListener('input', function () { this.style.height = 'aut
 /* ---- status chips: pushed by the server (cockpit/chatstatus.mjs) over the same
    socket when they change; ages and reset countdowns are computed here. A value
    the server could not read arrives as {na: why} and shows as n/a. ---- */
-const fmtTok = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
+const { fmtTok } = window.CockpitCards;
 function fmtIn(s) {
   if (s <= 0) return 'now';
   if (s < 60) return '<1m';
@@ -757,17 +794,19 @@ function renderStats() {
   const age = s.ts ? now - s.ts : null;
   const read = age === null ? '' : `status.json written ${fmtAgo(age)}`;
   const out = [];
-  const c = s.context;
-  out.push(c.na ? statHtml('context', 'n/a', '', c.na)
-    : statHtml('context', `${c.pct}%`, `${fmtTok(c.used)} / ${fmtTok(c.window)}`, tip(`${c.used.toLocaleString()} of ${c.window.toLocaleString()} tokens`, `window: ${c.source}`, read), level(c.pct)));
-  for (const [k, name, w] of [['5h', '5-hour', s.fiveHour], ['7d', '7-day', s.sevenDay]]) {
+  // Context as a bar toward the compaction ceiling: the one number that says
+  // how close the session is to losing detail.
+  const c = s.context, cb = window.CockpitCards.contextBar(c);
+  out.push(cb.na ? statHtml('Context', 'n/a', '', cb.na)
+    : `<button class="stat ctx" title="${esc(tip(`${c.used.toLocaleString()} of ${c.window.toLocaleString()} tokens before compaction`, `window: ${c.source}`, read))}"><span class="k">Context</span><span class="bar"><span class="fill${cb.level ? ' ' + cb.level : ''}" style="width:${cb.pct}%"></span></span><span class="v${level(cb.pct)}">${cb.pct}%</span><span class="r">${esc(cb.label)}</span></button>`);
+  for (const [k, name, w] of [['5 h', '5-hour', s.fiveHour], ['7 d', '7-day', s.sevenDay]]) {
     out.push(w.na ? statHtml(k, 'n/a', '', w.na)
       : statHtml(k, `${Math.round(w.pct)}%`, w.resetsAt ? `↻ ${fmtIn(w.resetsAt - now)}` : '', tip(`${w.pct}% of the ${name} limit used`, w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : 'reset time not reported', read), level(w.pct)));
   }
-  const a = s.account;
-  out.push(a.na ? statHtml('account', 'n/a', '', a.na) : statHtml('account', a.email || `token ****${a.tokenLast4}`, '', a.source));
+  const acct = window.CockpitCards.accountName(s.account, state.accounts, current()?.account);
+  out.push(statHtml('Account', acct.name, '', acct.title));
   const m = s.model, e = s.effort;
-  out.push(statHtml('model', m.na ? 'n/a' : m.name, e.na ? '' : e.level,
+  out.push(statHtml('Model', m.na ? 'n/a' : m.name, e.na ? '' : e.level,
     tip(m.na ? `model: ${m.na}` : `model ${m.id || m.name}, from ${m.source}`, e.na ? `effort: ${e.na}` : `effort ${e.level}, from ${e.source}`)));
   box.innerHTML = out.join('');
   box.classList.toggle('stale', age !== null && age > 900);
@@ -1020,11 +1059,12 @@ function renderAttention() {
   el('attnTop').textContent = items.length ? items[0].text : '';
   if (el('attnBg').classList.contains('show')) renderAttnList();
   if (el('approvalsBg').classList.contains('show')) loadApprovals();
+  loadPending();
 }
 function attnActs(a) {
   const b = (label, k, quiet) => `<button class="btn${quiet ? ' quiet' : ''}" data-k="${k}">${label}</button>`;
   switch (a && a.type) {
-    case 'approve': return b('Approve', 'approve') + b('Reject', 'reject', true);
+    case 'approve': return b('Approve', 'approve') + b('Decline', 'reject', true);
     case 'pair': return b('Pair', 'pair') + b('Deny', 'deny', true);
     case 'unlock': return b('Open vault', 'vault');
     case 'open': return b('Open', 'open');
@@ -1060,17 +1100,60 @@ function renderAttnList() {
 el('attnbar').onclick = () => { renderAttnList(); openSheet('attnBg'); };
 el('attnClose').onclick = () => closeSheet('attnBg');
 
-/* ---- approvals sheet: pending widening changes + who decided the recent ones ---- */
-function aprCard(p) {
+/* ---- approvals: one card, in the bot's chat and in the sheet. What is asked,
+   what it widens, the exact change, who asked; Approve or Decline. ---- */
+function aprBody(p, withBot) {
+  const v = window.CockpitCards.approvalView(p);
   // a bulk entry (`tools: + 3 (a, b, c)`) shows its count, the names on demand
-  const bulk = /^(.*?): \+ (\d+) \((.*)\)$/.exec(p.diff || '');
+  const bulk = /^(.*?): \+ (\d+) \((.*)\)$/.exec(v.change);
   const diff = bulk
     ? `<div class="diff">${esc(bulk[1])}: + ${esc(bulk[2])}</div><details><summary>show all ${esc(bulk[2])}</summary>${esc(bulk[3])}</details>`
-    : `<div class="diff">${esc(p.diff)}</div>`;
+    : `<div class="diff">${esc(v.change)}</div>`;
   const d = `data-bot="${esc(p.bot)}" data-id="${esc(p.id)}"`;
-  return `<div class="apr"><div class="top"><span class="h">${esc(p.bot)}</span><span class="dim">asked by ${esc(p.requested_by || 'unknown')} · ${esc(fmtWhen(p.at) || p.at || '')} · <span class="num">${esc(p.id)}</span></span></div>${diff}`
-    + `<p class="why">${esc(p.why)}</p><div class="acts"><button class="btn" data-dec="approve" ${d}>Approve</button><button class="btn quiet" data-dec="reject" ${d}>Reject</button></div></div>`;
+  const meta = [withBot ? `For ${p.bot}` : '', v.asker, fmtWhen(p.at)].filter(Boolean).join(' · ');
+  return `<div class="apr-h"><svg class="ic"><use href="#i-apr"/></svg><span class="apr-t">${esc(v.title)}</span></div>`
+    + `<p class="apr-w"><b>Widens: ${esc(v.widensLabel)}.</b> ${esc(v.widensText)}</p>`
+    + `<div class="apr-x">The exact change${diff}</div>`
+    + `<div class="apr-m">${esc(meta)} · <span class="num" title="approval id">${esc(p.id)}</span></div>`
+    + `<div class="acts"><button class="btn primary" data-dec="approve" ${d}>Approve</button><button class="btn quiet" data-dec="reject" ${d}>Decline</button></div>`;
 }
+function wireDecisions(box) {
+  box.querySelectorAll('[data-dec]').forEach((btn) => {
+    const { bot, id, dec } = btn.dataset;
+    btn.onclick = () => {
+      btn.disabled = true;
+      operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/approvals/${encodeURIComponent(id)}/${dec}`, null, `${dec === 'approve' ? 'Approved' : 'Declined'}. ${bot} has been told.`, () => {
+        loadPending();
+        if (el('approvalsBg').classList.contains('show')) loadApprovals();
+      });
+    };
+  });
+}
+// The selected bot's pending requests sit at the end of its chat, below the
+// message that led to them; the sidebar counts every bot's.
+async function loadPending() {
+  try { state.pending = (await api('GET', '/api/approvals')).pending; } catch { return; }
+  const n = state.pending.length;
+  el('aprCount').textContent = n ? String(n) : '';
+  el('approvalsLink').classList.toggle('due', n > 0);
+  renderChatApprovals();
+}
+function renderChatApprovals() {
+  const box = el('msgs');
+  box.querySelectorAll('.bubble.apr-chat').forEach((n) => n.remove());
+  const mine = (state.pending || []).filter((p) => p.bot === state.selected);
+  if (!mine.length || box.querySelector('.cempty.err')) return;
+  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+  for (const p of mine) {
+    const d = document.createElement('div');
+    d.className = 'bubble apr-chat';
+    d.innerHTML = aprBody(p, false);   // every value escaped in aprBody
+    wireDecisions(d);
+    box.appendChild(d);
+  }
+  if (atBottom) box.scrollTop = box.scrollHeight;
+}
+function aprCard(p) { return `<div class="apr">${aprBody(p, true)}</div>`; }
 function decRow(r) {
   return `<div class="dec"><span class="out ${r.decision === 'approved' ? 'ok' : 'bad'}">${esc(r.decision)}</span><span>by <b>${esc(r.by || 'unknown')}</b></span><span class="dim">${esc(r.bot)} · ${esc(fmtWhen(r.at) || '')}</span>`
     + `<span class="d">${esc(r.path)}: ${esc(r.value)}${r.reason ? ` (${esc(r.reason)})` : ''}</span></div>`;
@@ -1082,10 +1165,7 @@ async function loadApprovals() {
     const { pending, recent } = await api('GET', '/api/approvals');
     box.innerHTML = (pending.length ? pending.map(aprCard).join('') : '<p class="hint">Nothing waiting. A bot that asks for a wider permission shows up here.</p>')
       + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>');
-    box.querySelectorAll('[data-dec]').forEach((btn) => {
-      const { bot, id, dec } = btn.dataset;
-      btn.onclick = () => { btn.disabled = true; operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/approvals/${encodeURIComponent(id)}/${dec}`, null, `${dec === 'approve' ? 'approved' : 'rejected'} ${id}`, loadApprovals); };
-    });
+    wireDecisions(box);
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
 function openApprovals() { el('approvalsList').innerHTML = ''; openSheet('approvalsBg'); loadApprovals(); }
@@ -1159,7 +1239,10 @@ el('usageList').onclick = (e) => {
 
 /* ---- boot ---- */
 api('GET', '/api/engine/version').then((v) => { el('ver').textContent = [v.version, v.commit, v.exposure === 'access' ? 'via\xa0Access' : 'loopback\xa0only'].filter(Boolean).join('\xa0· '); }).catch(() => {});
+// registered accounts, so the header names the account instead of its token
+api('GET', '/api/accounts').then((r) => { state.accounts = r.accounts || []; renderStats(); }).catch(() => {});
 refresh();
 setInterval(refresh, 5000);
+loadPending();
 refreshAttention();
 setInterval(refreshAttention, 5000);
