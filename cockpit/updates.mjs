@@ -1,64 +1,60 @@
-// updates.mjs - read-only view of pending/applied harness releases for the
-// cockpit's Releases panel.
+// updates.mjs - read-only view of the harness releases for the cockpit's
+// Updates page.
 //
 // The daemon's hourly update check WRITES <BOTCORP_HOME>/state/updates.json;
-// the cockpit only reads it. Apply/Skip go through the CLI (`update --apply
-// <tag>` / `update --skip <tag>`), same as every other write path here.
+// the cockpit only reads it. Apply / Skip / Roll back / Cancel go through the
+// CLI (`update --apply|--skip|--rollback|--cancel <tag>`), same as every other
+// write path here. How the releases read against the installed version
+// (cumulative: vN carries every older tag) is core/releases.mjs.
 
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { BOTCORP_HOME, BOTCORP_ROOT } from './bots.mjs';
+import { cmpVersion, isOlder, sortReleases, releaseView } from '../core/releases.mjs';
+import { releaseNotes } from '../core/changelog.mjs';
+
+export { cmpVersion, isOlder, sortReleases, releaseView };
 
 const FILE = path.join(BOTCORP_HOME, 'state', 'updates.json');
-
-function semver(text) {
-  const m = String(text || '').match(/(\d+)\.(\d+)\.(\d+)/);
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
-}
-// a - b over [major, minor, patch]; an unparseable side counts as 0.0.0
-export function cmpVersion(a, b) {
-  const x = semver(a) || [0, 0, 0], y = semver(b) || [0, 0, 0];
-  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] - y[i];
-  return 0;
-}
-// Pending entries the daemon never cleared (updates.json keeps every tag it
-// saw) are not actionable once the checkout is past them. Unknown installed
-// version = nothing is older.
-export function isOlder(tag, installed) { return !!(installed && semver(installed) && cmpVersion(tag, installed) <= 0); }
-
-// Newest first: by release date, then by version when two share a date; an
-// entry with no parseable date goes after every dated one.
-export function sortReleases(releases) {
-  const t = (r) => { const v = Date.parse(r && r.date); return Number.isFinite(v) ? v : null; };
-  return [...releases].sort((a, b) => {
-    const x = t(a), y = t(b);
-    if (x !== y) { if (x === null) return 1; if (y === null) return -1; return y - x; }
-    return cmpVersion(b.tag, a.tag);
-  });
-}
 
 // The checked-out version, as engine.mjs reports it.
 export async function installedVersion() {
   try { return JSON.parse(await fsp.readFile(path.join(BOTCORP_ROOT, 'botcorp.json'), 'utf-8')).version ?? null; } catch { return null; }
 }
 
+const str = (v) => (typeof v === 'string' ? v : '');
+// One release's notes: what the daemon stored ({summary, notes, notes_tail},
+// v0.8.2+), else that tag's section of the installed CHANGELOG.md (every tag up
+// to the installed one is in it). An entry from before v0.8.2 carried only
+// what/why/value (the first line of three bullets): not shown.
+function notesOf(r, changelog) {
+  const stored = Array.isArray(r?.notes) ? r.notes.filter((n) => n && typeof n === 'object').map((n) => ({ title: str(n.title), text: str(n.text) })) : [];
+  if (str(r?.summary) || stored.length) return { summary: str(r.summary), notes: stored, tail: str(r.notes_tail) };
+  const n = changelog ? releaseNotes(changelog, String(r?.tag || '')) : null;
+  return n && n.found ? { summary: n.summary, notes: n.notes, tail: n.tail } : { summary: '', notes: [], tail: '' };
+}
+
 export async function listUpdates() {
   const installed = await installedVersion();
-  let data;
-  try { data = JSON.parse(await fsp.readFile(FILE, 'utf-8')); } catch { return { installed, releases: [] }; }
-  const releases = Array.isArray(data.releases) ? data.releases : [];
-  return {
-    installed,
-    releases: sortReleases(releases.map((r) => ({
-      tag: String(r?.tag ?? ''),
-      sha: typeof r?.sha === 'string' ? r.sha.slice(0, 12) : null,
-      date: typeof r?.date === 'string' ? r.date : null,
-      what: typeof r?.what === 'string' ? r.what : '',
-      why: typeof r?.why === 'string' ? r.why : '',
-      value: typeof r?.value === 'string' ? r.value : '',
-      status: typeof r?.status === 'string' ? r.status : 'pending',
-      older: isOlder(r?.tag, installed),
-      current: !!(installed && semver(installed) && cmpVersion(r?.tag, installed) === 0),
-    })).filter((r) => r.tag)),
-  };
+  let data = null;
+  try { data = JSON.parse(await fsp.readFile(FILE, 'utf-8')); } catch {}
+  const raw = data && Array.isArray(data.releases) ? data.releases : [];
+  let changelog = '';
+  try { changelog = await fsp.readFile(path.join(BOTCORP_ROOT, 'CHANGELOG.md'), 'utf-8'); } catch {}
+  const releases = sortReleases(raw.filter((r) => r && typeof r.tag === 'string' && r.tag).map((r) => ({
+    tag: r.tag,
+    sha: typeof r.sha === 'string' ? r.sha.slice(0, 12) : null,
+    date: str(r.date) || null,
+    status: str(r.status) || 'pending',
+    ...notesOf(r, changelog),
+    included_in: str(r.included_in) || null,
+    rollback: r.rollback === true,
+    fail_reason: str(r.fail_reason) || null,
+    older: isOlder(r.tag, installed),
+    current: !!(installed && isOlder(r.tag, installed) && cmpVersion(r.tag, installed) === 0),
+  })));
+  const view = releaseView(releases, installed);
+  // the installed version with no entry of its own still gets its notes
+  if (view.current && view.current.synthetic) Object.assign(view.current, notesOf({ tag: view.current.tag }, changelog));
+  return { installed, checked_at: data && str(data.checked_at) || null, releases, ...view };
 }
