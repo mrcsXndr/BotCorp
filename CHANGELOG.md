@@ -3,6 +3,59 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.8.1 (unreleased)
+
+Backup accounts with automatic failover and failback, a Settings page, a
+favicon and newest-first releases.
+
+- **Backup accounts.** `backup_accounts` in bot.yaml (up to 5, in order, none
+  equal to `account`) gives a bot a chain: its primary account, then the
+  backups. Set it with `botcorp accounts backups <bot> <id,id|none>` (operator
+  or admin bot; each account must be registered and pass its token check).
+  From a bot, `config set <bot> backup_accounts` waits for approval, like
+  `account`. `accounts remove` refuses while any bot's chain names the account.
+- **Failover.** When the account a session runs on hits a usage limit, or is
+  marked failed (below), the daemon restarts the same conversation (`--resume`) on the
+  first account in the chain that is neither limited nor failed, straight
+  away, and seeds a resume prompt that names the switch and asks the bot to
+  re-arm its background watchers. Every account limited: it waits for the
+  earliest reset. Four switches inside six hours: it holds and logs why.
+- **Failback.** Once the primary is clear and 30 minutes have passed since the
+  last switch (`BOT_FAILOVER_DWELL_MIN`), the daemon moves the session back at
+  its next idle turn. `accounts use` clears a failover in progress, so the
+  operator's choice lands without the wait.
+- **One answer everywhere.** The tick, the launcher and the CLI ask the same
+  engine (`core/failover.mjs`). `accounts failover <bot>` also prints the
+  account a launch would use now and why; `status` has an `accounts:` line
+  with the chain and the active account; each launch records `account_reason`
+  (primary, failover, failback, recover). Automations that declare
+  `oauth_token` follow the active account.
+- **`state/accounts.json` has a writer.** The tick stamps each active
+  account's limit (and clears a passed one), lists the bots on it, and marks an
+  account `failed` when a session cannot log in on it right after a switch or
+  its token could not be read. `accounts add <id>` with a fresh token clears
+  the mark. Every switch is one line in `logs/<bot>/accounts.log`;
+  `harness.failover_notify: true` adds one Telegram line.
+- **Fixed: the reset time written by the daemon.** The limit and the resume
+  prompt's reset time were written as a zone-less local date string; they are
+  ISO 8601 UTC now.
+- **Cockpit: the chain.** The Accounts page edits each bot's backups (order,
+  remove, add, save with an inline confirmation) through
+  `POST /api/bots/:name/accounts`, which runs `accounts use` and
+  `accounts backups` with the cockpit identity and puts the old chain back if a
+  step fails. The Usage page shows each bot's chain; the header marks an
+  account the session runs on as a backup.
+- **Cockpit: a Settings page.** Every bot.yaml value of a bot, defaults
+  included and marked, each saved on its own through `config set`. A change
+  that widens what the bot may do waits for approval, and that bot's pending
+  approvals are shown on the same page to decide on the spot. Lists and the
+  values another page owns (accounts, automations, tools, secrets, Telegram
+  senders) are read-only here. A section on this machine shows the BotCorp
+  version, the Claude Code pin and whether the cockpit is reachable from
+  outside.
+- **Cockpit: releases newest first**, the ones at or below the installed
+  version folded behind "Show N older". **A favicon.**
+
 ## v0.8.0
 
 Usage limits recover on their own, accounts are managed in the cockpit, and a
