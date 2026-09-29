@@ -63,11 +63,16 @@ Step 'plugin-validate' {
 }
 
 Step 'pytest' {
-    $r = Run -Exe $py -Arguments @('-m', 'pytest', (Join-Path $Harness 'tests'), '-q', '-p', 'no:cacheprovider') -TimeoutSec 600
-    $passed = 0
-    if ($r.out -match '(\d+) passed') { $passed = [int]$matches[1] }
-    $ok = ($r.code -eq 0 -and $passed -gt 0)
-    return @{ ok = $ok; detail = "$passed passed, exit=$($r.code) :: $(Tail $r.out 1)" }
+    # Collect only. The full suite (700+ tests, ~20 min on a loaded box) runs in
+    # CI for every tag; inside the 3-minute update budget it can never finish, so
+    # every apply timed out and rolled back (v0.8.0, 2026-09-29). Collection still
+    # imports every test module and the harness code it pulls in, so a broken
+    # install fails here in seconds.
+    $r = Run -Exe $py -Arguments @('-m', 'pytest', (Join-Path $Harness 'tests'), '--collect-only', '-q', '-p', 'no:cacheprovider') -TimeoutSec 90
+    $collected = 0
+    if ($r.out -match '(\d+) tests? collected') { $collected = [int]$matches[1] }
+    $ok = ($r.code -eq 0 -and $collected -gt 0)
+    return @{ ok = $ok; detail = "$collected collected, exit=$($r.code) :: $(Tail $r.out 1)" }
 }
 
 Step 'bash-n' {
