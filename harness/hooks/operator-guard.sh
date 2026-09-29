@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # PreToolUse guard (Bash|PowerShell) — a bot never runs the operator-only
 # verbs: `botcorp approve|reject` (its own queued widening change), `accounts
-# add|remove|seed|use`, `secrets set|delete`, `pair <id>`, `update
+# add|remove|seed|use|backups`, `secrets set|delete`, `pair <id>`, `update
 # --apply|--skip`, start/stop/restart of another bot, `cockpit expose|unexpose`.
 # An admin bot (bot.yaml role: admin, its launch id matching; `botcorp
 # whoami`) may run all of them but the last. The CLI refuses them too
@@ -44,7 +44,7 @@ fi
 # The operator-only verbs an admin bot (bot.yaml role: admin) may run, and
 # start/stop/restart of a bot other than this session's own.
 NEED=""
-if printf '%s\n' "$CMD_N" | grep -qE "${BC}(approve|reject|accounts[[:space:]]+(use|add|remove|seed)|secrets[[:space:]]+(set|delete)|pair[[:space:]]+[a-z0-9_-]+[[:space:]]+[0-9]+|update[[:space:]].*--(apply|skip))([^a-z0-9_-]|$)"; then
+if printf '%s\n' "$CMD_N" | grep -qE "${BC}(approve|reject|accounts[[:space:]]+(use|add|remove|seed|backups)|secrets[[:space:]]+(set|delete)|pair[[:space:]]+[a-z0-9_-]+[[:space:]]+[0-9]+|update[[:space:]].*--(apply|skip))([^a-z0-9_-]|$)"; then
   NEED="operator-only verb"
 else
   OTHER=$(printf '%s\n' "$CMD_N" | grep -oE "${BC}(start|stop|restart)[[:space:]]+_?[a-z0-9][a-z0-9-]*" | awk '{print $NF}' | grep -vxF -- "${BOT_NAME:-}" | head -n 1)
@@ -65,5 +65,5 @@ except Exception:
 " <<<"$WHO" 2>/dev/null)
 [ "$ADMIN" = "yes" ] && exit 0
 
-echo "BLOCKED: $NEED: operator-only (or an admin bot: bot.yaml role: admin). botcorp approve / reject, accounts add|remove|seed|use, secrets set|delete, pair <id>, update --apply|--skip and start/stop/restart of another bot are the operator's. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal. To read the queue: botcorp approvals." >&2
+echo "BLOCKED: $NEED: operator-only (or an admin bot: bot.yaml role: admin). botcorp approve / reject, accounts add|remove|seed|use|backups, secrets set|delete, pair <id>, update --apply|--skip and start/stop/restart of another bot are the operator's. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal. To read the queue: botcorp approvals." >&2
 exit 2

@@ -168,5 +168,16 @@ export function decide({ bot, cfg, state = null, observed = null, status = null,
     return { id, own: isOwn(id), active: id === active, limited: u !== null && u > now, blocked_until: u === null ? null : iso(u), window: (limits[id] && limits[id].window) || null,
       failed: failed[id] || null, bots: known && known[id] && Array.isArray(known[id].bots) ? known[id].bots.map(String) : [] };
   });
-  return { bot, chain: rows, active, limited: live.limited, resetAt: live.resetAt, window: live.window, source: live.source, decision };
+  return { bot, chain: rows, active, limited: live.limited, resetAt: live.resetAt, window: live.window, source: live.source, decision, effective: effectiveOf(chain, active, decision) };
+}
+
+// The account a launch should use now, and why (launch.ps1 records both; the
+// footer and the cockpit show them): a switch the decision calls for; else the
+// active account while it is still in the chain; else the primary (the
+// operator changed the chain under it).
+//   reason: primary | failover (on a backup) | failback | recover
+export function effectiveOf(chain, active, decision) {
+  if (['failover', 'failback', 'recover'].includes(decision.action)) return { id: decision.to, reason: decision.action };
+  if (chain.includes(active)) return { id: active, reason: active === chain[0] ? 'primary' : 'failover' };
+  return { id: chain[0], reason: 'primary' };
 }

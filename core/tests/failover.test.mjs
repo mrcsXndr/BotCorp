@@ -3,7 +3,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { LIMIT_RE, classifyBlock, resetFromText, selectAccount, chainOf, decide, launchToId } from '../failover.mjs';
+import { LIMIT_RE, classifyBlock, resetFromText, selectAccount, chainOf, decide, launchToId, effectiveOf } from '../failover.mjs';
 
 // A live block recorded on 2026-09-29: the job record went blocked at
 // 11:47:47Z with this text; status.json said five_hour 101 %, resets_at
@@ -171,4 +171,17 @@ test('decide: the active account comes from state.account_active, else the launc
   // a fresher observation beats the state file's
   const fresh = decide({ bot: 'alpha', cfg: {}, state: { observed: { alive: true, phase: 'idle', blocked: null } }, observed: observedBlocked, status: { rate_limits: RL }, launchAccount: '', now: NOW });
   assert.equal(fresh.limited, true);
+});
+
+test('effective: the switch the decision calls for, else the active account while in the chain, else the primary', () => {
+  assert.deepEqual(effectiveOf(['a', 'b'], 'a', { action: 'failover', to: 'b' }), { id: 'b', reason: 'failover' });
+  assert.deepEqual(effectiveOf(['a', 'b'], 'b', { action: 'failback', to: 'a' }), { id: 'a', reason: 'failback' });
+  assert.deepEqual(effectiveOf(['a', 'b'], 'a', { action: 'recover', to: 'a' }), { id: 'a', reason: 'recover' });
+  assert.deepEqual(effectiveOf(['a', 'b'], 'b', { action: 'none', deferred: 'dwell' }), { id: 'b', reason: 'failover' });
+  assert.deepEqual(effectiveOf(['a', 'b'], 'a', { action: 'wait' }), { id: 'a', reason: 'primary' });
+  // the operator took the active account out of the chain (or switched the primary): the primary
+  assert.deepEqual(effectiveOf(['c'], 'b', { action: 'none' }), { id: 'c', reason: 'primary' });
+  // decide carries it: on the backup inside the dwell -> stays there
+  const st = { account_active: { id: 'spare', reason: 'failover' }, account_switch_at: new Date(NOW - 5 * 60_000).toISOString(), observed: { alive: true, phase: 'idle', blocked: null } };
+  assert.deepEqual(decide({ bot: 'alpha', cfg: { backup_accounts: ['spare'] }, state: st, launchAccount: 'spare', now: NOW }).effective, { id: 'spare', reason: 'failover' });
 });

@@ -308,8 +308,9 @@ function echoPs(r) {
 
 async function cmdAccounts({ pos, flags }) {
   const [, action, id] = pos;
-  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>] | failover <bot> [--json]');
+  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>] | backups <bot> <id[,id...]|none> [--by <who>] | failover <bot> [--json]');
   if (action === 'use') return accountsUse(id, pos[3], flags);
+  if (action === 'backups') return accountsBackups(id, pos[3], flags);
   if (action === 'failover') return accountsFailover(id, flags);
   if (action === 'list') {
     if (!flags.json) return echoPs(accountsPs(['-Action', 'list']));
@@ -332,6 +333,8 @@ async function cmdAccounts({ pos, flags }) {
   if (action === 'remove') {
     const users = listBots().filter((b) => { try { return loadRawYaml(b).account === id; } catch { return false; } });
     if (users.length) fail(`accounts remove: ${id} is the account of ${users.join(', ')} (botcorp accounts use <bot> none first)`, 2);
+    const backs = listBots().filter((b) => { try { const r = loadRawYaml(b); return Array.isArray(r.backup_accounts) && r.backup_accounts.includes(id); } catch { return false; } });
+    if (backs.length) fail(`accounts remove: ${id} is a backup account of ${backs.join(', ')} (botcorp accounts backups <bot> ... without it first)`, 2);
     const code = echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
     if (code === 0) logAccountsRegistry({ action: 'remove', id, by: decidedBy(flags, who) });
     return code;
@@ -361,8 +364,7 @@ function accountsUse(bot, id, flags) {
     if (!list.ok) fail(list.err);
     const row = list.rows.find((r) => r.id === id);
     if (!row || !row.masked) fail(`accounts use: no account '${id}' with a token (botcorp accounts list)`, 2);
-    const c = checkAccountToken(row);
-    if (!c.ok) fail(`accounts use: account ${id} failed its token check: ${c.detail}`, 2);
+    tokenCheckOrFail(row, who, 'accounts use');
     last4 = String(row.masked).slice(-4);
   }
   const raw = loadRawYaml(bot);
@@ -370,11 +372,10 @@ function accountsUse(bot, id, flags) {
   if (id === 'none') delete raw.account; else raw.account = id;
   writeValidated(bot, raw, 'accounts use');
   const by = decidedBy(flags, who);
-  try {
-    const f = path.join(BOTCORP_HOME, 'logs', bot, 'accounts.log');
-    fs.mkdirSync(path.dirname(f), { recursive: true });
-    fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), by, from, to: id === 'none' ? null : id }) + '\n');
-  } catch {}
+  logBotAccounts(bot, { by, from, to: id === 'none' ? null : id });
+  // the operator's choice replaces a failover in progress: the tick moves the
+  // session to the new primary at its next idle turn, with no dwell to sit out
+  clearAccountActive(bot);
   doSync(bot);
   out(`accounts: ${bot} account ${from ?? 'none'} -> ${id} (by ${by})`);
   out(id === 'none'
@@ -383,11 +384,77 @@ function accountsUse(bot, id, flags) {
   return 0;
 }
 
+// The 1-turn token check before a bot is pointed at an account. A bot session
+// cannot run it (the vault hands it a mask): an admin bot goes ahead on an
+// unchecked token with a note (the daemon marks an account failed when its
+// launch cannot log in); a FAIL stops everyone.
+function tokenCheckOrFail(row, who, verb) {
+  const c = checkAccountToken(row);
+  if (c.ok) return;
+  if (who && who.admin && c.level === 'WARN') { out(`${verb}: account ${row.id} token not checked from a bot session (${c.detail})`); return; }
+  fail(`${verb}: account ${row.id} failed its token check: ${c.detail}`, 2);
+}
+
+// <rt>/logs/<bot>/accounts.log: one JSON line per change of the bot's accounts
+// (accounts use / backups, the daemon's failover and failback).
+function logBotAccounts(bot, rec) {
+  try {
+    const f = path.join(BOTCORP_HOME, 'logs', bot, 'accounts.log');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...rec }) + '\n');
+  } catch {}
+}
+
+// state/<bot>.json account_active / account_switch_at: the daemon's record of a
+// failover. An operator's account choice starts over from the primary.
+function clearAccountActive(bot) {
+  const file = path.join(STATE_DIR, `${bot}.json`);
+  const st = readJson(file);
+  if (!st || !(st.account_active || st.account_switch_at)) return;
+  delete st.account_active;
+  delete st.account_switch_at;
+  try { writeJsonAtomic(file, st); } catch {}
+}
+
+// `accounts backups <bot> <id[,id...]|none>`: bot.yaml `backup_accounts`, the
+// accounts the daemon fails over to, in order (core/failover.mjs). Each must be
+// registered with a token and pass its token check; none may be the primary.
+function accountsBackups(bot, list, flags) {
+  const who = requireOperator('accounts backups', { admin: true, target: `${bot || ''} ${list || ''}`.trim() });
+  requireBot(bot);
+  if (!list) usage('accounts backups <bot> <id[,id...]|none> [--by <who>]');
+  const ids = list === 'none' ? [] : String(list).split(',').map((s) => s.trim()).filter(Boolean);
+  const bad = ids.filter((x) => !NAME_RE.test(x));
+  if (bad.length) usage(`accounts backups: not an account id: ${bad.join(', ')}`);
+  if (ids.length > 5) fail(`accounts backups: at most 5 backup accounts (got ${ids.length})`, 2);
+  if (new Set(ids).size !== ids.length) fail('accounts backups: an account is listed twice', 2);
+  const raw = loadRawYaml(bot);
+  if (raw.account && ids.includes(raw.account)) fail(`accounts backups: ${raw.account} is ${bot}'s primary account (account:), not a backup`, 2);
+  if (ids.length) {
+    const reg = accountsListJson();
+    if (!reg.ok) fail(reg.err);
+    for (const x of ids) {
+      const row = reg.rows.find((r) => r.id === x);
+      if (!row || !row.masked) fail(`accounts backups: no account '${x}' with a token (botcorp accounts list)`, 2);
+      tokenCheckOrFail(row, who, 'accounts backups');
+    }
+  }
+  const from = Array.isArray(raw.backup_accounts) ? raw.backup_accounts : [];
+  if (ids.length) raw.backup_accounts = ids; else delete raw.backup_accounts;
+  writeValidated(bot, raw, 'accounts backups');
+  const by = decidedBy(flags, who);
+  logBotAccounts(bot, { by, backups_from: from, backups_to: ids });
+  doSync(bot);
+  out(`accounts: ${bot} backups ${from.length ? from.join(',') : 'none'} -> ${ids.length ? ids.join(',') : 'none'} (by ${by})`);
+  out(`chain: ${chainOf(loadBotYaml(botYamlPath(bot)), bot).join(' -> ')}   (botcorp accounts failover ${bot} shows what the daemon would do now)`);
+  return 0;
+}
+
 // ---- accounts failover: the chain, the live limit and what the daemon would do (core/failover.mjs) ----
 // Read-only over the files the tick and the launcher read too. A -DryRun tick
 // persists no observe record, so it hands its fresh one over as JSON in
 // BOTCORP_FAILOVER_OBSERVED; the CLI run by hand reads the last tick's.
-function readFailoverInputs(bot) {
+function readFailoverInputs(bot, { checks = true } = {}) {
   const cfg = loadBotYaml(botYamlPath(bot));
   const state = readJson(path.join(STATE_DIR, `${bot}.json`));
   let observed = null;
@@ -396,7 +463,7 @@ function readFailoverInputs(bot) {
   const accountsState = readJson(path.join(STATE_DIR, 'accounts.json'));
   // a cached FAIL of the token check (doctor / accounts use, 24 h) marks a registered account failed up front
   let failedIds = [];
-  if (chainOf(cfg, bot).some((id) => !isOwn(id))) {
+  if (checks && chainOf(cfg, bot).some((id) => !isOwn(id))) {
     const checks = readJson(path.join(STATE_DIR, 'account-checks.json')) || {};
     const list = accountsListJson();
     if (list.ok) failedIds = list.rows.filter((r) => r.fp && checks[r.fp] && checks[r.fp].ok === false && Date.now() - Date.parse(checks[r.fp].at || 0) < ACCOUNT_CHECK_TTL_MS).map((r) => r.id);
@@ -426,6 +493,7 @@ function accountsFailover(bot, flags) {
     none: dec.why ? `nothing to do (${dec.why})` : 'nothing to do',
   }[dec.action] || dec.action;
   out(`  decision: ${text}`);
+  out(`  a launch now would use: ${d.effective.id}${isOwn(d.effective.id) ? ' (the bot\'s own token)' : ''} (${d.effective.reason})`);
   out('  (this verb never writes; the daemon tick acts on the same decision)');
   return 0;
 }
@@ -717,6 +785,7 @@ function isWidening(cfg, segs, value, op = 'set') {
   if (p === 'secrets') return listOf(value).some((k) => !listOf(cfg.secrets).includes(k)) ? 'declares a new vault secret' : null;
   if (p === 'harness.tools_registry') return cfg.harness.tools_registry === 'enforce' && value === 'warn' ? 'relaxes the tools registry enforce -> warn' : null;
   if (p === 'account') return (value ?? null) !== (cfg.account ?? null) ? 'switches the Claude account' : null;
+  if (p === 'backup_accounts') return JSON.stringify(value ?? []) !== JSON.stringify(cfg.backup_accounts ?? []) ? 'switches the Claude account (the backup accounts it fails over to)' : null;
   // any change, either way: only the operator decides who is an admin bot
   if (p === 'role') return (value ?? null) !== (cfg.role ?? null) ? `changes the bot role (${cfg.role ?? 'none'} -> ${value ?? 'none'}; operator only)` : null;
   if (segs[0] === 'automations' && segs[2] === 'enabled' && segs.length === 3) {
@@ -1352,7 +1421,17 @@ function botStatus(bot) {
     status_json: status ? { age_s: statusAgeS, ctx_used_pct: ctxUsedPct, rate_limits: rateLimits, version: status.version ?? null } : null,
     approvals_pending: readApprovals(bot).length,
     automations,
+    accounts: statusAccounts(bot),
   };
+}
+
+// The account chain as `status` shows it (core/failover.mjs decide, files only:
+// no token checks, so status stays cheap). null when bot.yaml cannot be read.
+function statusAccounts(bot) {
+  try {
+    const d = decide(readFailoverInputs(bot, { checks: false }));
+    return { chain: d.chain, active: d.active, effective: d.effective, decision: { action: d.decision.action, to: d.decision.to ?? null, why: d.decision.why || '' } };
+  } catch { return null; }
 }
 
 // sessionEnvVerdict over the config home's session-env.json / launch-env.json
@@ -1396,6 +1475,11 @@ function printStatus(s) {
     out(`  status.json: ${s.status_json.age_s}s ago  ctx used ${pct(s.status_json.ctx_used_pct)}  5h ${pct(rl.five_hour && rl.five_hour.used_percentage)} / 7d ${pct(rl.seven_day && rl.seven_day.used_percentage)}  cc ${s.status_json.version ?? '?'}`);
   } else out('  status.json: absent (written by the statusline once a session renders)');
   out(`  approvals pending: ${s.approvals_pending}`);
+  if (s.accounts) {
+    const a = s.accounts;
+    const row = (r, i) => `${r.id}${i === 0 ? ' (primary' : ' (backup'}${r.limited ? `, limited until ${hhmm(r.blocked_until)}${r.window ? ` ${r.window}` : ''}` : ''}${r.failed ? ', FAILED' : ''})${r.active ? ` ACTIVE${a.effective.reason === 'failover' ? ' failover' : ''}` : ''}`;
+    out(`  accounts: ${a.chain.map(row).join(' -> ')}${a.chain.length === 1 ? ' -> (no backup)' : ''}${['failover', 'failback', 'recover'].includes(a.decision.action) ? `  [${a.decision.action} -> ${a.decision.to}]` : ''}`);
+  }
   if (s.automations.length) out(`  automations: ${s.automations.map((a) => `${a.name}${a.kind === 'prompt' ? ' (prompt)' : ''} ${a.last_result ?? 'no run yet'}`).join(' · ')}`);
 }
 
@@ -3020,6 +3104,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
   accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)
   accounts use <bot> <id|none> [--by <who>]   (operator: run a bot on an account's login; applied at its next idle turn)
+  accounts backups <bot> <id[,id...]|none> [--by <who>]   (operator: up to 5 accounts the daemon fails over to, in order)
   accounts failover <bot> [--json]            (read-only: the account chain, the live usage limit and what the daemon would do)
   whoami [--json]                             (who this process counts as: the operator, an admin bot, or a bot; the operator guard asks it)
   chat [--account <id>] [--cwd <folder>|--generic] [--dry-run]     (plain claude for an account in its own WT tab; a picker without flags)
