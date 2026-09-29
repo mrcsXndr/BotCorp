@@ -341,7 +341,7 @@ config_dir, updated_at}` per account (masked = `****last4` or empty).
 `claude/` (session histories survive). `seed` creates one account per bot
 that already holds an `oauth_token` (id = the bot's name, re-encrypted
 in-process into the account vault's own entropy; accounts that already exist
-are left alone). `remove` refuses while a bot's `account:` names the account.
+are left alone). `remove` refuses (exit 2) while any bot's `account:` or `backup_accounts:` names the account.
 `add`, `remove` and `seed` are operator-only (exit 3 from a bot session);
 `list` stays open. `add` and `remove` append `{at, action, id, by}` to
 `<BOTCORP_HOME>/logs/accounts.log` (`--by` names who asked; the cockpit's
@@ -361,7 +361,24 @@ account's token and falls back to the bot's own when it cannot
 (`launch-env.json` `oauth_source: vault-fallback`, one `launches.log` line),
 and jobs that declare `oauth_token` follow the same account. `config set
 <bot> account ...` from a bot is widening and queues for approval. The
-cockpit's Accounts sheet runs this verb (Use, per bot).
+cockpit's Accounts sheet runs this verb (Use, per bot). It also clears the
+state keys `account_active` and `account_switch_at`, so the operator's choice
+lands at the next idle turn with no failback dwell.
+
+### `accounts backups <bot> <id[,id...]|none> [--by <who>]`
+
+Sets the bot's failover chain: writes `bot.yaml` `backup_accounts` (`none`
+removes the key). The chain is the primary (`account`, or the bot's own token,
+shown as `own:<bot>`) followed by the backups, in order. Each id must be
+registered with a token and pass its token check (cached 24 h). At most 5, no
+duplicates, and none may be the primary: those refusals exit 2. It is an
+operator verb; an admin bot may run it too, and it is audited (exit 3 from a
+non-admin bot). It appends `{at, by, backups_from, backups_to}` to
+`<BOTCORP_HOME>/logs/<bot>/accounts.log`, syncs, and prints the chain. `config
+set <bot> backup_accounts [...]` is widening and queues for approval. What the
+daemon does with the chain: `docs/daemon.md`, "Failover and failback". The
+optional `harness.failover_notify: true` (default `false`) sends one Telegram
+line per switch.
 
 ### `accounts failover <bot> [--json]`
 
@@ -371,10 +388,13 @@ statusline `status.json`, `state/accounts.json` and the cached token checks,
 classifies the block (`limited`, which window, the reset instant and where it
 came from: `status.json`, the clock in the block text, or block + 5 h) and
 prints the account chain with the decision: `would wait until HH:MM (...)`,
-`would restart <bot> on <account> (...)` or `nothing to do`. `--json` gives
-the same as `{bot, chain, active, limited, resetAt, window, source, decision}`.
-The verb never writes; the tick acts on the same decision
-(`docs/daemon.md`, "Usage limit: recover at the reset"). A `-DryRun` tick
+`would restart <bot> on <account> (...)` or `nothing to do`. It also prints
+`a launch now would use: <id> (<reason>)`. `--json` gives the same as `{bot,
+chain, active, limited, resetAt, window, source, decision, effective: {id,
+reason}}`; `effective.reason` is `primary`, `failover` (on a backup),
+`failback` or `recover`. The verb never writes; the tick acts on the same
+decision (`docs/daemon.md`, "Usage limit: recover at the reset" and "Failover
+and failback"). A `-DryRun` tick
 passes what it observed in `BOTCORP_FAILOVER_OBSERVED` (JSON) so the verb
 sees the same session it does.
 
@@ -463,6 +483,7 @@ queues nothing and prints the pending entry's id (`already queued ...`):
 | `tools` (add) | an entry is `kind: integration` or has `secrets` |
 | `harness.tools_registry` | `enforce` -> `warn` |
 | `account` | the value changes (switches the Claude account, `none` included) |
+| `backup_accounts` | the list changes (switches the Claude account: the reason starts "switches the Claude account") |
 | `role` | the value changes, either way, even from the operator's own terminal (see "Admin bots") |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
@@ -652,7 +673,11 @@ secrets unlock <bot>]` line (`{mode, version, locked, detail}` under
 drawer. A bot with declared automations gets an `automations:` line: each
 name, `(prompt)` for a `kind: prompt` entry, and its last result (`sent` /
 `skipped: <reason>` / `failed: ...` for a prompt, `exit N` otherwise);
-`{name, kind, last_result, next_due}` under `automations` in `--json`.
+`{name, kind, last_result, next_due}` under `automations` in `--json`. An
+`accounts:` line shows the account chain, the state of each entry, the ACTIVE
+one and a pending decision, for example `accounts: own:alpha (primary, limited
+until 16:30 5h) ACTIVE -> acc1 (backup)  [failover -> acc1]`. `--json` has
+`accounts: {chain, active, effective, decision}`.
 
 ### `observe <bot>|--all [--json] [--roster]`
 

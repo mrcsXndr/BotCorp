@@ -49,7 +49,7 @@ never secrets:
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
 | `logs/accounts.log` | `botcorp accounts add` / `remove` | one JSON line per registry change: `{at, action, id, by}`, never a token (`logs/<bot>/accounts.log` is the per-bot `accounts use` log) |
-| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `pinned_bg_id` (the bg id BotCorp pinned), `session_blocked` (what a bg session waits on), `cc_roll_at` / `account_roll_at` (the last roll onto the Claude Code pin / the bot's account), `registry_scan_at`, `updated_at`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
+| `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `pinned_bg_id` (the bg id BotCorp pinned), `session_blocked` (what a bg session waits on), `cc_roll_at` / `account_roll_at` (the last roll onto the Claude Code pin / the bot's account), `account_active` (`{id, reason, since, from}`: the account the tick moved the session to, "Failover and failback"), `account_switch_at` (the last switch, for the failback dwell), `account_switches` (the last 10 switches), `registry_scan_at`, `updated_at`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session; it exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no client |
 | `state/<bot>/inbox.jsonl`, `inbox.results.jsonl`, `inbox.drainer` | `botcorp send` + the inbox drainer (core/inbox.mjs) | the bot's message queue, each message's status changes, the live drainer's pid (docs/cli.md `send`) |
 | `state/<bot>.paused` | the CLI (`botcorp stop`) | present = the daemon must NOT cold-start this bot |
@@ -60,7 +60,7 @@ never secrets:
 | `state/launch-request.json` | tick / restart.ps1 | `{bot, requested_at, by}` read by launch-visible.ps1 (ignored after 10 min) |
 | `state/updates.json` | update.ps1 | `{checked_at, head, head_sha, releases:[{tag, sha, date, what[], why[], value[], status}]}`; status `pending` / `apply_requested` / `applied` / `skipped` / `failed` (+ `fail_reason`, `fail_detail`) |
 | `state/harness.json` | update.ps1 -Apply | `{tag, sha, channel, applied_at, schema, migrations}` |
-| `state/accounts.json` | usage tooling | `{"accounts":{"<account>":{"blocked_until":"<iso>","bots":[...]}}}` -> non-critical automations pause |
+| `state/accounts.json` | tick (not `-DryRun`), or the operator by hand | `{"accounts":{"<id>":{"blocked_until","window","source","seen_by","at","failed":{at,why,seen_by}\|null,"bots":[...]}}}`; `bots` = the bots whose ACTIVE account it is -> non-critical automations pause |
 | `state/otel.json` | otel-sink.mjs (optional) | `{port, pid}`; the tick restarts a dead sink |
 | `protect.json` | the operator | `{"pids":[...], "patterns":[...]}`: never killed by the daemon, whatever else says it is ours |
 | `access.json` | the operator (`integrations.access`) | Cloudflare Access `{team, aud}`; without it the cockpit is loopback-only |
@@ -644,7 +644,7 @@ downloads an update (doctor: `cc autoupdater`). `update_restart.py` and TG
 `/update` refuse while `BOTCORP_CLAUDE_EXE` is set ("Claude Code is pinned by
 BotCorp: botcorp cc status"); the tick no longer runs them.
 
-## Account roll
+## Account roll and failover
 
 `bot.yaml` `account:` (set by `botcorp accounts use`) names the Claude login a
 bot runs on. Launch reads that account's `oauth_token`; when it cannot, it
@@ -687,7 +687,67 @@ with the reason `usage-limit reset (...)` and, for a bg bot, writes
 `.claude/.botcorp_resume_prompt` so the first turn says the limit is over and
 where it left off (launch.ps1 consumes it within 60 min). A `-DryRun` tick
 prints `DRYRUN would restart <bot> ...` and writes nothing, not even the
-prompt. Failing over to another account is slice 2 (`backup_accounts`).
+prompt. Moving to another account is "Failover and failback" below.
+
+### Failover and failback (v0.8.1)
+
+`backup_accounts` (up to 5 ids, in order, none equal to `account`) gives a bot
+a chain: `[primary, ...backup_accounts]`. The primary is `account`, or the
+bot's own vault token when `account` is null (the pseudo-id `own:<bot>`). Set
+it with `botcorp accounts backups` (docs/cli.md). With `harness.failover_notify:
+true` each switch also sends one Telegram line through the bot's `tg_send.py`.
+
+For a bot with `backup_accounts`, or whose bg session is stuck (usage-limited
+or blocked on a login), the tick asks `botcorp accounts failover <bot> --json`
+each tick. The decision is one of:
+
+- **failover**: the active account is limited or marked failed. The tick moves
+  to the first chain entry that is neither limited nor failed, at once. It
+  skips the busy check, because the turn cannot proceed. Reason:
+  `account -> acc2 (failover: acc1 limited until HH:MM (5h))`.
+- **recover**: the active account's reset passed and the session is still
+  blocked. It restarts on the same account, reason `usage-limit reset (...)`.
+- **failback**: the session is on a backup, the primary is clear, and at least
+  30 minutes passed since the last switch (`BOT_FAILOVER_DWELL_MIN` overrides).
+  It happens only at an idle turn, through the same gates as the account roll,
+  reason `account -> acc1 (failback)`. Inside the dwell the tick logs
+  `account failback -> acc1 DEFERRED (dwell)`.
+- **wait**: every account is limited or failed. The tick logs
+  `usage-limited: ...; waiting until HH:mm` and restarts nothing. It recovers on
+  whichever account resets first.
+- **hold**: 4 switches inside 6 hours. No switch happens, and the tick logs it.
+
+Every restart keeps the conversation (`--resume`). On a switch the tick writes
+state `account_active {id, reason, since, from}`, `account_switch_at` and
+`account_switches` (the last 10), one line in `logs/<bot>/accounts.log`
+(`{at, by: "daemon", from, to, reason, until}`) and, for a limited or
+login-blocked bg session, the resume prompt `.claude/.botcorp_resume_prompt`.
+It says BotCorp moved the session from account X to Y, and tells the bot to
+re-arm its background tasks: tasks in the old worker die with the restart. A
+`-DryRun` tick writes none of this.
+
+`state/accounts.json` is written by the tick, per bot it asked the engine
+about. The live limit of the active account is stamped. A passed limit is
+cleared once the session on it is no longer blocked. `bots` lists the bots
+whose ACTIVE account it is. An account is marked `failed` when the session on
+it blocks on a login within 10 minutes of a switch onto it, or when its launch
+fell back to the bot's own token (the vault was unreadable). A failed account is
+never picked, and a session on it is moved on. A cached FAIL from the token
+check (`account-checks.json`) counts as failed too. `failed` stays until the
+operator re-adds the token: `accounts add <id>` clears it.
+
+Launch: with `backup_accounts`, `launch.ps1` asks the engine and runs on
+`effective.id`. That is the account a tick switch chose, else the account the
+session is on while it is still in the chain, else the primary. It logs
+`account: <id> (<reason>: <why>)` in `launches.log` and records `account` and
+`account_reason` in `launch-env.json`. Without `backup_accounts` nothing
+changes: launch uses `bot.yaml` `account`.
+
+Limits, stated plainly. The engine never probes an account for headroom, and it
+never retries a rejected call on another account inside a turn. A limit is
+known per account id: the same login registered twice (for example the bot's
+own token also added as a registered account) is two ids to the engine, so use
+one id per login.
 
 ## Harness update (admin-applied, never automatic)
 

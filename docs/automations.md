@@ -98,7 +98,9 @@ streak and the interval/cron schedule resumes from the end of that run.
 3. Not due -> skipped.
 4. The bot's Claude account is usage-blocked (`<rt>/state/accounts.json`
    names the bot with a future `blocked_until`) and the entry is not
-   `critical` -> skipped.
+   `critical` -> skipped. The `bots` lists there follow the ACTIVE account, so
+   a bot that failed over to a clear account keeps its non-critical jobs
+   running (docs/daemon.md, "Failover and failback").
 5. `max_per_day` reached (counter resets at local midnight) -> skipped.
 6. `idle_gated` and the session is busy (its observed phase is `working`,
    `starting` or `unknown`, or observe could not run) -> skipped (retried
@@ -129,7 +131,9 @@ skips `max_per_day`. `-DryRun` logs what would run.
   `secrets:` decrypted in-process from the bot's DPAPI vault and injected as
   `<KEY>` (env names are case-insensitive on Windows; `hub_token` ->
   `HUB_TOKEN`; `oauth_token` also as `CLAUDE_CODE_OAUTH_TOKEN`, the session's
-  name for it). An inherited `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
+  name for it). That `oauth_token` follows the session's ACTIVE account: state
+  `account_active.id` while it is still in the bot's chain, else `bot.yaml`
+  `account`. An inherited `CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY`
   (a machine-wide one is another account's) is removed from every job's env.
   Secrets never touch a command line or a log. Every key an
   automation lists must also be in the bot's top-level `secrets:` list
