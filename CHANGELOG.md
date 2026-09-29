@@ -3,9 +3,12 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## v0.8.0 (unreleased)
+## v0.8.0
 
-Usage limits recover on their own, and accounts are managed in the cockpit.
+Usage limits recover on their own, accounts are managed in the cockpit, and a
+bot can be made an admin. (Backup accounts with automatic failover and
+failback, the Settings page, a favicon and newest-first releases follow in
+v0.8.1.)
 
 - **A limit is recognised as a limit.** A bg session blocked on its 5-hour or
   7-day limit reads as `blocked.kind: limit` in `observe`; `doctor` reports it
