@@ -327,7 +327,7 @@ async function cmdAccounts({ pos, flags }) {
     if (!value) fail('accounts add: empty token');
     const extra = [...(flags.label ? ['-Label', String(flags.label)] : []), ...(flags.plan ? ['-Plan', String(flags.plan)] : [])];
     const code = echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
-    if (code === 0) logAccountsRegistry({ action: 'add', id, by: decidedBy(flags, who) });
+    if (code === 0) { logAccountsRegistry({ action: 'add', id, by: decidedBy(flags, who) }); clearAccountFailed(id); }
     return code;
   }
   if (action === 'remove') {
@@ -413,6 +413,17 @@ function clearAccountActive(bot) {
   if (!st || !(st.account_active || st.account_switch_at)) return;
   delete st.account_active;
   delete st.account_switch_at;
+  try { writeJsonAtomic(file, st); } catch {}
+}
+
+// state/accounts.json `failed`: the daemon never picks a failed account again
+// on its own. A re-added token is the operator's fix, so it clears the mark.
+function clearAccountFailed(id) {
+  const file = path.join(STATE_DIR, 'accounts.json');
+  const st = readJson(file);
+  const e = st && st.accounts && st.accounts[id];
+  if (!e || !e.failed) return;
+  e.failed = null;
   try { writeJsonAtomic(file, st); } catch {}
 }
 

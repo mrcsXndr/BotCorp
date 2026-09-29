@@ -59,7 +59,10 @@
   // a: the status push's account {email} | {tokenLast4, source} | {na};
   // accounts: GET /api/accounts; configured: the bot.yaml account id. The name
   // is the registered account's label; the token's last 4 only go in the title.
-  function accountName(a, accounts, configured) {
+  // reason: why the launch took that account (chat status accountReason):
+  // failover marks the name as a backup; failback / recover only go in the title.
+  const REASON_TEXT = { failover: 'on a backup account after a usage limit', failback: 'back on its primary account after a failover', recover: 'restarted on the same account after the limit reset' };
+  function accountName(a, accounts, configured, reason) {
     if (!a || a.na) return { name: 'n/a', title: (a && a.na) || 'no reading' };
     const list = Array.isArray(accounts) ? accounts : [];
     const last4 = a.tokenLast4 ? String(a.tokenLast4) : '';
@@ -68,9 +71,22 @@
       || (email && list.find((x) => String(x.label || '').toLowerCase() === email))
       || (!last4 && !email && configured && list.find((x) => x.id === configured));
     const tok = last4 ? `token ****${last4}` : '';
-    if (hit) return { name: String(hit.label || hit.id), title: [tok || (hit.masked ? `token ${hit.masked}` : ''), a.source].filter(Boolean).join(' · ') };
-    if (email) return { name: String(a.email), title: String(a.source || '') };
-    return { name: 'Own token', title: [tok, a.source].filter(Boolean).join(' · ') };
+    const why = REASON_TEXT[reason] || '';
+    const tag = (r) => (reason === 'failover' ? { name: `${r.name} (backup)`, title: [why, r.title].filter(Boolean).join(' · ') } : why ? { name: r.name, title: [why, r.title].filter(Boolean).join(' · ') } : r);
+    if (hit) return tag({ name: String(hit.label || hit.id), title: [tok || (hit.masked ? `token ${hit.masked}` : ''), a.source].filter(Boolean).join(' · ') });
+    if (email) return tag({ name: String(a.email), title: String(a.source || '') });
+    return tag({ name: 'Own token', title: [tok, a.source].filter(Boolean).join(' · ') });
+  }
+
+  // The Usage sheet's chain line for one bot row (attention.mjs usageOverview):
+  // '' without backups, else the chain in order and, after a failover, which
+  // account it is on now.
+  function chainLine(r) {
+    const backups = r && Array.isArray(r.backups) ? r.backups.map(String) : [];
+    if (!backups.length) return '';
+    const chain = [r.account_wanted ? String(r.account_wanted) : 'own token', ...backups].join(' → ');
+    const on = r.account_reason === 'failover' && r.account_attempted ? `, now on ${r.account_attempted} after a limit` : '';
+    return `chain: ${chain}${on}`;
   }
 
   // The "used:" line under a bot message: an MCP tool (mcp__<server>__<tool>)
@@ -146,6 +162,6 @@
     };
   }
 
-  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, toolName, toolsLine, WIDENS,
+  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, chainLine, toolName, toolsLine, WIDENS,
     fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX, boardLink };
 })(typeof window !== 'undefined' ? window : globalThis);

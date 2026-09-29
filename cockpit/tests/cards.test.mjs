@@ -99,3 +99,24 @@ test('account: the registered nickname shows; the token last 4 only in the title
   assert.equal(accountName({ email: 'x@example.com', source: 's' }, []).name, 'x@example.com');
   assert.equal(accountName({ na: 'no status yet' }, accounts).name, 'n/a');
 });
+
+test('account: a failover marks the name as a backup; failback and recover only the title', () => {
+  const accounts = [{ id: 'spare', label: 'Spare seat', masked: 'sk-a...1b2c' }];
+  const fo = accountName({ tokenLast4: '1b2c', source: 'injected token' }, accounts, 'main', 'failover');
+  assert.equal(fo.name, 'Spare seat (backup)');
+  assert.match(fo.title, /backup account after a usage limit/);
+  const fb = accountName({ tokenLast4: '1b2c', source: 'injected token' }, accounts, 'spare', 'failback');
+  assert.equal(fb.name, 'Spare seat');
+  assert.match(fb.title, /back on its primary/);
+  assert.equal(accountName({ tokenLast4: '1b2c', source: 's' }, accounts, 'spare', 'primary').title, 'token ****1b2c · s');
+  assert.equal(accountName({ na: 'no status yet' }, accounts, null, 'failover').name, 'n/a');
+});
+
+test('chain line: empty without backups; the chain in order, and where it is after a failover', () => {
+  const { chainLine } = sandbox.CockpitCards;
+  assert.equal(chainLine({ backups: [] }), '');
+  assert.equal(chainLine(null), '');
+  assert.equal(chainLine({ account_wanted: 'main', backups: ['acc1', 'acc2'] }), 'chain: main → acc1 → acc2');
+  assert.equal(chainLine({ account_wanted: null, backups: ['acc1'], account_reason: 'failover', account_attempted: 'acc1' }), 'chain: own token → acc1, now on acc1 after a limit');
+  assert.equal(chainLine({ account_wanted: 'main', backups: ['acc1'], account_reason: 'failback', account_attempted: 'main' }), 'chain: main → acc1');
+});

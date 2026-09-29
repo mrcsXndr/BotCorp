@@ -143,9 +143,13 @@ export async function usageOverview() {
   const list = await bots.listBots();
   const rows = await Promise.all(list.map(async (b) => {
     const s = await chatStatus(b);
-    // account_pending: bot.yaml account: differs from what the newest launch attempted (the tick rolls it at the next idle turn boundary)
+    // account_pending: bot.yaml account: differs from what the newest launch attempted (the tick rolls it at the next idle turn
+    // boundary); a launch the failover engine put on one of the bot's backup_accounts is not a pending switch
+    const att = s.accountAttempted || '';
+    const onBackup = (b.backups || []).includes(att) && ['failover', 'failback', 'recover'].includes(s.accountReason);
     return { bot: b.name, running: b.running, account: s.account || { na: s.error || 'unreadable' }, account_wanted: b.account,
-      account_pending: (b.account || '') !== (s.accountAttempted || ''), fiveHour: s.fiveHour || { na: s.error }, sevenDay: s.sevenDay || { na: s.error }, model: s.model || null, effort: s.effort || null };
+      backups: b.backups || [], account_attempted: s.accountAttempted ?? null, account_reason: s.accountReason || null,
+      account_pending: (b.account || '') !== att && !onBackup, fiveHour: s.fiveHour || { na: s.error }, sevenDay: s.sevenDay || { na: s.error }, model: s.model || null, effort: s.effort || null };
   }));
   const accounts = await cliJson(['accounts', 'list', '--json'], []);
   const groups = (Array.isArray(accounts) ? accounts : []).map((acc) => ({ id: String(acc.id || ''), label: String(acc.label || acc.id || ''), masked: acc.masked ? String(acc.masked) : null, registered: true, bots: [] }));
@@ -201,7 +205,8 @@ export async function accountsOverview() {
   });
   const botList = usage.bots.map((r) => {
     const g = groupOf(r.bot);
-    return { bot: r.bot, running: r.running, account_wanted: r.account_wanted, account_pending: r.account_pending, on: g ? g.label : null, on_registered: !!(g && g.registered) };
+    return { bot: r.bot, running: r.running, account_wanted: r.account_wanted, account_pending: r.account_pending, on: g ? g.label : null, on_registered: !!(g && g.registered),
+      backups: r.backups, account_attempted: r.account_attempted, account_reason: r.account_reason };
   });
   return { at: new Date().toISOString(), accounts, bots: botList };
 }

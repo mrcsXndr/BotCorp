@@ -127,6 +127,7 @@ export async function getBot(name) {
     persona: typeof cfg.persona === 'string' ? cfg.persona.slice(0, 200) : '',
     model: cfg.model || null,
     account: typeof cfg.account === 'string' ? cfg.account : null,   // the Claude account it should run on; null = its own token
+    backups: Array.isArray(cfg.backup_accounts) ? cfg.backup_accounts.map(String).slice(0, 5) : [],   // bot.yaml backup_accounts: the failover chain after `account`
     telegram: !!modules.telegram,
     remoteControl: !!modules.remote_control,
     reviewBoard: await reviewBoard(home, !!modules.review_board),   // null = module off

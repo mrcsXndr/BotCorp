@@ -88,6 +88,13 @@ function attemptedAccount(launches, state) {
   if (!rec) return null;
   return typeof rec.account === 'string' ? rec.account : '';
 }
+// Why the newest launch took that account (launch.ps1 account_reason, v0.8.1):
+// primary | failover | failback | recover; null = not recorded.
+function attemptedReason(launches, state) {
+  const lp = state && state.env_launcher_pid != null ? String(state.env_launcher_pid) : '';
+  const rec = lp ? (launches || {})[lp] : null;
+  return rec && typeof rec.account_reason === 'string' ? rec.account_reason : null;
+}
 
 export function summarizeStatus({ status = null, cfg = null, claudeJson = null, sessions = null, launches = null, state = null, now = Date.now() } = {}) {
   const nowS = now / 1000;
@@ -104,6 +111,7 @@ export function summarizeStatus({ status = null, cfg = null, claudeJson = null, 
     context: contextChip(status, cfg),
     account: accountChip({ claudeJson, sessions, launches, state }),
     accountAttempted: attemptedAccount(launches, state),
+    accountReason: attemptedReason(launches, state),
     fiveHour: limitChip(status, 'five_hour', '5-hour', nowS),
     sevenDay: limitChip(status, 'seven_day', '7-day', nowS),
     model,

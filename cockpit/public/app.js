@@ -978,7 +978,7 @@ function renderStats() {
     out.push(w.na ? statHtml(k, 'n/a', '', w.na)
       : statHtml(k, `${Math.round(w.pct)}%`, w.resetsAt ? `↻ ${fmtIn(w.resetsAt - now)}` : '', tip(`${w.pct}% of the ${name} limit used`, w.resetsAt ? `resets ${new Date(w.resetsAt * 1000).toLocaleString()}` : 'reset time not reported', read), level(w.pct)));
   }
-  const acct = window.CockpitCards.accountName(s.account, state.accounts, current()?.account);
+  const acct = window.CockpitCards.accountName(s.account, state.accounts, current()?.account, s.accountReason);
   out.push(statHtml('Account', acct.name, '', acct.title));
   const m = s.model, e = s.effort;
   out.push(statHtml('Model', m.na ? 'n/a' : m.name, e.na ? '' : e.level,
@@ -1366,7 +1366,8 @@ let usageData = null;
 function acctLine(r) {
   const to = r.account_wanted || 'its own token';
   const sw = r.account_pending ? `<span class="sw">${r.running ? `switching to ${esc(to)} at next idle` : `switches to ${esc(to)} at next start`}</span>` : '';
-  return `<div class="ua">${sw}<button class="btn quiet" data-accounts="${esc(r.bot)}">Switch account</button></div>`;
+  const chain = window.CockpitCards.chainLine(r);
+  return `<div class="ua">${sw}${chain ? `<span class="chn">${esc(chain)}</span>` : ''}<button class="btn quiet" data-accounts="${esc(r.bot)}">Switch account</button></div>`;
 }
 function renderUsage() {
   const { bots, accounts } = usageData;
@@ -1426,10 +1427,37 @@ function botRow(b, accounts) {
   const sel = `<select data-bot="${esc(b.bot)}" aria-label="account for ${esc(b.bot)}">${opts.map((o) => `<option value="${esc(o.id)}"${o.id === cur ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`;
   const sw = b.account_pending ? `<span class="sw">${b.running ? `switching to ${esc(b.account_wanted || 'its own token')} at next idle` : 'switches at next start'}</span>` : '';
   const confirm = acctConfirm && acctConfirm.kind === 'use' && acctConfirm.bot === b.bot
-    ? `<div class="confirm"><span class="grow">Switch <b>${esc(b.bot)}</b> to <b>${acctConfirm.id === 'none' ? 'its own token' : esc(acctConfirm.name)}</b>? Applies between turns; the conversation is kept.</span><button class="btn primary" data-use-yes="${esc(b.bot)}" data-id="${esc(acctConfirm.id)}">Switch</button><button class="btn quiet" data-confirm-no>Keep</button></div>` : '';
+    ? `<div class="confirm"><span class="grow">Switch <b>${esc(b.bot)}</b> to <b>${acctConfirm.id === 'none' ? 'its own token' : esc(acctConfirm.name)}</b>? Applies between turns; the conversation is kept.${(b.backups || []).includes(acctConfirm.id) ? ' It leaves the backups.' : ''}</span><button class="btn primary" data-use-yes="${esc(b.bot)}" data-id="${esc(acctConfirm.id)}">Switch</button><button class="btn quiet" data-confirm-no>Keep</button></div>` : '';
   // "runs on": what the newest launch recorded; a bot never launched has nothing to say
-  const on = b.on_registered ? `runs on ${b.on}` : b.running ? `runs on ${b.on || 'an unrecorded token'}` : '';
-  return `<div class="brow"><span class="ub">${esc(b.bot)}${b.running ? '' : ' <span class="dim">stopped</span>'}</span><span class="on">${esc(on)}</span>${sw}${sel}<button class="btn" data-use="${esc(b.bot)}">Use</button>${confirm}</div>`;
+  const why = ['failover', 'failback', 'recover'].includes(b.account_reason) ? ` (${b.account_reason === 'failover' ? 'backup, after a limit' : b.account_reason})` : '';
+  const on = b.on_registered ? `runs on ${b.on}${why}` : b.running ? `runs on ${b.on || 'an unrecorded token'}${why}` : '';
+  return `<div class="brow"><span class="ub">${esc(b.bot)}${b.running ? '' : ' <span class="dim">stopped</span>'}</span><span class="on">${esc(on)}</span>${sw}${sel}<button class="btn" data-use="${esc(b.bot)}">Use</button>${confirm}${chainRow(b, accounts)}</div>`;
+}
+// A bot's backups: the accounts the daemon moves it to, in order, when the one it
+// runs on hits a usage limit. Edited as a draft; Save sends primary + backups.
+const MAX_BACKUPS = 5;
+let acctDraft = {};   // bot -> [ids] while being edited
+// drawn, not glyphs: a font fallback can colour the arrow characters
+const ICO = (d) => `<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="${d}"/></svg>`;
+const ICO_UP = ICO('M7 11.5V2.5M3 6.5l4-4 4 4'), ICO_DOWN = ICO('M7 2.5v9M3 7.5l4 4 4-4'), ICO_X = ICO('M3.5 3.5l7 7M10.5 3.5l-7 7');
+function chainRow(b, accounts) {
+  const saved = b.backups || [];
+  const list = acctDraft[b.bot] || saved;
+  const primary = b.account_wanted || 'none';
+  const name = (id) => (accounts.find((a) => a.id === id) || { label: id }).label;
+  const items = list.map((id, i) => `<span class="bk"><span class="n">${i + 1}</span>${esc(name(id))}`
+    + `<button type="button" data-bk-up="${i}" data-bot="${esc(b.bot)}" aria-label="move ${esc(id)} up"${i === 0 ? ' disabled' : ''}>${ICO_UP}</button>`
+    + `<button type="button" data-bk-down="${i}" data-bot="${esc(b.bot)}" aria-label="move ${esc(id)} down"${i === list.length - 1 ? ' disabled' : ''}>${ICO_DOWN}</button>`
+    + `<button type="button" data-bk-rm="${i}" data-bot="${esc(b.bot)}" aria-label="remove ${esc(id)} from the backups">${ICO_X}</button></span>`).join('');
+  const free = accounts.filter((a) => a.id !== primary && !list.includes(a.id));
+  const add = list.length < MAX_BACKUPS && free.length
+    ? `<select data-bk-add="${esc(b.bot)}" aria-label="add a backup account for ${esc(b.bot)}"><option value="">${list.length ? 'Add another' : 'Add a backup'}</option>${free.map((a) => `<option value="${esc(a.id)}">${esc(a.label)}</option>`).join('')}</select>` : '';
+  const changed = JSON.stringify(list) !== JSON.stringify(saved);
+  const save = changed ? `<button class="btn" data-bk-save="${esc(b.bot)}">Save backups</button><button class="btn quiet" data-bk-reset="${esc(b.bot)}">Undo</button>` : '';
+  if (!list.length && !add) return '';
+  const confirm = acctConfirm && acctConfirm.kind === 'backups' && acctConfirm.bot === b.bot
+    ? `<div class="confirm"><span class="grow">${list.length ? `When <b>${esc(b.bot)}</b> hits a usage limit, move it to <b>${list.map((id) => esc(name(id))).join('</b>, then <b>')}</b>, and back once its own account is clear?` : `Remove every backup from <b>${esc(b.bot)}</b>? A limit then waits for the reset.`} The conversation is kept.</span><button class="btn primary" data-bk-yes="${esc(b.bot)}">Save</button><button class="btn quiet" data-confirm-no>Keep editing</button></div>` : '';
+  return `<div class="chain"><span class="lbl">${list.length ? 'Backups' : 'No backups'}</span>${items}${add}${save}</div>${confirm}`;
 }
 function renderAccounts() {
   const { accounts, bots } = acctData;
@@ -1450,7 +1478,7 @@ async function loadAccounts() {
     renderAccounts();
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
-function openAccounts(focusBot) { acctData = null; acctConfirm = null; acctFocus = focusBot || null; el('acctErr').textContent = ''; openSheet('accountsBg'); loadAccounts(); }
+function openAccounts(focusBot) { acctData = null; acctConfirm = null; acctDraft = {}; acctFocus = focusBot || null; el('acctErr').textContent = ''; openSheet('accountsBg'); loadAccounts(); }
 el('accountsLink').onclick = (e) => { e.preventDefault(); openAccounts(); };
 el('accountsClose').onclick = () => closeSheet('accountsBg');
 el('accountsList').onclick = (e) => {
@@ -1474,10 +1502,38 @@ el('accountsList').onclick = (e) => {
     b.disabled = true;
     const { useYes: bot, id } = b.dataset;
     const said = id === 'none' ? `${bot} goes back to its own token at its next idle turn` : `${bot} switches to ${id} at its next idle turn`;
-    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/account`, { id }, said, () => { acctConfirm = null; usageData = null; loadAccounts(); });
+    // through the chain route: a new primary that was a backup leaves the backups in the same step
+    const row = acctData.bots.find((x) => x.bot === bot);
+    const backups = (row && row.backups || []).filter((x) => x !== id);
+    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/accounts`, { primary: id, backups }, said, () => { acctConfirm = null; delete acctDraft[bot]; usageData = null; loadAccounts(); });
+  }
+  const draftOf = (bot) => (acctDraft[bot] = acctDraft[bot] || [...((acctData.bots.find((x) => x.bot === bot) || {}).backups || [])]);
+  if ((b = at('[data-bk-up]')) || (b = at('[data-bk-down]'))) {
+    const d = draftOf(b.dataset.bot), i = Number(b.dataset.bkUp ?? b.dataset.bkDown), j = b.dataset.bkUp != null ? i - 1 : i + 1;
+    if (j >= 0 && j < d.length) [d[i], d[j]] = [d[j], d[i]];
+    return renderAccounts();
+  }
+  if ((b = at('[data-bk-rm]'))) { draftOf(b.dataset.bot).splice(Number(b.dataset.bkRm), 1); return renderAccounts(); }
+  if ((b = at('[data-bk-reset]'))) { delete acctDraft[b.dataset.bkReset]; acctConfirm = null; return renderAccounts(); }
+  if ((b = at('[data-bk-save]'))) { acctConfirm = { kind: 'backups', bot: b.dataset.bkSave }; return renderAccounts(); }
+  if ((b = at('[data-bk-yes]'))) {
+    b.disabled = true;
+    const bot = b.dataset.bkYes;
+    const row = acctData.bots.find((x) => x.bot === bot);
+    const backups = draftOf(bot);
+    const said = backups.length ? `${bot} backups: ${backups.join(', ')}` : `${bot} has no backups`;
+    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/accounts`, { primary: (row && row.account_wanted) || 'none', backups }, said, () => { acctConfirm = null; delete acctDraft[bot]; usageData = null; loadAccounts(); });
   }
   const m = at('.meter');
   if (m && m.title) toast(m.title);
+};
+el('accountsList').onchange = (e) => {
+  const s = e.target.closest('[data-bk-add]');
+  if (!s || !s.value) return;
+  const bot = s.dataset.bkAdd;
+  acctDraft[bot] = acctDraft[bot] || [...((acctData.bots.find((x) => x.bot === bot) || {}).backups || [])];
+  if (acctDraft[bot].length < MAX_BACKUPS && !acctDraft[bot].includes(s.value)) acctDraft[bot].push(s.value);
+  renderAccounts();
 };
 el('acctAdd').onsubmit = async (e) => {
   e.preventDefault();

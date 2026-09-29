@@ -309,6 +309,38 @@ app.post('/api/bots/:name/account', withBot(async (req, res, bot) => {
   return decided(res, ['accounts', 'use', bot.name, id, '--by', req.identity], { account: id });
 }));
 
+// A bot's account chain in one go (the Accounts sheet): the primary
+// (`accounts use`) and the ordered backups (`accounts backups`), each through
+// the CLI with the identity as --by. A new primary that is now a backup, or an
+// old primary that becomes one, would fail bot.yaml validation half way, so
+// the backups are cleared first then; a later step failing puts them back.
+app.post('/api/bots/:name/accounts', withBot(async (req, res, bot) => {
+  const { primary, backups } = req.body || {};
+  if (typeof primary !== 'string' || (primary !== 'none' && !bots.NAME_RE.test(primary))) return res.status(400).json({ error: 'primary: a registered account id, or none (the bot\'s own token)' });
+  if (!Array.isArray(backups) || backups.length > 5 || !backups.every((x) => typeof x === 'string' && bots.NAME_RE.test(x))) return res.status(400).json({ error: 'backups: a list of at most 5 account ids' });
+  if (new Set(backups).size !== backups.length || backups.includes(primary)) return res.status(400).json({ error: 'backups: each account once, and not the primary' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { account: primary, backups: backups.join(',') };
+  const cur = { primary: bot.account || 'none', backups: bot.backups || [] };
+  const primaryChanges = primary !== cur.primary;
+  const backupsChange = JSON.stringify(backups) !== JSON.stringify(cur.backups);
+  const clearFirst = primaryChanges && cur.backups.length > 0 && (cur.backups.includes(primary) || backups.includes(cur.primary));
+  const steps = [];
+  const run = async (args) => { const r = await runCli([...args, '--by', req.identity]); steps.push({ args: args.slice(0, 2).join(' '), code: r.code, out: r.out, err: r.err }); return r.code === 0; };
+  let ok = true, usedPrimary = false;
+  if (clearFirst) ok = await run(['accounts', 'backups', bot.name, 'none']);
+  if (ok && primaryChanges) usedPrimary = ok = await run(['accounts', 'use', bot.name, primary]);
+  if (ok && (backupsChange || clearFirst) && backups.length) ok = await run(['accounts', 'backups', bot.name, backups.join(',')]);
+  else if (ok && backupsChange && !clearFirst) ok = await run(['accounts', 'backups', bot.name, 'none']);
+  if (!ok) {   // put the old chain back: the primary first (the backups are cleared or unchanged then), then the backups
+    if (usedPrimary) await run(['accounts', 'use', bot.name, cur.primary]);
+    if (clearFirst) await run(['accounts', 'backups', bot.name, cur.backups.join(',')]);
+  }
+  attention.invalidate();
+  const last = steps.find((s) => s.code !== 0) || steps[steps.length - 1] || { code: 0, out: 'nothing to change', err: '' };
+  res.status(ok ? 200 : last.code === 2 ? 409 : 502).json({ ok, steps: steps.map((s) => ({ step: s.args, code: s.code })), out: last.out, err: last.err });
+}));
+
 app.get('/api/bots/:name/pairing', withBot(async (_req, res, bot) => res.json(await pairing.pairingState(bot.name))));
 app.post('/api/bots/:name/pair', withBot(async (req, res, bot) => {
   if (!operatorGate(req, res)) return;

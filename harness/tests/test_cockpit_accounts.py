@@ -119,3 +119,49 @@ def test_remove_refuses_while_a_bot_names_the_account(ccockpit):
     assert [a["result"] for a in audit] == [403, 409, 200] and audit[-1]["action"] == "remove", audit
     log = [json.loads(l) for l in (rt / "logs" / "accounts.log").read_text(encoding="utf-8").splitlines()]
     assert [(e["action"], e["id"]) for e in log] == [("add", "acc1"), ("remove", "acc1")]
+
+
+def _chain(bots, bot):
+    import yaml
+    cfg = yaml.safe_load((bots / bot / "bot.yaml").read_text(encoding="utf-8"))
+    return cfg.get("account"), cfg.get("backup_accounts")
+
+
+@needs_win_node
+def test_chain_route_sets_primary_and_backups(ccockpit):
+    c, rt, bots, env = ccockpit
+    for acc in ("acc1", "acc2", "acc3"):
+        assert c.call("POST", "/api/accounts", {"id": acc, "token": FAKE}, token=True)[0] == 200
+    _cache_checks(rt, env, ok=True)
+    url = "/api/bots/t/accounts"
+    # shape checks come before the approval token; the gate before any write
+    assert c.call("POST", url, {"primary": "acc1", "backups": ["a1", "a2", "a3", "a4", "a5", "a6"]}, token=True)[0] == 400
+    assert c.call("POST", url, {"primary": "acc1", "backups": ["acc2", "acc2"]}, token=True)[0] == 400
+    assert c.call("POST", url, {"primary": "acc1", "backups": ["acc1"]}, token=True)[0] == 400
+    assert c.call("POST", url, {"primary": "Bad!", "backups": []}, token=True)[0] == 400
+    assert c.call("POST", url, {"primary": "acc1", "backups": ["acc2"]})[0] == 403
+    assert _chain(bots, "t") == (None, None)
+
+    code, r = c.call("POST", url, {"primary": "acc1", "backups": ["acc2", "acc3"]}, token=True)
+    assert code == 200 and r["ok"], r
+    assert _chain(bots, "t") == ("acc1", ["acc2", "acc3"])
+    code, r = c.call("GET", "/api/accounts")
+    assert {b["bot"]: b for b in r["bots"]}["t"]["backups"] == ["acc2", "acc3"]
+
+    # the new primary was a backup and the old primary becomes one: cleared first, no half-way failure
+    code, r = c.call("POST", url, {"primary": "acc2", "backups": ["acc1"]}, token=True)
+    assert code == 200 and r["ok"], r
+    assert [s["step"] for s in r["steps"]] == ["accounts backups", "accounts use", "accounts backups"]
+    assert _chain(bots, "t") == ("acc2", ["acc1"])
+
+    # an unknown backup after a primary change: the CLI refuses (exit 2 -> 409) and the whole chain is put back
+    code, r = c.call("POST", url, {"primary": "acc1", "backups": ["acc3", "nope"]}, token=True)
+    assert code == 409 and not r["ok"] and "nope" in r["err"], r
+    assert _chain(bots, "t") == ("acc2", ["acc1"])
+
+    # nothing to change is fine; backups [] removes them
+    assert c.call("POST", url, {"primary": "acc2", "backups": ["acc1"]}, token=True)[1]["steps"] == []
+    assert c.call("POST", url, {"primary": "acc2", "backups": []}, token=True)[0] == 200
+    assert _chain(bots, "t") == ("acc2", None)
+    log = [json.loads(l) for l in (rt / "logs" / "t" / "accounts.log").read_text(encoding="utf-8").splitlines()]
+    assert all(e["by"] == "local" for e in log), log

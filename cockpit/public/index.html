@@ -201,8 +201,9 @@
     /* switch account: a pending switch in --warn text; the quiet button opens the Accounts sheet */
     .urow .ua { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); }
     .urow .ua .sw { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; }
+    .urow .ua .chn { color: var(--text-2); font-size: var(--fs-xs); overflow-wrap: anywhere; }
     .urow .ua .btn { padding: 0 var(--sp-2); margin-left: calc(-1 * var(--sp-2)); }   /* the quiet label lines up with the bot name */
-    .urow .ua .sw + .btn { margin-left: 0; }
+    .urow .ua .sw + .btn, .urow .ua .chn + .btn { margin-left: 0; }
 
     /* accounts: one row per registered account (state as a coloured word, a pair of
        meters, the bots on it), then one row per bot with the account it runs on.
@@ -229,6 +230,14 @@
     .brow .sw { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; }
     .brow select { max-width: 200px; }
     .brow .confirm { flex-basis: 100%; margin-top: 0; }
+    .brow .chain { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); }
+    .brow .chain .lbl { color: var(--text-2); }
+    .brow .chain .bk { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-btn); font-size: var(--fs-sm); }
+    .brow .chain .bk .n { color: var(--text-3); margin-right: 6px; font-variant-numeric: tabular-nums; }
+    .brow .chain .bk button { display: inline-grid; place-items: center; min-width: 28px; height: 28px; padding: 0; border: 0; background: none; color: var(--text-2); font-size: var(--fs-sm); cursor: pointer; border-radius: 4px; }
+    .brow .chain .bk button:hover:not(:disabled) { color: var(--text); background: var(--task); }
+    .brow .chain .bk button:disabled { opacity: .35; cursor: default; }
+    .brow .chain select { max-width: 170px; }
     .acct-add .field { margin-top: var(--sp-2); }
     .acct-add .field input { flex: 1 1 140px; }
     .acct-add .field input[type="password"] { flex: 1 1 260px; }
@@ -479,6 +488,7 @@
       .confirm .btn { flex: 1 1 0; }
       .brow .ub { flex-basis: 100%; }
       .brow select { flex: 1 1 140px; max-width: none; height: 44px; }
+      .brow .chain .bk button { min-width: 36px; height: 36px; }
       .acct-add .field input, .acct-add .field input[type="password"] { flex-basis: 100%; }
     }
   </style>

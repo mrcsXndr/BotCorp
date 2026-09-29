@@ -265,6 +265,17 @@ def test_accounts_use_clears_a_failover_in_progress(fbox):
     assert "account_active" not in after and "account_switch_at" not in after and after["account_switches"] == st["account_switches"]
 
 
+@needs_win_node
+def test_readding_a_token_clears_the_failed_mark(fbox):
+    rt, bots, env, blocked = fbox
+    acc = {"accounts": {"acc1": {"blocked_until": None, "failed": {"at": "2026-09-29T12:00:00Z", "why": "login", "seen_by": "fx"}, "bots": []},
+                        "acc2": {"blocked_until": None, "failed": {"at": "2026-09-29T12:00:00Z", "why": "login", "seen_by": "fx"}, "bots": []}}}
+    (rt / "state" / "accounts.json").write_text(json.dumps(acc), encoding="utf-8")
+    _add_account(env, "acc1")
+    after = json.loads((rt / "state" / "accounts.json").read_text(encoding="utf-8"))["accounts"]
+    assert after["acc1"]["failed"] is None and after["acc2"]["failed"]["why"] == "login"
+
+
 @needs_node
 def test_status_shows_the_chain(fbox):
     rt, bots, env, blocked = fbox
