@@ -3,6 +3,49 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.8.3
+
+Roll back from the cockpit, readable release notes, switch harness skills,
+agents and tools off per bot, and pair a browser once instead of pasting the
+approval token.
+
+- **Updates that read properly.** The Updates page shows each release's
+  summary and titled notes, from the daemon's record or the installed
+  CHANGELOG.md, instead of "(none given)". Releases read cumulatively against
+  the installed version: newer ones newest first (the one to apply is the only
+  primary button, the ones below it come with it), the installed one, then
+  the history.
+- **Roll back and cancel.** `botcorp update --rollback <tag>` asks the daemon
+  to check out an older release; `update --cancel <tag>` withdraws a request.
+  One request at a time: the newest wins. Both are operator-only (an admin bot
+  may run them) and are buttons on the Updates page (`POST
+  /api/updates/:tag/rollback|cancel`).
+- **Switch harness skills and agents off per bot.** `harness.disable:
+  [skill:<name>, agent:<name>]` in bot.yaml: sync hides the skill and denies
+  the agent (`Agent(botcorp:<name>)`). validate rejects anything that is not a
+  harness skill or agent.
+- **Switch a registered tool off.** `enabled: false` on a `tools:` entry makes
+  sync deny the session any Bash command naming its path (a policy, not a
+  sandbox). `config set <bot> tools.<name>.enabled true` from a bot queues for
+  approval when the tool is an integration or holds secrets.
+- **Guard hooks stay guarded.** Adding a `-guard` hook to
+  `harness.hooks_disable` from a bot queues for approval; vault-guard and
+  operator-guard are refused outright instead of queueing a change that could
+  never apply.
+- **Tool inventory.** `botcorp tools <bot> inventory [--json]` and `GET
+  /api/bots/:name/inventory` list everything a bot can use in three groups
+  (BotCorp harness, the bot's own, third-party), each item with whether it is
+  on and how it is switched. The Settings route takes a list of names for
+  `harness.disable` and `harness.hooks_disable`.
+- **Pair a browser once (loopback).** `botcorp cockpit pair` prints a one-time
+  code valid for 10 minutes; entering it in the cockpit gives that browser an
+  HttpOnly operator cookie for 90 days, so approvals need no token. Five wrong
+  codes lock pairing for 10 minutes. `botcorp cockpit unpair <id|--all>` and
+  the `/api/pair/devices` routes revoke. No bot can pair, an admin bot
+  included: the CLI refuses, the operator guard blocks `cockpit pair|unpair`,
+  and the vault guard blocks the key and the pairing file. The approval token
+  and Cloudflare Access work as before.
+
 ## v0.8.2
 
 Updates can install again.
