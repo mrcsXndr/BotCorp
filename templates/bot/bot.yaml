@@ -29,6 +29,7 @@ harness:
   resume_prompt: null             # every other unattended bg launch (daemon cold-start / restart, botcorp start|restart): null = one short turn (re-arm watchers, carry on, reply "ok"); '' = off
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
   hooks_disable: []               # hook names = harness/hooks/<name>.sh without .sh, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
+  disable: []                     # harness skills / agents this bot does not get: [skill:weekly, agent:fable]; sync hides the skill and denies the agent
   tools_registry: warn            # warn | enforce: doctor grades an executable no tools: entry covers WARN or FAIL (tools: below)
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
     telegram: false               # the official Telegram plugin; false = cockpit/terminal-only bot

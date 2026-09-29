@@ -31,8 +31,8 @@
     if (p === 'secrets' || /^automations\.[^.]+\.secrets$/.test(p)) return 'secrets';
     if (/^integrations\.telegram\.(allow_from|dm_policy)$/.test(p)) return 'senders';
     if (p === 'account') return 'account';
-    if (p === 'permissions' || p === 'harness.modules.remote_control' || p === 'harness.tools_registry') return 'exposure';
-    if (p === 'tools') return 'tools';
+    if (p === 'permissions' || p === 'harness.modules.remote_control' || p === 'harness.tools_registry' || p === 'harness.hooks_disable') return 'exposure';
+    if (p === 'tools' || /^tools\.[^.]+\.enabled$/.test(p)) return 'tools';
     if (p === 'automations' || /^automations\.[^.]+\.enabled$/.test(p)) return 'jobs';
     return 'other';
   }

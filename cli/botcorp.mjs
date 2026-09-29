@@ -720,6 +720,11 @@ function splitPath(dotted) {
 // addressed by name or index and take a known field.
 function checkKnownPath(segs, { forGet = false } = {}) {
   if (segs[0] === 'name' && !forGet) fail('config set: renaming a bot is not supported here (the folder and the config home would have to move)');
+  // a registry entry's switch (DEFAULTS.tools is null: the list is the bot's own)
+  if (segs[0] === 'tools' && segs.length > 1) {
+    if (segs.length === 3 && segs[2] === 'enabled') return;
+    fail(`config: unknown path ${segs.join('.')} (tools.<name>.enabled)`);
+  }
   let d = DEFAULTS;
   for (let i = 0; i < segs.length; i++) {
     const k = segs[i];
@@ -755,10 +760,11 @@ function setDeep(obj, segs, value) {
     const k = segs[i];
     if (Array.isArray(cur)) {
       const el = findElem(cur, k);
-      if (!el) fail(`config: no automation '${k}' in bot.yaml`);
+      if (!el) fail(`config: no ${segs[0] === 'tools' ? 'tools entry' : 'automation'} '${k}' in bot.yaml`);
       cur = el;
     } else {
       if (i === 0 && k === 'automations' && !Array.isArray(cur[k])) fail(`config: no automation '${segs[1]}' in bot.yaml`);
+      if (i === 0 && k === 'tools' && !Array.isArray(cur[k])) fail(`config: no tools entry '${segs[1]}' in bot.yaml (the registry is off)`);
       if (cur[k] === undefined || cur[k] === null) cur[k] = {};
       if (!isObj(cur[k]) && !Array.isArray(cur[k])) fail(`config: ${segs.slice(0, i + 1).join('.')} is a scalar, cannot descend`);
       cur = cur[k];
@@ -803,6 +809,18 @@ function isWidening(cfg, segs, value, op = 'set') {
   if (segs[0] === 'automations' && segs[2] === 'enabled' && segs.length === 3) {
     const el = findElem(cfg.automations, segs[1]);
     return value === true && el && el.enabled === false ? `enables automation ${el.name}` : null;
+  }
+  if (segs[0] === 'tools' && segs[2] === 'enabled' && segs.length === 3) {
+    const el = Array.isArray(cfg.tools) ? findElem(cfg.tools, segs[1]) : null;
+    return value === true && el && el.enabled === false && isWideningTool(el) ? `enables tool ${el.name} (an integration or secret-bearing tool)` : null;
+  }
+  // a guard hook switched off lets the bot do what it blocked (vault-guard and operator-guard cannot be)
+  if (p === 'harness.hooks_disable') {
+    // not queued: applySet's validate() refuses them outright, so the request fails now
+    if (listOf(value).some((h) => h === 'vault-guard' || h === 'operator-guard')) return null;
+    const cur = listOf(cfg.harness.hooks_disable);
+    const guards = listOf(value).filter((h) => !cur.includes(h) && /-guard$/.test(h));
+    return guards.length ? `switches off guard hook ${guards.join(', ')}` : null;
   }
   if (p === 'integrations.telegram.allow_from') {
     const cur = listOf(cfg.integrations.telegram.allow_from);

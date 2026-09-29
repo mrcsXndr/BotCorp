@@ -8,6 +8,9 @@
 //                                                     permissions, model, effortLevel,
 //                                                     statusLine, autoMemoryDirectory,
 //                                                     disabledSkills, autoContinueAtUsageLimit.
+//                                                     harness.disable: skill:<x> joins disabledSkills,
+//                                                     agent:<x> and a tools: entry with enabled: false
+//                                                     become permissions.deny rules.
 //                                                     NO hooks (the plugin has them),
 //                                                     NO enabledPlugins ever.
 //   bots/<name>/.claude-<name>/settings.json          MERGED user settings: skipDangerousModePermissionPrompt
@@ -127,14 +130,25 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     // an isolated worktree would detach it from memory/ and the config home.
     worktree: { bgIsolation: 'none' },
   };
-  if (Array.isArray(cfg.harness.skills)) {
+  // harness.disable: skill:<x> is hidden like a skill left out of harness.skills;
+  // agent:<x> gets a deny rule, so the session cannot start that subagent.
+  const off = (kind) => (Array.isArray(cfg.harness.disable) ? cfg.harness.disable.map(String) : []).filter((x) => x.startsWith(`${kind}:`)).map((x) => x.slice(kind.length + 1));
+  if (Array.isArray(cfg.harness.skills) || off('skill').length) {
     // hidden = every harness skill not in the list, in the plugin namespace
     const skillsDir = path.join(botcorpRoot, 'harness', 'skills');
     let all = [];
     try { all = fs.readdirSync(skillsDir, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => d.name); } catch {}
-    const keep = new Set(cfg.harness.skills.map(String));
+    const keep = new Set(Array.isArray(cfg.harness.skills) ? cfg.harness.skills.map(String) : all);
+    for (const s of off('skill')) keep.delete(s);
     settings.disabledSkills = all.filter(s => !keep.has(s)).sort().map(s => `botcorp:${s}`);
   }
+  // A registry entry with enabled: false: the session may not run it (a Claude
+  // Code deny rule on any Bash command naming its path; a policy, not a sandbox).
+  const deny = [
+    ...off('agent').sort().map((a) => `Agent(botcorp:${a})`),
+    ...(Array.isArray(cfg.tools) ? cfg.tools : []).filter((t) => t && t.enabled === false && typeof t.path === 'string').map((t) => `Bash(*${t.path.replace(/\\/g, '/').replace(/^\.\//, '')}*)`).sort(),
+  ];
+  if (deny.length) settings.permissions.deny = [...settings.permissions.deny, ...deny];
   return settings;
 }
 

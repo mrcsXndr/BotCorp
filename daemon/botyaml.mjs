@@ -22,6 +22,15 @@ export function hookNames() {
     return fs.readdirSync(HOOKS_DIR).filter((f) => f.endsWith('.sh') && !f.startsWith('_') && f !== 'py.sh').map((f) => f.slice(0, -3)).sort();
   } catch { return []; }
 }
+// harness.disable takes `skill:<name>` / `agent:<name>`: a harness skill folder
+// or agent file, read from disk for the same reason.
+const HARNESS_DIR = path.join(HOOKS_DIR, '..');
+export function harnessSkillNames() {
+  try { return fs.readdirSync(path.join(HARNESS_DIR, 'skills'), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort(); } catch { return []; }
+}
+export function harnessAgentNames() {
+  try { return fs.readdirSync(path.join(HARNESS_DIR, 'agents')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort(); } catch { return []; }
+}
 
 export const DEFAULTS = {
   name: null,
@@ -43,6 +52,7 @@ export const DEFAULTS = {
     resume_prompt: null,            // the prompt every other UNATTENDED bg launch (daemon cold-start / restart, botcorp start|restart) seeds: null = RESUME_PROMPT_DEFAULT (one trivial turn); '' = off; {now} / {reason} are filled in
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
+    disable: [],                    // harness skills / agents this bot does not get: skill:<name> | agent:<name> (sync: disabledSkills, an Agent(botcorp:<name>) deny rule)
     tools_registry: 'warn',         // warn | enforce: how doctor grades an executable no `tools:` entry covers
     failover_notify: false,         // one Telegram line (this bot's tg_send.py) when the daemon moves the session to another account; accounts.log always has it
     admin_notify: false,            // role: admin only: one Telegram line (this bot's own tg_send.py) per admin action, on top of the audit log
@@ -85,7 +95,8 @@ export const DEFAULTS = {
   role: null,
   // The capability registry: every executable under tools/ and scripts/ the bot
   // runs, one entry each ({name, path, kind: cli|monitor|integration|lib,
-  // purpose, secrets, owner}; a glob path only for lib|cli). null = registry
+  // purpose, secrets, owner, enabled}; a glob path only for lib|cli; enabled:
+  // false = sync denies the session running it). null = registry
   // off: doctor shows no tools-* rows (`botcorp tools <bot> scan` seeds it).
   tools: null,
   // lock: none (DPAPI only; unattended reboots) | operator (the vault key is
@@ -148,6 +159,15 @@ export function validate(cfg) {
     // The vault guard and the operator guard are the hooks a bot may never switch off.
     for (const h of ['vault-guard', 'operator-guard']) if (cfg.harness.hooks_disable.map(String).includes(h)) errs.push(`harness.hooks_disable: ${h} cannot be disabled`);
   }
+  if (!Array.isArray(cfg.harness.disable)) errs.push('harness.disable: must be a list of skill:<name> | agent:<name>');
+  else {
+    const have = { skill: harnessSkillNames(), agent: harnessAgentNames() };
+    for (const x of cfg.harness.disable) {
+      const m = /^(skill|agent):([a-z0-9][a-z0-9_-]{0,63})$/.exec(String(x));
+      if (!m) errs.push(`harness.disable: ${JSON.stringify(x)} is not skill:<name> or agent:<name>`);
+      else if (have[m[1]].length && !have[m[1]].includes(m[2])) errs.push(`harness.disable: no harness ${m[1]} '${m[2]}' (valid: ${have[m[1]].join(', ')})`);
+    }
+  }
   const SECRET_KEY_RE = /^[a-z][a-z0-9_]{0,63}$/;
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
   // The id shape only: an existence check here would make `accounts remove` stop the bot from launching.
@@ -180,6 +200,7 @@ export function validate(cfg) {
     if (typeof t.path !== 'string' || !t.path.trim()) errs.push(`tools[${i}].path: required`);
     else if (/^([\\/]|[a-zA-Z]:)/.test(t.path) || t.path.split(/[\\/]/).includes('..')) errs.push(`tools[${i}].path: relative to the bot folder, no '..' (got ${JSON.stringify(t.path)})`);
     else if (/[*?[]/.test(t.path) && !['lib', 'cli'].includes(t.kind)) errs.push(`tools[${i}].path: a glob only for kind lib | cli (got ${JSON.stringify(t.path)} as ${t.kind})`);
+    if (t.enabled !== undefined && typeof t.enabled !== 'boolean') errs.push(`tools[${i}].enabled: true | false (got ${JSON.stringify(t.enabled)})`);
     if (t.secrets !== undefined) {
       const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
       const extra = (Array.isArray(t.secrets) ? t.secrets.map(String) : [String(t.secrets)]).filter((k) => !declared.has(k));

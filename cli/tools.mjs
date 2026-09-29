@@ -323,6 +323,194 @@ export function registryRows(cfg, scan, streak = null) {
   return rows;
 }
 
+// ---- the inventory: everything a bot can use, by where it comes from ---------------
+// The cockpit's Tools tab. Three sources, each with its licence:
+//   harness  BotCorp harness (open source, MIT): modules, skills, agents, commands,
+//            hooks, rules, and the harness tools every bot gets as shims
+//   bot      this bot's own (private): its registry entries (bot.yaml tools:) and its
+//            own .claude/{skills,agents,commands}
+//   third    third-party: Claude Code plugins and MCP servers from the bot's settings,
+//            .mcp.json and config home, each with its provider
+// An item's `toggle` says how the engine switches it (null = it cannot):
+//   {path, on, off}      a bot.yaml value (harness.modules.<m>, tools.<name>.enabled)
+//   {list, item}         membership of a bot.yaml list turns it OFF (harness.disable,
+//                        harness.hooks_disable)
+// `locked` names why a switch is refused (vault-guard, operator-guard).
+export const LICENSE = { harness: 'open source (BotCorp, MIT)', bot: 'proprietary / private', third: 'third-party' };
+export const MODULE_TEXT = {
+  telegram: 'The official Telegram plugin: the bot reads and answers its Telegram chat.',
+  board: 'GitHub Projects board tools and the board poll (integrations.board).',
+  cost_meter: 'One sessions.csv row per session: tokens and notional cost.',
+  usage_resume: 'Relaunches the session after a usage-limit window if it died.',
+  alert_triage: 'A headless fix-or-card pass over memory/metrics/alerts.log.',
+  hub: 'Pushes status to a hub (integrations.hub).',
+  janitor: 'Disk, transcript and stray-process hygiene on the daemon tick ("report" only scans).',
+  remote_control: 'Claude Remote Control for this session (needs a /login in its config home).',
+  lessons: 'Injects the harness lessons index at session start.',
+  debrief: 'A headless session debrief on Stop (real spend).',
+  auto_commit: 'Commits the bot folder on Stop; pushes with backup.git_remote.',
+  memory_sync: 'Pushes memory/ to the bot\'s own remote on Stop.',
+  sound: 'Plays a sound on Stop.',
+  telemetry: 'OpenTelemetry export to the local sink (usage and subagent observability).',
+  review_board: 'One private review Artifact the bot keeps adding to, linked in the cockpit header.',
+};
+const LOCKED_HOOKS = { 'vault-guard': 'keeps every session out of the vaults', 'operator-guard': 'keeps operator-only verbs away from bots' };
+// Plugin marketplaces with a known owner; any other marketplace is named as it is.
+const MARKETPLACES = { 'claude-plugins-official': 'Anthropic (official plugin directory)' };
+
+const clip = (s, n = 180) => { const t = String(s || '').replace(/\s+/g, ' ').trim(); return t.length > n ? `${t.slice(0, n - 1).trimEnd()}…` : t; };
+function readSafe(file) { try { return fs.readFileSync(file, 'utf-8'); } catch { return ''; } }
+function jsonSafe(file) { try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return null; } }
+function listDir(dir, pred) { try { return fs.readdirSync(dir, { withFileTypes: true }).filter(pred).map((d) => d.name).sort(); } catch { return []; } }
+
+// `key: value` from a leading `---` block (a folded `>` / `|` value takes the indented lines under it)
+export function frontmatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text || ''));
+  const out = {};
+  if (!m) return out;
+  const lines = m[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const kv = /^([A-Za-z_][\w-]*):\s*(.*)$/.exec(lines[i]);
+    if (!kv) continue;
+    let v = kv[2].trim();
+    if (/^[>|][-+]?$/.test(v)) { const more = []; while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) more.push(lines[++i].trim()); v = more.join(' '); }
+    out[kv[1]] = v.replace(/^(['"])(.*)\1$/, '$2');
+  }
+  return out;
+}
+// The first comment line under a script's shebang: what a hook is for.
+function scriptPurpose(text) {
+  const c = String(text || '').split(/\r?\n/).filter((l) => /^#(?!!)/.test(l)).map((l) => l.replace(/^#\s?/, '')).filter((l) => l.trim());
+  return clip((c[0] || '').replace(/^[\w.-]+\.sh\s*[-—:]\s*/, ''), 160);
+}
+// The first `# ` heading of a markdown file.
+function mdTitle(text) { const m = /^#\s+(.+)$/m.exec(String(text || '')); return m ? m[1].trim() : ''; }
+
+// An MCP server's provider, from what it runs: the package an npx/uvx/bunx starts, the
+// host of a URL, else the command.
+export function mcpProvider(def) {
+  if (!isObj(def)) return 'unknown';
+  if (typeof def.url === 'string') { try { return new URL(def.url).host; } catch { return def.url; } }
+  const cmd = String(def.command || '');
+  const args = Array.isArray(def.args) ? def.args.map(String) : [];
+  if (/(^|[\\/])(npx|uvx|bunx|pnpm|dlx)(\.cmd|\.exe)?$/i.test(cmd)) { const pkg = args.find((a) => !a.startsWith('-')); if (pkg) return pkg.replace(/@[^@/]+$/, ''); }
+  return path.basename(cmd) || 'unknown';
+}
+
+export function toolInventory({ botHome, cfg, botcorpRoot, scan = null }) {
+  const H = path.join(botcorpRoot, 'harness');
+  const home = botHome;
+  const bot = cfg.name;
+  const configHome = path.join(home, `.claude-${bot}`);
+  const disabled = new Set((Array.isArray(cfg.harness.disable) ? cfg.harness.disable : []).map(String));
+  const hooksOff = new Set((Array.isArray(cfg.harness.hooks_disable) ? cfg.harness.hooks_disable : []).map(String));
+  const skillList = Array.isArray(cfg.harness.skills) ? new Set(cfg.harness.skills.map(String)) : null;
+  const claudeMd = readSafe(path.join(home, 'CLAUDE.md')).replace(/\\/g, '/');
+  const item = (source, kind, o) => ({ source, kind, license: LICENSE[source], toggle: null, locked: null, note: '', ...o });
+
+  // ---- BotCorp harness
+  const modules = Object.entries(cfg.harness.modules || {}).map(([m, v]) => item('harness', 'module', {
+    id: `module:${m}`, name: m, description: MODULE_TEXT[m] || '', on: v === true || v === 'report',
+    note: v === 'report' ? 'report only' : '', toggle: { path: `harness.modules.${m}`, on: true, off: false },
+  }));
+  const skills = listDir(path.join(H, 'skills'), (d) => d.isDirectory()).map((s) => {
+    const fm = frontmatter(readSafe(path.join(H, 'skills', s, 'SKILL.md')));
+    const listed = !skillList || skillList.has(s);
+    return item('harness', 'skill', { id: `skill:${s}`, name: s, description: clip(fm.description), on: listed && !disabled.has(`skill:${s}`),
+      toggle: listed ? { list: 'harness.disable', item: `skill:${s}` } : null, note: listed ? '' : 'left out of harness.skills' });
+  });
+  const agents = listDir(path.join(H, 'agents'), (d) => d.isFile() && d.name.endsWith('.md')).map((f) => {
+    const a = f.slice(0, -3);
+    const fm = frontmatter(readSafe(path.join(H, 'agents', f)));
+    return item('harness', 'agent', { id: `agent:${a}`, name: a, description: clip(fm.description), model: fm.model || null, on: !disabled.has(`agent:${a}`),
+      toggle: { list: 'harness.disable', item: `agent:${a}` } });
+  });
+  const commands = listDir(path.join(H, 'commands'), (d) => d.isFile() && d.name.endsWith('.md')).map((f) => item('harness', 'command', {
+    id: `command:${f.slice(0, -3)}`, name: `/${f.slice(0, -3)}`, description: clip(frontmatter(readSafe(path.join(H, 'commands', f))).description), on: true,
+  }));
+  const hooks = listDir(path.join(H, 'hooks'), (d) => d.isFile() && d.name.endsWith('.sh') && !d.name.startsWith('_') && d.name !== 'py.sh').map((f) => {
+    const h = f.slice(0, -3);
+    return item('harness', 'hook', { id: `hook:${h}`, name: h, description: scriptPurpose(readSafe(path.join(H, 'hooks', f))), on: !hooksOff.has(h),
+      toggle: LOCKED_HOOKS[h] ? null : { list: 'harness.hooks_disable', item: h }, locked: LOCKED_HOOKS[h] ? `always on: it ${LOCKED_HOOKS[h]}` : null });
+  });
+  const rules = listDir(path.join(H, 'rules'), (d) => d.isFile() && d.name.endsWith('.md')).map((f) => {
+    const on = claudeMd.includes(`harness/rules/${f}`);
+    return item('harness', 'rule', { id: `rule:${f.slice(0, -3)}`, name: f.slice(0, -3), description: clip(mdTitle(readSafe(path.join(H, 'rules', f)))), on,
+      note: on ? 'imported by CLAUDE.md' : 'not imported by CLAUDE.md' });
+  });
+  const shimmed = listDir(path.join(H, 'tools'), (d) => d.isDirectory() && !/^[_.]/.test(d.name)).map((dir) => {
+    const files = listDir(path.join(H, 'tools', dir), (d) => d.isFile() && SHIM_EXTS_INV.includes(path.extname(d.name)) && !d.name.startsWith('_'));
+    return item('harness', 'tool', { id: `tools:${dir}`, name: `tools/${dir}`, description: clip(`${files.length} tool${files.length === 1 ? '' : 's'}: ${files.join(', ')}`, 220), on: true, note: 'a shim in the bot folder runs the harness copy' });
+  });
+
+  // ---- this bot's own
+  const missing = new Set(scan ? scan.missing : []);
+  const registry = (Array.isArray(cfg.tools) ? cfg.tools : []).filter(isObj).map((t) => item('bot', 'tool', {
+    id: `tool:${t.name}`, name: String(t.name), description: clip(t.purpose), path: String(t.path || ''), toolKind: String(t.kind || ''),
+    secrets: Array.isArray(t.secrets) ? t.secrets.map(String) : [], on: t.enabled !== false, missing: missing.has(String(t.name)),
+    toggle: { path: `tools.${t.name}.enabled`, on: true, off: false },
+  }));
+  const own = (sub, kind) => {
+    const dir = path.join(home, '.claude', sub);
+    const names = kind === 'skill' ? listDir(dir, (d) => d.isDirectory()) : listDir(dir, (d) => d.isFile() && d.name.endsWith('.md'));
+    return names.map((n) => {
+      const file = kind === 'skill' ? path.join(dir, n, 'SKILL.md') : path.join(dir, n);
+      const id = kind === 'skill' ? n : n.slice(0, -3);
+      return item('bot', kind, { id: `own-${kind}:${id}`, name: kind === 'command' ? `/${id}` : id, description: clip(frontmatter(readSafe(file)).description), on: true, note: `.claude/${sub}/` });
+    });
+  };
+
+  // ---- third-party: plugins and MCP servers
+  const plugins = new Map();   // key -> {enabled, where}
+  const addPlugins = (file, where, when = null) => {
+    const j = jsonSafe(file);
+    for (const [k, v] of Object.entries(isObj(j && j.enabledPlugins) ? j.enabledPlugins : {})) {
+      const cur = plugins.get(k) || { enabled: false, where: [] };
+      // the Telegram enablement file is passed only while the module is on
+      const on = v === true && (when === null || when);
+      plugins.set(k, { enabled: cur.enabled || on, where: [...cur.where, where] });
+    }
+  };
+  addPlugins(path.join(home, '.claude', 'settings.local.json'), '.claude/settings.local.json');
+  addPlugins(path.join(home, '.claude', 'settings.json'), '.claude/settings.json');
+  addPlugins(path.join(configHome, 'settings.json'), `.claude-${bot}/settings.json`);
+  addPlugins(path.join(home, '.claude', 'tg-enable.settings.json'), 'passed at launch while harness.modules.telegram is on', !!(cfg.harness.modules && cfg.harness.modules.telegram));
+  const installed = jsonSafe(path.join(configHome, 'plugins', 'installed_plugins.json'));
+  for (const k of Object.keys(isObj(installed && installed.plugins) ? installed.plugins : {})) if (!plugins.has(k)) plugins.set(k, { enabled: false, where: ['installed, not enabled'] });
+  const pluginItems = [...plugins].sort(([a], [b]) => a.localeCompare(b)).map(([k, p]) => {
+    const [name, market = ''] = k.split('@');
+    const ver = installed && isObj(installed.plugins) && Array.isArray(installed.plugins[k]) && installed.plugins[k][0] ? installed.plugins[k][0].version : null;
+    return item('third', 'plugin', { id: `plugin:${k}`, name, provider: MARKETPLACES[market] || market || 'unknown', description: ver ? `version ${ver}` : '', on: p.enabled, note: [...new Set(p.where)].join(' · ') });
+  });
+  const mcp = new Map();
+  const addMcp = (servers, where) => { for (const [k, def] of Object.entries(isObj(servers) ? servers : {})) if (!mcp.has(k)) mcp.set(k, { def, where }); };
+  addMcp((jsonSafe(path.join(home, '.mcp.json')) || {}).mcpServers, '.mcp.json');
+  const cj = jsonSafe(path.join(configHome, '.claude.json')) || {};
+  addMcp(cj.mcpServers, `.claude-${bot}/.claude.json`);
+  const proj = isObj(cj.projects) ? Object.entries(cj.projects).find(([p]) => path.resolve(p).toLowerCase() === path.resolve(home).toLowerCase()) : null;
+  if (proj) addMcp(proj[1].mcpServers, `.claude-${bot}/.claude.json (this folder)`);
+  const mcpItems = [...mcp].sort(([a], [b]) => a.localeCompare(b)).map(([k, { def, where }]) => item('third', 'mcp', {
+    id: `mcp:${k}`, name: k, provider: mcpProvider(def), description: isObj(def) && def.type ? `${def.type} server` : '', on: !(isObj(def) && def.disabled === true), note: where,
+  }));
+
+  const section = (kind, label, items, extra = {}) => ({ kind, label, items, ...extra });
+  return {
+    bot,
+    groups: [
+      { source: 'harness', label: 'BotCorp harness', license: LICENSE.harness, sections: [
+        section('module', 'Modules', modules), section('skill', 'Skills', skills), section('agent', 'Agents', agents),
+        section('hook', 'Hooks', hooks), section('rule', 'Rules', rules), section('command', 'Commands', commands), section('tool', 'Tools', shimmed),
+      ] },
+      { source: 'bot', label: 'This bot\'s own', license: LICENSE.bot, sections: [
+        section('tool', 'Registered tools', registry, { registry: scan ? scan.registry : (cfg.tools == null ? 'off' : 'warn'), unregistered: scan ? scan.unregistered.length : null }),
+        section('skill', 'Skills', own('skills', 'skill')), section('agent', 'Agents', own('agents', 'agent')), section('command', 'Commands', own('commands', 'command')),
+      ] },
+      { source: 'third', label: 'Third-party', license: LICENSE.third, sections: [section('plugin', 'Plugins', pluginItems), section('mcp', 'MCP servers', mcpItems)] },
+    ],
+  };
+}
+const SHIM_EXTS_INV = ['.py', '.sh', '.ps1'];
+
 // Move files out of the bot folder into <rt>/retired/<bot>/<stamp>/<rel> and
 // append one line to <rt>/retired/<bot>/retired.jsonl. -> the record.
 export function retireFiles({ botHome, bot, runtime, rels, name = null, by = null, now = new Date() }) {

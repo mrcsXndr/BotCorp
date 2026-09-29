@@ -347,6 +347,8 @@ app.post('/api/bots/:name/accounts', withBot(async (req, res, bot) => {
 // through `config set`. A widening change queues like a bot's would; the
 // sheet shows the queued entry to decide on the spot.
 const CONFIG_PATH_RE = /^[a-z_][a-z0-9_]*(\.[a-z0-9_-]+){0,4}$/;
+const LIST_PATHS = new Set(['harness.hooks_disable', 'harness.disable']);
+const LIST_ITEM_RE = /^[a-z0-9][a-z0-9_-]{0,63}(:[a-z0-9][a-z0-9_-]{0,63})?$/;
 function leafPaths(obj, pre = '') {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return pre ? [pre] : [];
   return Object.keys(obj).flatMap((k) => leafPaths(obj[k], pre ? `${pre}.${k}` : k));
@@ -362,10 +364,13 @@ app.post('/api/bots/:name/config', withBot(async (req, res, bot) => {
   const { path: p, value } = req.body || {};
   if (typeof p !== 'string' || p.length > 100 || !CONFIG_PATH_RE.test(p)) return res.status(400).json({ error: 'path: a dotted bot.yaml key, like harness.modules.debrief' });
   const scalar = value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && value.length <= 2000);
-  if (!scalar) return res.status(400).json({ error: 'value: one scalar (text up to 2000 characters, a number, true / false or null); lists are edited in the terminal' });
+  // the Tools tab's switches: the two name lists, each item a plain name (config set reads [a,b])
+  const list = LIST_PATHS.has(p) && Array.isArray(value) && value.length <= 50 && value.every((x) => typeof x === 'string' && LIST_ITEM_RE.test(x));
+  if (!scalar && !list) return res.status(400).json({ error: `value: one scalar (text up to 2000 characters, a number, true / false or null), or a list of names for ${[...LIST_PATHS].join(' / ')}; other lists are edited in the terminal` });
   if (!operatorGate(req, res)) return;
   res.locals.audit = { config: p };
-  const r = await runCli(['config', 'set', bot.name, p, value === null ? 'null' : String(value), '--requested-by', req.identity]);
+  const text = list ? `[${value.join(',')}]` : value === null ? 'null' : String(value);
+  const r = await runCli(['config', 'set', bot.name, p, text, '--requested-by', req.identity]);
   attention.invalidate();
   const q = /queued for operator approval: botcorp approve \S+ ([0-9a-f]+)/.exec(r.out);
   const dup = /already queued for operator approval/.test(r.out);
