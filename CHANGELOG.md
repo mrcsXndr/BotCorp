@@ -3,6 +3,18 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.8.2
+
+Updates can install again.
+
+- **The update smoke test fits its time budget.** An update has 3 minutes to
+  check out, smoke-test and restart. Smoke ran the full pytest suite, which now
+  takes about 20 minutes, so every apply timed out and rolled back (v0.8.0 on
+  2026-09-29). Smoke now only collects the tests (`pytest --collect-only`).
+  That still imports every test module and the harness code behind it, so a
+  broken install fails in seconds. The full suite keeps running in CI on every
+  tag. A whole smoke run now takes about 15 seconds.
+
 ## v0.8.1
 
 Backup accounts with automatic failover and failback, a Settings page, a
