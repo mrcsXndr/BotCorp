@@ -48,6 +48,7 @@ never secrets:
 |---|---|---|
 | `daemon.log` | every script | one line per event; `logs/<bot>/daemon.log` carries the per-bot copy |
 | `logs/<bot>/launches.log` | launch.ps1 | per launch: mode, masked vault notes, `bg: id=... conversation=... [worker_session=...] claude_pid=...` |
+| `logs/accounts.log` | `botcorp accounts add` / `remove` | one JSON line per registry change: `{at, action, id, by}`, never a token (`logs/<bot>/accounts.log` is the per-bot `accounts use` log) |
 | `state/<bot>.json` | launch.ps1 + tick + the SessionStart hook | the bot's process record, schema 2 (see "State file" below): `service` (`bg`/`fg`), `bg_id` (short id for `claude attach`), `session_id` (full uuid, the `--resume` handle), `claude_pid`, `shell_pid` (pty/fg only), `started_by`, `poller`, `session_env` + `env_launcher_pid` (which launch's env the session got, below), `launcher_pid`, `launcher_started_at`, `triage_last_scan`, `janitor_at`, `harness_version`, `pinned_bg_id` (the bg id BotCorp pinned), `session_blocked` (what a bg session waits on), `cc_roll_at` / `account_roll_at` (the last roll onto the Claude Code pin / the bot's account), `registry_scan_at`, `updated_at`, and the blocks `desired`, `launch` (launch attestation `{nonce_sha256, minted_by_pid, at, at_unix, consumed_at}`, only the nonce's hash, `docs/secrets.md`, plus the launcher's `{phase, phase_at, exit_code}`) and `observed` |
 | `state/<bot>.pty.json` | pty-host | `{pid, ptyPid, port, token, startedAt, mode}`; `mode: attach` = an attach transport, not the session; it exits on its own after `BOTCORP_ATTACH_IDLE_MIN` (15) minutes with no client |
 | `state/<bot>/inbox.jsonl`, `inbox.results.jsonl`, `inbox.drainer` | `botcorp send` + the inbox drainer (core/inbox.mjs) | the bot's message queue, each message's status changes, the live drainer's pid (docs/cli.md `send`) |
@@ -660,6 +661,27 @@ Because the comparison is against the attempted account, a launch that fell
 back is never rolled again; `doctor` and the cockpit's `account` attention
 item report a switch that did not land. A pre-0.7 record without the key reads
 as the bot's own token.
+
+### Usage limit: recover at the reset (v0.8.0)
+
+A bg session that hit its 5-hour or 7-day limit sits in its job record as
+`tempo: blocked` with a `needs` text that names the limit (`core/failover.mjs`
+`LIMIT_RE`; `observe` reports `blocked.kind: limit`). There is no turn to
+protect, so the tick treats that session as idle: `Get-AccountRollAction
+-LimitBlocked` skips the phase and mid-turn gates, `Test-SessionBusy
+-LimitBlocked` says not busy, and the state line ends in `(usage limit)`.
+
+Each tick asks `botcorp accounts failover <bot> --json` (the verb never writes)
+what to do. The reset instant comes from the statusline's `status.json`
+(`resets_at`, when it is after the block), else from the clock in the block
+text in its named zone, else block + 5 h. Before the reset the tick logs one
+quiet `usage-limited: ...; waiting until HH:mm` line and does nothing. At the
+reset it restarts the session through the normal path (`--resume`, start cap)
+with the reason `usage-limit reset (...)` and, for a bg bot, writes
+`.claude/.botcorp_resume_prompt` so the first turn says the limit is over and
+where it left off (launch.ps1 consumes it within 60 min). A `-DryRun` tick
+prints `DRYRUN would restart <bot> ...` and writes nothing, not even the
+prompt. Failing over to another account is slice 2 (`backup_accounts`).
 
 ## Harness update (admin-applied, never automatic)
 

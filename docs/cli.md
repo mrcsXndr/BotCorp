@@ -326,7 +326,7 @@ the STRICTER option: unknown senders are dropped silently and never appear
 as pending, so nothing can be approved from the cockpit; use it once the
 allow-list is final. Nothing ever approves a pairing from inside a chat.
 
-### `accounts add <id> [--label <text>] [--plan <text>]` / `accounts list [--json]` / `accounts remove <id>` / `accounts seed`
+### `accounts add <id> [--label <text>] [--plan <text>] [--by <who>]` / `accounts list [--json]` / `accounts remove <id> [--by <who>]` / `accounts seed`
 
 The accounts registry: Claude logins kept separately from any one bot, for the
 `chat` launcher. Each account lives at `~/.botcorp/accounts/<id>/`:
@@ -341,7 +341,10 @@ that already holds an `oauth_token` (id = the bot's name, re-encrypted
 in-process into the account vault's own entropy; accounts that already exist
 are left alone). `remove` refuses while a bot's `account:` names the account.
 `add`, `remove` and `seed` are operator-only (exit 3 from a bot session);
-`list` stays open.
+`list` stays open. `add` and `remove` append `{at, action, id, by}` to
+`<BOTCORP_HOME>/logs/accounts.log` (`--by` names who asked; the cockpit's
+Accounts sheet passes its identity, the default is `operator:<user>`); the
+line never carries the token.
 
 ### `accounts use <bot> <id|none> [--by <who>]`
 
@@ -356,7 +359,22 @@ account's token and falls back to the bot's own when it cannot
 (`launch-env.json` `oauth_source: vault-fallback`, one `launches.log` line),
 and jobs that declare `oauth_token` follow the same account. `config set
 <bot> account ...` from a bot is widening and queues for approval. The
-cockpit's Usage sheet runs this verb ("Switch account").
+cockpit's Accounts sheet runs this verb (Use, per bot).
+
+### `accounts failover <bot> [--json]`
+
+Read-only: what the daemon tick would do about the bot's usage limit right
+now. It reads the bot's newest launch record and job record (`observe`), the
+statusline `status.json`, `state/accounts.json` and the cached token checks,
+classifies the block (`limited`, which window, the reset instant and where it
+came from: `status.json`, the clock in the block text, or block + 5 h) and
+prints the account chain with the decision: `would wait until HH:MM (...)`,
+`would restart <bot> on <account> (...)` or `nothing to do`. `--json` gives
+the same as `{bot, chain, active, limited, resetAt, window, source, decision}`.
+The verb never writes; the tick acts on the same decision
+(`docs/daemon.md`, "Usage limit: recover at the reset"). A `-DryRun` tick
+passes what it observed in `BOTCORP_FAILOVER_OBSERVED` (JSON) so the verb
+sees the same session it does.
 
 ### `chat [--account <id>] [--cwd <path>|--generic] [--dry-run]`
 
@@ -923,8 +941,10 @@ logins, `--no-tg-probe` the Telegram slot probe.
   recorded `bg_id` is in `<config home>/jobs/pins.json` (FAIL: unpinned, Claude
   Code retires an idle bg session after 60 min; the next daemon tick pins it)
   and `<bot>: session not blocked` - its `jobs/<bg_id>/state.json` is not
-  blocked on a login / auth / usage limit / trust dialog (FAIL with the `claude
-  attach <id>` hint) or on a question its last turn ended with (WARN), both INFO when the bot is not running (docs/daemon.md, "Idle
+  blocked on a login / auth / trust dialog (FAIL with the `claude
+  attach <id>` hint), on a usage limit (WARN with the window and the reset
+  time: the daemon restarts it at the reset, `accounts failover <bot>` shows
+  the decision) or on a question its last turn ended with (WARN), all INFO when the bot is not running (docs/daemon.md, "Idle
   retirement and the pin"); `integrations.access.team` set but the cockpit
   not exposed, or a different team than the machine file => WARN;
   `integrations.cloudflare: {account_id, workers}` + `CLOUDFLARE_API_TOKEN`

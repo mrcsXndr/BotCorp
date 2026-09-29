@@ -3,6 +3,37 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.8.0 (unreleased)
+
+Usage limits recover on their own, and accounts are managed in the cockpit.
+
+- **A limit is recognised as a limit.** A bg session blocked on its 5-hour or
+  7-day limit reads as `blocked.kind: limit` in `observe`; `doctor` reports it
+  as a WARN with the window and the reset time instead of a FAIL that asks a
+  human to answer a dialog (`core/failover.mjs` classifies the block: the
+  reset instant from the statusline's `status.json`, else the clock in the
+  block text in its named zone, else block + 5 h).
+- **The daemon restarts at the reset.** The tick treats a usage-limited
+  session as idle (there is no turn to protect), waits quietly until the reset
+  and then restarts it with `--resume`, seeding the first turn with a resume
+  prompt. `botcorp accounts failover <bot> [--json]` prints the same decision
+  without writing. (`docs/daemon.md`, "Usage limit: recover at the reset".)
+- **`usage_monitor record-block` keeps its state even when Telegram is
+  unreachable**: the block is stamped before the alert is sent, and the
+  message is read from `message`, `error.message` or `detail`.
+- **The status footer names the account** (`acct <id>` or `acct own`, `⇄` when
+  the launch was a failover or failback); the JSON adds `account` and
+  `account_reason`.
+- **Cockpit: an Accounts sheet.** Every registered account with its state
+  (ok, limited until, failed, no token), the shared 5 h / 7 d meters, the bots
+  on it; add one (the setup token goes to `accounts add` on stdin and is
+  cleared from the page as soon as it is sent; the reply shows only its last
+  4), remove one (an inline confirmation, refused while a bot.yaml names it),
+  and per bot the account it runs on with Use. Add and remove need the
+  approval token and are audited (`cockpit-audit.jsonl`, `logs/accounts.log`
+  with `--by`), never with the token. The Usage sheet's "Switch account"
+  opens this sheet.
+
 ## v0.7.8
 
 Model routing framework, and CI green again.
