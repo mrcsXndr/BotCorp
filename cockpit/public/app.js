@@ -1041,7 +1041,13 @@ async function loadUpdates() {
   box.innerHTML = '<p class="loading">Loading releases</p>';
   try {
     const { releases } = await api('GET', '/api/updates');
-    box.innerHTML = releases.length ? releases.map(relCard).join('') : '<p class="hint">No releases recorded yet.</p>';
+    // newest first (the server sorts); everything below the installed version folds away
+    const shown = releases.filter((r) => !r.older || r.current), folded = releases.filter((r) => r.older && !r.current);
+    box.innerHTML = releases.length
+      ? shown.map(relCard).join('') + (folded.length ? `<button class="btn quiet relmore" id="relMore">Show ${folded.length} older</button><div id="relOlder" hidden>${folded.map(relCard).join('')}</div>` : '')
+      : '<p class="hint">No releases recorded yet.</p>';
+    const more = el('relMore');
+    if (more) more.onclick = () => { el('relOlder').hidden = false; more.remove(); };
     box.querySelectorAll('[data-apply]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.apply, 'apply'); });
     box.querySelectorAll('[data-skip]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.skip, 'skip'); });
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }

@@ -26,6 +26,17 @@ export function cmpVersion(a, b) {
 // version = nothing is older.
 export function isOlder(tag, installed) { return !!(installed && semver(installed) && cmpVersion(tag, installed) <= 0); }
 
+// Newest first: by release date, then by version when two share a date; an
+// entry with no parseable date goes after every dated one.
+export function sortReleases(releases) {
+  const t = (r) => { const v = Date.parse(r && r.date); return Number.isFinite(v) ? v : null; };
+  return [...releases].sort((a, b) => {
+    const x = t(a), y = t(b);
+    if (x !== y) { if (x === null) return 1; if (y === null) return -1; return y - x; }
+    return cmpVersion(b.tag, a.tag);
+  });
+}
+
 // The checked-out version, as engine.mjs reports it.
 export async function installedVersion() {
   try { return JSON.parse(await fsp.readFile(path.join(BOTCORP_ROOT, 'botcorp.json'), 'utf-8')).version ?? null; } catch { return null; }
@@ -38,7 +49,7 @@ export async function listUpdates() {
   const releases = Array.isArray(data.releases) ? data.releases : [];
   return {
     installed,
-    releases: releases.map((r) => ({
+    releases: sortReleases(releases.map((r) => ({
       tag: String(r?.tag ?? ''),
       sha: typeof r?.sha === 'string' ? r.sha.slice(0, 12) : null,
       date: typeof r?.date === 'string' ? r.date : null,
@@ -47,6 +58,7 @@ export async function listUpdates() {
       value: typeof r?.value === 'string' ? r.value : '',
       status: typeof r?.status === 'string' ? r.status : 'pending',
       older: isOlder(r?.tag, installed),
-    })).filter((r) => r.tag),
+      current: !!(installed && semver(installed) && cmpVersion(r?.tag, installed) === 0),
+    })).filter((r) => r.tag)),
   };
 }
