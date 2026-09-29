@@ -3,9 +3,9 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## Unreleased
+## v0.7.8
 
-Model routing framework.
+Model routing framework, and CI green again.
 
 - **Cheapest tier that can do the job.** New rule `harness/rules/models.md`,
   imported by the bot template: Opus 5.5 for the main thread, `planner` and
@@ -21,6 +21,10 @@ Model routing framework.
   id and effort, and each agent to a tier. A new test,
   `test_models_registry.py`, fails if an agent file, `models.json` or
   `models.md` disagree.
+- **CI passes on Linux again.** Two test files assumed Windows: a cleanup
+  that called `taskkill`, and a fixture that named the Claude binary
+  `claude.exe`. Both now branch on the platform. The code under test was
+  already right.
 
 ## v0.7.7
 
