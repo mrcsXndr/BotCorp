@@ -39,6 +39,7 @@ const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs')
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
 const { ccStatus, botCc, fileSha256 } = await import('../core/cc.mjs');
+const { classifyBlock, decide, chainOf, hhmm, isOwn } = await import('../core/failover.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
@@ -2748,7 +2749,11 @@ async function cmdDoctor({ flags }) {
         const jobFile = bgJobFile(configDir(bot), bgId);
         const job = jobFile ? readJson(jobFile) : null;
         const bv = bgBlockVerdict({ running: s.running, bgId, job });
-        add(bv.level, `${bot}: session not blocked`, bv.detail, 'bots');
+        if (bv.kind === 'limit') {
+          // a usage limit is not a human's to answer: the tick recovers at the reset or fails over (docs/daemon.md "Account roll and failover")
+          const c = classifyBlock({ needs: job.needs, rateLimits: s.status_json && s.status_json.rate_limits, since: job.updatedAt });
+          add('WARN', `${bot}: session not blocked`, `session ${bgId} is usage-limited (${c.window === 'unknown' ? 'window unknown' : `${c.window} window`}, resets ${hhmm(c.resetAt)}); recovery is automatic: the tick restarts it at the reset, or fails over to a backup account (botcorp accounts failover ${bot})`, 'bots');
+        } else add(bv.level, `${bot}: session not blocked`, bv.detail, 'bots');
       }
       // which launch's env - so which OAuth / Telegram token - the running session got (sessionEnvVerdict)
       {

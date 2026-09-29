@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botsDir, botHome } from '../core/paths.mjs';
 import { stateView, phase } from '../core/state.mjs';
+import { LIMIT_RE } from '../core/failover.mjs';
 
 export { botHome };
 
@@ -378,7 +379,9 @@ export function sessionSecretEnvVerdict({ running, launch, declaredEnv = [] }) {
 // tg_send.py executed ..."): the session is idle and takes its next prompt, so
 // that is a WARN (the cockpit still shows it as waiting on you). Only a
 // mechanical blocker that stops every next turn too (login, usage limit, the
-// folder-trust dialog) FAILs.
+// folder-trust dialog) FAILs. A FAIL carries `kind`: 'limit' (a usage limit,
+// core/failover.mjs LIMIT_RE: the daemon recovers or fails over by itself) or
+// 'human' (a login, a dialog: only a person answers it).
 const HARD_BLOCK_RE = /\/login|\blog ?in\b|authenticat|oauth|usage limit|rate limit|\btrust\b/i;
 export function bgJobFile(cfgDir, bgId) {
   return /^[0-9a-f]{6,12}$/.test(String(bgId || '')) ? path.join(cfgDir, 'jobs', String(bgId), 'state.json') : null;
@@ -388,7 +391,10 @@ export function bgBlockVerdict({ running, bgId = '', job = null }) {
   if (!job) return { level: 'INFO', detail: `no job record for ${bgId || 'the session'} (cannot tell)` };
   const needs = String(job.needs || '').trim();
   if (job.tempo === 'blocked' && needs && !needs.includes('send a prompt to start')) {
-    if (HARD_BLOCK_RE.test(needs)) return { level: 'FAIL', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+    if (HARD_BLOCK_RE.test(needs)) {
+      if (LIMIT_RE.test(needs)) return { level: 'FAIL', kind: 'limit', detail: `session ${bgId} is usage-limited: "${needs}"` };
+      return { level: 'FAIL', kind: 'human', detail: `session ${bgId} waits on "${needs}" - nothing unattended answers that. Fix: claude attach ${bgId} (or the cockpit) and answer it` };
+    }
     return { level: 'WARN', detail: `session ${bgId} waits on "${needs}" (its last turn ended asking this; it still takes its next prompt). If it needs an answer: claude attach ${bgId} (or the cockpit)` };
   }
   return { level: 'PASS', detail: `session ${bgId} ${job.tempo === 'blocked' ? 'idle, waiting for its next prompt' : `is ${job.tempo || job.state || 'running'}`}` };

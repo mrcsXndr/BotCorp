@@ -12,11 +12,13 @@
 // the tick rolls a bot whose pair is not the pin (daemon/cc.ps1).
 // `activity` is one of ACTIVITIES:
 //   down     no live claude (bg) or pty-host process
-//   blocked  the session waits on something nothing unattended answers
+//   blocked  the session waits on something no next prompt gets past
 //            (bgBlockVerdict FAIL: a login, a usage limit, trust). A WARN (its
 //            last turn ended asking something) is still carried in `blocked`
 //            for display, but the activity comes from the transcript: the
-//            session takes its next prompt.
+//            session takes its next prompt. `blocked.kind` says which FAIL:
+//            'limit' (a usage limit; the daemon recovers or fails over, core/
+//            failover.mjs) or 'human' (only a person answers it).
 //   working  the transcript moved within QUIET_MIN and no fresh breakpoint
 //   idle     a fresh breakpoint (<BotHome>/.claude/.botcorp_breakpoint), or
 //            the transcript quiet >= QUIET_MIN
@@ -209,7 +211,9 @@ export function observeBot(name, { roster = false, parents = processParents } = 
     const jobFile = bgJobFile(cfgDir, bgId);
     const job = jobFile ? readJson(jobFile) : null;
     const v = bgBlockVerdict({ running: true, bgId, job });
-    if (v.level === 'FAIL' || v.level === 'WARN') blocked = { level: v.level, needs: String(job.needs).trim() };
+    // kind: 'limit' (a usage limit the daemon recovers from) | 'human' (a FAIL only a person answers) | null (a WARN);
+    // since: when the record went blocked (the text's reset clock rolls forward from it)
+    if (v.level === 'FAIL' || v.level === 'WARN') blocked = { level: v.level, kind: v.kind || null, needs: String(job.needs).trim(), since: typeof job.updatedAt === 'string' ? job.updatedAt : null };
     awaitingPrompt = v.level === 'WARN' || (v.level === 'PASS' && (
       (job.tempo === 'blocked' && String(job.needs || '').includes('send a prompt to start')) || turnEnded(job, quietMs, now)));
   }
