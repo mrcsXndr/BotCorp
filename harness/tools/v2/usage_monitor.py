@@ -307,13 +307,17 @@ def _parse_block_reset(message: str, now: datetime) -> tuple[str, datetime]:
 def cmd_record_block(dry_run: bool) -> int:
     """Hook mode: a StopFailure payload on stdin, e.g.
     `{"error_code": ..., "message": "..."}` (the hook also tolerates the
-    camelCase `errorCode`, and a nested `{"error": {"message": ...}}` shape).
-    Parses the reset time, dedupes against an already-announced block
-    (cross-tool safe via limit_window.already_announced), and TG-alerts once."""
+    camelCase `errorCode`, a nested `{"error": {"message": ...}}` shape and
+    a `detail` field). Parses the reset time, dedupes against an
+    already-announced block (cross-tool safe via limit_window.already_announced),
+    stamps blocked_until, then TG-alerts once. The stamp never depends on the
+    send: a blocked session's tg_send.py can fail (a limit blocks it too, or
+    the backlog gate refuses), and --resume-check needs blocked_until either way."""
     payload = _read_stdin_json()
     message = str(
         payload.get("message")
         or (payload.get("error") or {}).get("message")
+        or payload.get("detail")
         or ""
     )
     now = datetime.now(timezone.utc)
@@ -325,21 +329,23 @@ def cmd_record_block(dry_run: bool) -> int:
         return 0
 
     wid = window_id(reset, now)
-    if send_tg(reset, dry_run):
-        # Only persist on a REAL send — a dry-run must never suppress a later live alert.
-        if not dry_run:
-            state["last_alerted_reset"] = reset
-            state["last_alerted_window"] = wid
-            state["last_alerted_at"] = now.isoformat()
-            state["blocked_until"] = until.isoformat()
-            state["source"] = "usage_monitor"
-            state.pop("resumed_for", None)
-            state.pop("resume_skipped", None)
-            try:
-                save_state(state)
-            except Exception as e:
-                _log(f"state save failed: {e}")
-        _log(f"recorded usage-limit block, resets {reset}" + (" (dry-run, state not stamped)" if dry_run else ""))
+    # A dry-run stamps nothing: it must never suppress a later live alert.
+    if not dry_run:
+        state["last_alerted_reset"] = reset
+        state["last_alerted_window"] = wid
+        state["last_alerted_at"] = now.isoformat()
+        state["blocked_until"] = until.isoformat()
+        state["source"] = "usage_monitor"
+        state.pop("resumed_for", None)
+        state.pop("resume_skipped", None)
+        try:
+            save_state(state)
+        except Exception as e:
+            _log(f"state save failed: {e}")
+    sent = send_tg(reset, dry_run)
+    _log(f"recorded usage-limit block, resets {reset}"
+         + (" (dry-run, state not stamped)" if dry_run else "")
+         + ("" if sent else " (alert not sent; blocked_until stamped for --resume-check)"))
     return 0
 
 

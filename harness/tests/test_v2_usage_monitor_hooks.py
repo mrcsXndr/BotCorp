@@ -60,6 +60,22 @@ def test_record_block_without_reset_phrase_defaults_to_now_plus_5h(isolated, mon
     assert timedelta(hours=4, minutes=59) < delta < timedelta(hours=5, minutes=1)
 
 
+def test_record_block_stamps_state_even_when_the_send_fails(isolated, monkeypatch):
+    """A blocked session's tg_send.py can fail (the limit blocks it too, or the
+    backlog gate refuses); --resume-check still needs blocked_until."""
+    monkeypatch.setattr(um, "send_tg", lambda reset, dry: False)
+    _feed_stdin(monkeypatch, {"error_code": "rate_limit", "detail": "You've hit your session limit · resets 7:10pm (Europe/Stockholm)"})
+    assert um.cmd_record_block(dry_run=False) == 0
+    st = json.loads(isolated["state_file"].read_text(encoding="utf-8"))
+    assert st.get("blocked_until") and st["last_alerted_reset"].startswith("7:10pm")
+
+
+def test_record_block_dry_run_stamps_nothing(isolated, monkeypatch):
+    _feed_stdin(monkeypatch, {"message": "resets 7:10pm (Europe/Stockholm)"})
+    assert um.cmd_record_block(dry_run=True) == 0
+    assert not isolated["state_file"].exists()
+
+
 def test_record_block_dedupes_against_an_already_announced_window(isolated, monkeypatch):
     _feed_stdin(monkeypatch, {"message": "resets 7:10pm (Europe/Stockholm)"})
     assert um.cmd_record_block(dry_run=False) == 0
