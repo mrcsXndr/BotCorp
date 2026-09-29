@@ -309,6 +309,26 @@ def _usage_status() -> str:
         return ""
 
 
+LAUNCH_ENV_JSON = config_home() / "botcorp" / "launch-env.json"
+
+
+def _account_status() -> tuple[str, str]:
+    """(account, reason) of the newest launch record in
+    <config_home>/botcorp/launch-env.json, written by daemon/launch.ps1 at every
+    launch: `account` is the registry id the launch ran on ('' = the bot's own
+    token -> "own"), `account_reason` is why (primary | failover | failback |
+    recover; absent on a pre-0.8 record). ("", "") when there is no record."""
+    try:
+        launches = (json.loads(LAUNCH_ENV_JSON.read_text(encoding="utf-8")).get("launches") or {}).values()
+        newest = max((r for r in launches if isinstance(r, dict)), key=lambda r: str(r.get("at") or ""), default=None)
+        if newest is None:
+            return "", ""
+        account = str(newest.get("account") or "") or "own"
+        return account, str(newest.get("account_reason") or "")
+    except Exception:
+        return "", ""
+
+
 def _tg_status() -> str:
     pidf = config_home() / "channels" / "telegram" / "bot.pid"
     if not pidf.exists():
@@ -351,6 +371,7 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
     pct_used = round((used / mx) * 100) if mx else 0
     model = _model_short()
     usage = _usage_status()
+    account, account_reason = _account_status()
     tg = _tg_status()
     harness_ver = _harness_version()
 
@@ -365,6 +386,8 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
             "context_pct_used": pct_used,
             "model": model,
             "usage": usage,
+            "account": account,
+            "account_reason": account_reason,
             "tg": tg,
             "harness_version": harness_ver,
         })
@@ -378,6 +401,9 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
     parts.append(f"ctx {_fmt_tokens(used)}/{_fmt_tokens(mx)} ({pct_used}%)")
     if usage:
         parts.append(usage)
+    if account:
+        # "acct own" / "acct spare" / "acct ⇄spare" (⇄ = moved there by a failover or failback)
+        parts.append(f"acct {'⇄' if account_reason in ('failover', 'failback') else ''}{account}")
     if not short:
         parts.append(tg)
         if harness_ver:
