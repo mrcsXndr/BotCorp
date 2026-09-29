@@ -1414,7 +1414,8 @@ function acctRow(a) {
     + `<div class="l2">${esc(on)}${esc(why)}</div>${confirm}</div>`;
 }
 function botRow(b, accounts) {
-  const cur = b.account_wanted || 'none';
+  // an open confirmation keeps the choice it asks about in the select
+  const cur = acctConfirm && acctConfirm.kind === 'use' && acctConfirm.bot === b.bot ? acctConfirm.id : (b.account_wanted || 'none');
   const opts = [{ id: 'none', name: 'Its own token' }, ...accounts.map((a) => ({ id: a.id, name: a.label }))];
   const sel = `<select data-bot="${esc(b.bot)}" aria-label="account for ${esc(b.bot)}">${opts.map((o) => `<option value="${esc(o.id)}"${o.id === cur ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`;
   const sw = b.account_pending ? `<span class="sw">${b.running ? `switching to ${esc(b.account_wanted || 'its own token')} at next idle` : 'switches at next start'}</span>` : '';
@@ -1458,6 +1459,8 @@ el('accountsList').onclick = (e) => {
   if ((b = at('[data-use]'))) {
     const bot = b.dataset.use;
     const sel = el('accountsList').querySelector(`select[data-bot="${bot}"]`);
+    const row = acctData.bots.find((x) => x.bot === bot);
+    if (row && sel.value === (row.account_wanted || 'none')) { toast(`${bot} is already set to ${sel.options[sel.selectedIndex].text}`); return; }
     acctConfirm = { kind: 'use', bot, id: sel.value, name: sel.options[sel.selectedIndex].text };
     return renderAccounts();
   }
