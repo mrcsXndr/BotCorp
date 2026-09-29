@@ -57,6 +57,7 @@
 @../../harness/rules/telegram.md
 @../../harness/rules/browser.md
 @../../harness/rules/tools.md
+@../../harness/rules/models.md
 
 ## Detailed rules, quick index
 - `memory-loop.md` — three context channels, journal entry kinds, cross-session recall, tiered subagents
@@ -66,4 +67,5 @@
 - `browser.md` — browser automation via `tools/browser/ab.sh` (agent-browser, isolated Chrome)
 - `security.md` — anti-prompt-injection defense
 - `tools.md` — CLI-first tool discipline, human-in-the-middle for external writes
+- `models.md` — which model does the work: Opus 5.5 / Sonnet 5.5 / Haiku 4.5 tiers, Fable opt-in, effort per agent
 - `coding.md` — think first, simplicity, surgical changes, goal-driven execution

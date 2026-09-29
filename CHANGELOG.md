@@ -3,6 +3,25 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+Model routing framework.
+
+- **Cheapest tier that can do the job.** New rule `harness/rules/models.md`,
+  imported by the bot template: Opus 5.5 for the main thread, `planner` and
+  `senior-coder`; Sonnet 5.5 for `coder` and `critic` (the default for any
+  subagent); Haiku 4.5 for `one-shot`. Escalate on evidence, not in advance.
+  It also sets 7-day usage gates that narrow which tiers may run.
+- **Fable is opt-in.** The `fable` agent (now Fable 5.1) is only for when the
+  operator asks for it by name, or Opus 5.5 at `xhigh` has failed. Never for
+  fan-outs, review loops or coordination.
+- **Effort per agent.** Agent files now set `effort:` (Opus `high`, Sonnet
+  `medium`, Fable `xhigh`; Haiku has none) next to a pinned `model:` id.
+- **One source of truth.** `harness/models.json` maps each tier to its model
+  id and effort, and each agent to a tier. A new test,
+  `test_models_registry.py`, fails if an agent file, `models.json` or
+  `models.md` disagree.
+
 ## v0.7.7
 
 One review board per bot, linked from the cockpit.

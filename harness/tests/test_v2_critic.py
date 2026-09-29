@@ -2,7 +2,7 @@
 
 Verifies:
   1. harness/agents/critic.md exists with valid YAML frontmatter
-     (name=critic, model=claude-sonnet-5, non-empty description, body text)
+     (name=critic, model=claude-sonnet-5-5, non-empty description, body text)
   2. tools/v2/critic.py runs without traceback
   3. critic.py returns valid JSON with the expected backwards-compat envelope
      (status="manual-only", claims=list, overall_score, task_file, result_file)
@@ -56,7 +56,7 @@ def test_critic_md_frontmatter():
     fields, body = _parse_frontmatter(text)
     assert fields, "critic.md: no YAML frontmatter detected"
     assert fields.get("name") == "critic"
-    assert fields.get("model") == "claude-sonnet-5"
+    assert fields.get("model") == "claude-sonnet-5-5"
     assert len(fields.get("description", "")) >= 30
     assert len(body.strip()) >= 100
 
