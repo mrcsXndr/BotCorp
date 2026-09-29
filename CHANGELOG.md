@@ -3,7 +3,7 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## v0.8.1 (unreleased)
+## v0.8.1
 
 Backup accounts with automatic failover and failback, a Settings page, a
 favicon and newest-first releases.
