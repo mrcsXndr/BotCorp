@@ -282,6 +282,11 @@ app.get('/api/bots/:name/tools', withBot(async (_req, res, bot) => {
   if (!scan) return res.status(502).json({ error: 'tools scan failed' });
   res.json(scan);
 }));
+app.get('/api/bots/:name/inventory', withBot(async (_req, res, bot) => {
+  const inv = await cliJson(['tools', bot.name, 'inventory', '--json'], null);
+  if (!inv) return res.status(502).json({ error: 'tools inventory failed' });
+  res.json(inv);
+}));
 const TOOL_KINDS = ['cli', 'monitor', 'integration', 'lib'];
 app.post('/api/bots/:name/tools/register', withBot(async (req, res, bot) => {
   const { name, path: p, kind, purpose, secrets } = req.body || {};

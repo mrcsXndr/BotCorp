@@ -52,7 +52,7 @@ const {
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
-const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak } = await import('./tools.mjs');
+const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak, toolInventory } = await import('./tools.mjs');
 
 const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
@@ -1147,7 +1147,7 @@ function cmdApprovals({ flags }) {
 // ---- tools: the capability registry (cli/tools.mjs) ------------------------------------
 const TOOLS_USAGE = 'tools <bot> scan [--json] [--proposal <file>] | tools <bot> register --file <proposal> | '
   + 'tools <bot> register --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b] | '
-  + 'tools <bot> retire <name|path> [--by <who>] | tools <bot> gate [--days <n>] [--json]';
+  + 'tools <bot> retire <name|path> [--by <who>] | tools <bot> gate [--days <n>] [--json] | tools <bot> inventory [--json]';
 
 // <rt>/state/<bot>.registry-days.json: every `tools <bot> scan` records its
 // day there (cli/tools.mjs nextRegistryDays); `tools <bot> gate` reads the streak.
@@ -1158,7 +1158,7 @@ function readRegistryDays(bot) {
 
 function cmdTools({ pos, flags }) {
   const [, bot, action, ...rest] = pos;
-  requireBot(bot);
+  requireBot(bot, action === 'inventory' ? HAND_NAME_RE : NAME_RE);   // the read-only verb also takes a '_' fixture
   const home = botHome(bot);
   const cfg = loadBotYaml(botYamlPath(bot));
   const tools = Array.isArray(cfg.tools) ? cfg.tools.filter(isObj) : [];
@@ -1180,6 +1180,17 @@ function cmdTools({ pos, flags }) {
     for (const e of r.proposal.tools) out(`  ${e.kind.padEnd(11)} ${e.name}  ${e.path}`);
     for (const o of r.proposal.orphans) out(typeof o === 'string' ? `  orphan      ${o}` : `  orphan      ${o.path}  reads ${o.reads.join(', ')}`);
     if (proposalFile) out(`proposal written: ${proposalFile} (botcorp tools ${bot} register --file <it>)`);
+    return 0;
+  }
+
+  // read-only: unlike `scan`, it records no registry day
+  if (action === 'inventory') {
+    const inv = toolInventory({ botHome: home, cfg: { ...cfg, name: bot }, botcorpRoot: ROOT, scan: cfg.tools === null ? null : scanTools(home, cfg) });
+    if (flags.json) { outJson(inv); return 0; }
+    for (const g of inv.groups) {
+      out(`${g.label} (${g.license})`);
+      for (const s of g.sections) out(`  ${s.label.padEnd(17)} ${s.items.filter((i) => i.on).length}/${s.items.length} on`);
+    }
     return 0;
   }
 
@@ -3202,6 +3213,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
   tools <bot> gate [--days 7] [--json]   clean consecutive days from the scan record; exit 0 once ready for enforce
+  tools <bot> inventory [--json]   everything the bot can use: BotCorp harness, its own, third-party (the cockpit Tools tab)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
