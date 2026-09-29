@@ -33,6 +33,26 @@ Usage limits recover on their own, and accounts are managed in the cockpit.
   approval token and are audited (`cockpit-audit.jsonl`, `logs/accounts.log`
   with `--by`), never with the token. The Usage sheet's "Switch account"
   opens this sheet.
+- **Admin bots.** `role: admin` in a bot's bot.yaml lets that one bot run
+  operator-only verbs: `accounts add|remove|seed|use`, `secrets set|delete`,
+  `approve` and `reject`, `pair`, `update --apply|--skip`, and
+  `start|stop|restart` of other bots. It still cannot decide a change to any
+  bot's `role` (its own included), read a secret, or run `cockpit
+  expose|unexpose`. Changing `role` always waits in the approval queue, even
+  when the operator asks for it. Every admin action is one line in
+  `state/admin-audit.jsonl`, shown in the cockpit's Approvals sheet. A
+  Telegram line per action is optional (`harness.admin_notify`, off).
+- **A bot proves who it is.** Every launch gives the session a new random
+  `BOTCORP_LAUNCH_ID` and writes the same id to `state/<bot>/launch-id`. A
+  caller is bot X only when both match, so a `BOT_NAME` typed into a command
+  gets it nothing. All bots still run as one Windows user: this is a policy
+  with an audit trail, not a sandbox (`docs/cli.md`, "Admin bots").
+- **Tighter for every other bot.** A bot can no longer `start`, `stop` or
+  `restart` another bot (its own session is fine), and `secrets
+  export-bundle` is operator-only. The operator guard hook now also covers
+  `accounts add|remove|seed`, `secrets set|delete`, `pair <id>`, `update
+  --apply|--skip` and `cockpit expose|unexpose`, and the vault guard blocks
+  the `launch-id` files.
 
 ## v0.7.8
 

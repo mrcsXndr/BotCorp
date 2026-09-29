@@ -525,7 +525,13 @@ the attach client, never the session.
 
 `BOT_HOME`, `BOT_NAME`, `BOT_MODULES`, `BOTCORP_HOME`, `BOTCORP_ROOT`,
 `CLAUDE_CONFIG_DIR` (= `bots/<name>/.claude-<name>`), `CLAUDE_PLUGIN_ROOT`,
-`PYTHONIOENCODING=utf-8`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`.
+`PYTHONIOENCODING=utf-8`, `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never`,
+and `BOTCORP_LAUNCH_ID`: a new random id for every launch. The launcher writes
+the same id to `<rt>/state/<bot>/launch-id` when its environment really
+reaches the session. A background launch whose Claude Code daemon keeps
+running keeps the daemon's environment, so it keeps the old id and the old
+file. The CLI compares the two to tell a real bot from a `BOT_NAME` set by
+hand (`docs/cli.md`, "Admin bots").
 Python is resolved at runtime in this order: `BOT_PYTHON` (when set and it
 exists) > the `py` launcher (`py -3 -c "import sys; print(sys.executable)"`) >
 the `HKCU`/`HKLM` `Python\PythonCore` registry (newest version) >

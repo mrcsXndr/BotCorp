@@ -12,8 +12,10 @@ Conventions:
   an operator-only verb run from inside a bot session (`BOT_NAME` or
   `CLAUDECODE` in the env): `approve`, `reject`, `accounts add|remove|seed|use`,
   `secrets set|delete` (for any bot), `pair <bot> <senderId>`, `cockpit
-  expose|unexpose`, `update --apply|--skip`, `cc rollback`, and any verb given
-  `--requested-by`. They change nothing when they refuse.
+  expose|unexpose`, `update --apply|--skip`, `cc rollback`, `secrets
+  export-bundle`, and any verb given `--requested-by`. A bot also gets exit 3
+  for `start|stop|restart` of any bot but its own. They change nothing when
+  they refuse. An admin bot may run some of them: see "Admin bots" below.
 - Plain text, one fact per line. Read commands take `--json` and print objects.
 - A secret is never on a command line and never printed: values go in on
   STDIN (or a hidden prompt) and come out masked (`****last4`).
@@ -461,6 +463,7 @@ queues nothing and prints the pending entry's id (`already queued ...`):
 | `tools` (add) | an entry is `kind: integration` or has `secrets` |
 | `harness.tools_registry` | `enforce` -> `warn` |
 | `account` | the value changes (switches the Claude account, `none` included) |
+| `role` | the value changes, either way, even from the operator's own terminal (see "Admin bots") |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
 `operator:<user>` (`--requested-by` overrides it from the operator's env and
@@ -1003,6 +1006,71 @@ logins, `--no-tg-probe` the Telegram slot probe.
 
 Prints the command summary.
 
+### `whoami [--json]`
+
+Says who this process counts as: `operator`, `admin bot <name>` or `bot
+<name>`, and why. Read-only. The operator guard hook runs it to decide whether
+a session may use an operator-only verb.
+
+## Admin bots
+
+One bot can be given more rights than the others: `role: admin` in its
+bot.yaml (default: no role). Such a bot may run these operator-only verbs:
+
+- `accounts add|remove|seed|use`
+- `secrets set|delete` (any bot's vault)
+- `approve` and `reject`
+- `pair <bot> <senderId>`
+- `update --apply|--skip`
+- `start`, `stop` and `restart` of other bots
+
+Three things stay the operator's alone, admin or not:
+
+1. **A role change.** An admin bot cannot approve or reject a change to any
+   bot's `role`, its own included. Named by id, the verb refuses (exit 3); in
+   `approve --all` those entries are skipped and stay queued.
+2. **Reading secrets.** The vault stays write-only for every bot:
+   `secrets export-bundle` refuses, and the vault guard hook still blocks
+   every read of a `.vault` folder and of the vault scripts.
+3. **`cockpit expose` and `unexpose`.**
+
+Changing `role` is always a widening change. `botcorp config set <bot> role
+admin` (or `null`) goes to the approval queue even when you run it yourself,
+and you approve it with `botcorp approve`. The one way around the queue is to
+edit bot.yaml by hand.
+
+**How a bot proves who it is.** `BOT_NAME` alone proves nothing: anyone can
+set it. At every launch, `launch.ps1` makes a new random id. The session gets
+it as `BOTCORP_LAUNCH_ID`, and the same id is written to
+`<rt>/state/<bot>/launch-id`. A caller counts as bot X only when its
+`BOT_NAME` is X and its `BOTCORP_LAUNCH_ID` matches X's file. A session
+started before v0.8.0 has no id, so it does not count as an admin until its
+next start. The vault guard blocks tool calls that touch a `launch-id` file.
+
+**Where the rules are checked.**
+
+- The CLI: every verb above, with exit 3 on a refusal.
+- The operator guard hook: it blocks the verbs in a Bash or PowerShell call
+  unless `botcorp whoami` says admin. It reads the session's own environment,
+  so `BOT_NAME=x` typed into a command changes nothing.
+- The vault guard hook: unchanged for admins, plus the `launch-id` files.
+- The cockpit: it never runs the CLI as a bot (it removes `BOT_NAME`,
+  `CLAUDECODE` and `BOTCORP_LAUNCH_ID`), and it shows every admin action in
+  the Approvals sheet.
+
+**Audit.** Every admin action, and every refused role decision, is one line
+in `<rt>/state/admin-audit.jsonl`: time, `by: bot:<name>`, the verb and its
+target, never a value. The approval history, `logs/accounts.log` and the other
+decision logs name `bot:<name>` too, whatever `--by` says. To also get one
+Telegram line per action, set `harness.admin_notify: true` on the admin bot
+(default off). The line goes through that bot's own `tg_send.py`.
+
+**What this is not.** All bots run as the same Windows user. A bot that
+wanted to get around these checks could read another process's environment or
+call the scripts behind the CLI directly. The admin role is a policy with an
+audit trail, not a sandbox. Give it only to a bot you would trust with your
+terminal.
+
 ## Environment
 
 | Variable | Meaning |
@@ -1013,7 +1081,8 @@ Prints the command summary.
 | `BOTCORP_PTY_COMMAND` | pty-host test seam: `start` hosts this command line instead of `launch.ps1` (tests only) |
 | `BOTCORP_ATTACH_IDLE_MIN` | minutes an attach host (`pty-host --attach`) stays up with no client (default 15) |
 | `BOTCORP_INBOX_POLL_MS` | how often the inbox drainer re-observes a session that is not idle yet (default 10000) |
-| `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; every operator-only verb refuses (exit 3) when it or `CLAUDECODE` is set |
+| `BOT_NAME` | set inside a bot session by the launcher; `config set` records it as `requested_by`; every operator-only verb refuses (exit 3) when it or `CLAUDECODE` is set, unless the caller is an admin bot |
+| `BOTCORP_LAUNCH_ID` | set inside a bot session by the launcher; with `BOT_NAME` it proves which bot a caller is (see "Admin bots") |
 | `CLOUDFLARE_API_TOKEN` | `doctor`'s Workers Builds trigger check (`integrations.cloudflare`); env only, the daemon injects it |
 | `BOTCORP_DEBUG` | print stack traces for unexpected errors |
 
