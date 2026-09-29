@@ -47,6 +47,8 @@ GATED = [
     (("cockpit", "unexpose"), None),
     (("update", "--apply", "v9.9.9"), None),
     (("update", "--skip", "v9.9.9"), None),
+    (("update", "--rollback", "v0.0.1"), None),
+    (("update", "--cancel", "v9.9.9"), None),
     (("cc", "rollback"), None),
     (("secrets", "set", "t", "api_key"), FAKE + "\n"),
     (("secrets", "delete", "t", "api_key"), None),

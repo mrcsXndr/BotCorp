@@ -11,13 +11,14 @@
 #   prompts (GIT_TERMINAL_PROMPT=0, GCM_INTERACTIVE=never); EVERY `v*` tag on
 #   origin/main newer than HEAD becomes a release in <rt>/state/updates.json
 #     {checked_at, head, head_sha,
-#      releases: [{tag, sha, date, what: [..], why: [..], value: [..],
-#                  status: pending|apply_requested|applied|skipped|failed, ...}]}
-#   where what/why/value come from the release's CHANGELOG.md section
-#   (`## <tag>` up to the next `## `; bullets under `What` / `Why` / `Value`
-#   headings when present, else the first three bullets become What and why /
-#   value read "see changelog"). An existing entry keeps its status; a tag that
-#   HEAD has reached is marked applied. No Telegram, no apply: the operator
+#      releases: [{tag, sha, date, summary, notes: [{title, text}], notes_tail,
+#                  status: pending|apply_requested|applied|included|skipped|failed, ...}]}
+#   where the notes come from the release's own CHANGELOG.md section, read by
+#   core/changelog.mjs (summary = the lead paragraph, notes = the bullets,
+#   notes_tail = the upgrade note). An entry recorded before v0.8.2 (what / why
+#   / value, no summary) gets its notes read again once. An existing entry
+#   keeps its status; a tag that HEAD has reached is marked applied. No
+#   Telegram, no apply: the operator
 #   sees pending releases (with the notes) in the cockpit and the weekly digest
 #   and presses Apply / Skip there. Not a git checkout -> "not a git checkout",
 #   exit 0.
@@ -27,7 +28,11 @@
 #   `git checkout --detach <tag>`; daemon/smoke.ps1; pass -> <rt>/state/harness.json
 #   {tag, sha, channel, applied_at, schema, migrations}, run
 #   harness/migrations/NNN-*.ps1 newer than the recorded schema, `node
-#   daemon/sync.mjs <bot>` for every bot, release status applied; fail ->
+#   daemon/sync.mjs <bot>` for every bot, release status applied, and the
+#   other releases between the two versions updated (releases are cumulative:
+#   an upgrade marks the ones it skipped over `included`, a roll back to an
+#   older tag marks the ones it left `pending` again; migrations are never
+#   undone); fail ->
 #   `git checkout --detach <from>`, status failed with the smoke tail, then a
 #   Ready card (gh_projects.py add "HARNESS UPDATE FAILED <tag>") for every bot
 #   whose board module is on, else a HUMAN: line in <BotHome>/memory/metrics/alerts.log.
@@ -73,52 +78,37 @@ function Get-HeadDescribe {
 }
 
 function Get-ChangelogNotes {
-    # CHANGELOG.md -> @{ what; why; value } (string arrays) for one tag.
-    # Section = from the `## <tag>` heading to the next `## `. Inside it a
-    # heading (### / ####, or a bold line) whose text starts with What / Why /
-    # Value collects the bullets below it. No such headings -> the first three
-    # bullets of the section are What; why and value read "see changelog".
-    param([string]$Path, [string]$ForTag)
-    $n = @{ what = @(); why = @(); value = @() }
+    # One release's notes -> @{ summary; notes = @(@{title; text}); tail }, by
+    # core/changelog.mjs (the one extractor; the cockpit reads the same shape):
+    # summary = the section's lead paragraph, notes = its bullets, tail = the
+    # upgrade note after them. -FromTag reads that tag's OWN CHANGELOG.md from
+    # git (a release describes itself even when HEAD is far behind); -Path
+    # reads a file. Nothing found -> empty strings and no notes, never filler.
+    param([string]$Path, [string]$ForTag, [switch]$FromTag)
+    $n = @{ summary = ''; notes = @(); tail = '' }
     try {
-        if (-not (Test-Path $Path)) { return $n }
-        $lines = @(Get-Content $Path -ErrorAction Stop)
-        $start = -1
-        for ($i = 0; $i -lt $lines.Count; $i++) {
-            if ($lines[$i] -match ('^##\s+\[?' + [regex]::Escape($ForTag) + '\]?(\s|$)')) { $start = $i + 1; break }
-        }
-        if ($start -lt 0) { return $n }
-        $section = @()
-        for ($i = $start; $i -lt $lines.Count; $i++) { if ($lines[$i] -match '^##\s') { break }; $section += $lines[$i] }
-        $bucket = $null; $bullets = @(); $seenHeading = $false
-        foreach ($ln in $section) {
-            $t = "$ln".Trim()
-            if (-not $t) { continue }
-            $h = $null
-            if ($t -match '^#{3,6}\s*(.+)$') { $h = $matches[1] }
-            elseif ($t -match '^\*\*([^*]+)\*\*:?\s*$') { $h = $matches[1] }
-            if ($h) {
-                $hl = $h.Trim().ToLowerInvariant()
-                $bucket = $(if ($hl -match '^what') { 'what' } elseif ($hl -match '^why') { 'why' } elseif ($hl -match '^value') { 'value' } else { $null })
-                if ($bucket) { $seenHeading = $true }
-                continue
-            }
-            if ($t -match '^[-*+]\s+(.+)$') {
-                $b = ($matches[1] -replace '\*\*', '').Trim()
-                $bullets += $b
-                if ($bucket) { $n[$bucket] += $b }
-            }
-        }
-        if (-not $seenHeading) {
-            $n.what = @($bullets | Select-Object -First 3)
-            $n.why = @('see changelog'); $n.value = @('see changelog')
-        } else {
-            if ($n.what.Count -eq 0) { $n.what = @($bullets | Select-Object -First 3) }
-            if ($n.why.Count -eq 0) { $n.why = @('see changelog') }
-            if ($n.value.Count -eq 0) { $n.value = @('see changelog') }
-        }
+        $node = Resolve-Node
+        if (-not $node) { return $n }
+        $cl = Join-Path $BotCorp 'core\changelog.mjs'
+        $a = $(if ($FromTag) { @($cl, '--git', $BotCorp, $ForTag, '--git-exe', $git) } else { @($cl, $Path, $ForTag) })
+        $r = Invoke-Bounded -Exe $node -Arguments $a -TimeoutSec 30 -Label "changelog notes $ForTag" -Capture -Env $gitEnv -WorkingDirectory $BotCorp
+        if ($r.ExitCode -ne 0) { return $n }
+        $line = "$($r.Output)" -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1
+        if (-not $line) { return $n }
+        $j = $line | ConvertFrom-Json
+        if (-not $j.found) { return $n }
+        $n.summary = "$($j.summary)"; $n.tail = "$($j.tail)"
+        $n.notes = @($j.notes | ForEach-Object { [ordered]@{ title = "$($_.title)"; text = "$($_.text)" } })
     } catch {}
     return $n
+}
+function Set-Notes {
+    # Write the notes onto a release entry (ordered hashtable), dropping the
+    # pre-v0.8.2 what/why/value arrays: they held the first line of up to three
+    # bullets and "see changelog", which the cockpit showed as "(none given)".
+    param($R, $Notes)
+    $R['summary'] = $Notes.summary; $R['notes'] = @($Notes.notes); $R['notes_tail'] = $Notes.tail
+    foreach ($k in @('what', 'why', 'value')) { if ($R.Contains($k)) { $R.Remove($k) } }
 }
 
 function Read-Updates {
@@ -149,7 +139,7 @@ function Set-ReleaseStatus {
 if ($ParseChangelog) {
     if (-not $Tag) { Write-Host 'usage: update.ps1 -ParseChangelog <file> -Tag <tag>'; exit 1 }
     $notes = Get-ChangelogNotes -Path $ParseChangelog -ForTag $Tag
-    Write-Host (([ordered]@{ tag = $Tag; what = @($notes.what); why = @($notes.why); value = @($notes.value) }) | ConvertTo-Json -Depth 4)
+    Write-Host (([ordered]@{ tag = $Tag; summary = $notes.summary; notes = @($notes.notes); tail = $notes.tail }) | ConvertTo-Json -Depth 5)
     exit 0
 }
 
@@ -177,24 +167,19 @@ if ($Check) {
             $r = $known[$t]
             if ($isHead -and ("$($r.status)" -ne 'applied')) { $r['status'] = 'applied'; $r['status_at'] = (Get-Date).ToString('o') }
             if ($isNewer -and ("$($r.status)" -in @('pending', 'apply_requested'))) { $newer++ }
+            # recorded before v0.8.2 (what/why/value, no summary): read its notes again, once
+            if (-not $r.Contains('summary')) { Set-Notes $r (Get-ChangelogNotes -ForTag $t -FromTag); Log "release notes refreshed: $t" }
             continue
         }
         if (-not $isNewer) { continue }
         # `git show -s` on the tag object (annotated) or its commit: the date only.
         $date = (Invoke-Git @('log', '-1', '--format=%cI', $sha) 20).out
-        # Notes from the release's OWN changelog (the tag's CHANGELOG.md), so a
-        # release describes itself even when HEAD is far behind.
-        $clText = (Invoke-Git @('show', "${t}:CHANGELOG.md") 20)
-        $tmp = $null
-        if ($clText.code -eq 0 -and $clText.out) {
-            $tmp = Join-Path $StateDir ("changelog-$t.tmp.md")
-            try { [System.IO.File]::WriteAllText($tmp, $clText.out) } catch { $tmp = $null }
-        }
-        $notes = Get-ChangelogNotes -Path $(if ($tmp) { $tmp } else { Join-Path $BotCorp 'CHANGELOG.md' }) -ForTag $t
-        if ($tmp) { try { Remove-Item $tmp -Force -ErrorAction SilentlyContinue } catch {} }
-        $u.releases += [ordered]@{ tag = $t; sha = $sha; date = $date; what = @($notes.what); why = @($notes.why); value = @($notes.value); status = 'pending'; seen_at = (Get-Date).ToString('o') }
+        $rec = [ordered]@{ tag = $t; sha = $sha; date = $date; status = 'pending'; seen_at = (Get-Date).ToString('o') }
+        $notes = Get-ChangelogNotes -ForTag $t -FromTag
+        Set-Notes $rec $notes
+        $u.releases += $rec
         $newer++
-        Log "release recorded: $t ($($notes.what.Count) note line(s); status pending - apply is an admin action)"
+        Log "release recorded: $t ($($notes.notes.Count) note(s); status pending - apply is an admin action)"
     }
     [void](Save-Updates $u)
     if ($newer -eq 0) { Log "up to date ($from)" } else { Log "$newer release(s) newer than $from recorded in updates.json (none applied)" }
@@ -217,8 +202,10 @@ function Remaining { param([int]$Floor = 10) return [Math]::Max($Floor, [int](($
 $u0 = Read-Updates
 $rel = @($u0.releases | Where-Object { "$($_.tag)" -eq $Tag }) | Select-Object -First 1
 if (-not $rel) { Log "apply: $Tag is not a recorded release (run -Check first)"; exit 1 }
-if ("$($rel.status)" -eq 'applied') { Log "apply: $Tag already applied"; exit 0 }
 if (-not (Test-Path $gitDir)) { Log 'apply: not a git checkout - cannot apply'; exit 1 }
+# Already checked out (not "was applied once": a roll back re-applies an older release)
+$tagSha = (Invoke-Git @('rev-parse', "$Tag^{commit}") 20).out
+if ($tagSha -and $tagSha -eq (Invoke-Git @('rev-parse', 'HEAD') 20).out) { [void](Set-ReleaseStatus -ForTag $Tag -Status 'applied'); Log "apply: $Tag is already checked out"; exit 0 }
 $to = $Tag; $from = Get-HeadDescribe
 
 function Write-Failed {
@@ -301,6 +288,38 @@ if ($node) {
     }
 }
 [void](Set-ReleaseStatus -ForTag $to -Status 'applied' -Extra @{ applied_at = (Get-Date).ToString('o'); from = $from })
+
+# Releases are cumulative: a checkout of <to> carries every older tag with it.
+#   upgrade:  a release between <from> and <to> still pending, requested, failed
+#             or skipped is now `included` (included_in: <to>), never applied
+#             again on its own;
+#   roll back: a release above <to> up to <from> that was applied or included
+#             is `pending` again, so it can be applied again later.
+# The version we left gets an entry when it has none, so it can be rolled back to.
+try {
+    $now = (Get-Date).ToString('o')
+    $toV = ConvertTo-Version $to
+    $fromV = ConvertTo-Version $(if ($from -match '^v\d') { $from } else { 'v0.0' })
+    $u = Read-Updates
+    if ($from -match '^v\d' -and -not @($u.releases | Where-Object { "$($_.tag)" -eq $from })) {
+        $rec = [ordered]@{ tag = $from; sha = $fromSha; date = (Invoke-Git @('log', '-1', '--format=%cI', $fromSha) 20).out; status = 'applied'; seen_at = $now }
+        Set-Notes $rec (Get-ChangelogNotes -ForTag $from -FromTag)
+        $u.releases += $rec
+    }
+    foreach ($r in $u.releases) {
+        $t = "$($r.tag)"; if ($t -eq $to) { continue }
+        $v = ConvertTo-Version $t; $s = "$($r.status)"
+        if ($toV -gt $fromV -and $v -gt $fromV -and $v -lt $toV -and $s -in @('pending', 'apply_requested', 'failed', 'skipped')) {
+            $r['status'] = 'included'; $r['included_in'] = $to; $r['status_at'] = $now
+        } elseif ($toV -lt $fromV -and $v -gt $toV -and $v -le $fromV -and $s -in @('applied', 'included')) {
+            $r['status'] = 'pending'; $r['rolled_back_to'] = $to; $r['status_at'] = $now
+        } elseif ($s -eq 'apply_requested') {
+            $r['status'] = 'pending'; $r['status_at'] = $now   # one request at a time: the one just applied answered it
+        }
+    }
+    [void](Save-Updates $u)
+    Log "$(if ($toV -lt $fromV) { 'ROLLED BACK' } else { 'upgraded' }) $from -> ${to}: release statuses updated"
+} catch { Log "release bookkeeping: swallowed exception (fail-open): $($_.Exception.Message)" }
 
 # 5. cockpit onto the new code: restart it and verify /healthz before claiming success.
 try {

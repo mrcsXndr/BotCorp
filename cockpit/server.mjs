@@ -412,15 +412,14 @@ const RELEASE_TAG_RE = /^[A-Za-z0-9._-]{1,40}$/;
 app.get('/api/updates', wrap(async (_req, res) => res.json(await updates.listUpdates())));
 // The Claude Code pin (botcorp cc status --json), each bot as of its last tick. Read-only.
 app.get('/api/cc', wrap(async (_req, res) => res.json(ccStatus())));
-app.post('/api/updates/:tag/apply', wrap((req, res) => {
-  if (!RELEASE_TAG_RE.test(req.params.tag)) return res.status(400).json({ error: 'bad tag' });
+// apply | skip | rollback (a release older than the installed one) | cancel (a request)
+app.post('/api/updates/:tag/:action', wrap((req, res) => {
+  const { tag, action } = req.params;
+  if (!RELEASE_TAG_RE.test(tag) || tag.startsWith('-')) return res.status(400).json({ error: 'bad tag' });
+  if (!['apply', 'skip', 'rollback', 'cancel'].includes(action)) return res.status(404).json({ error: 'no such action' });
   if (!operatorGate(req, res)) return;
-  return lifecycle(res, ['update', '--apply', req.params.tag]);
-}));
-app.post('/api/updates/:tag/skip', wrap((req, res) => {
-  if (!RELEASE_TAG_RE.test(req.params.tag)) return res.status(400).json({ error: 'bad tag' });
-  if (!operatorGate(req, res)) return;
-  return lifecycle(res, ['update', '--skip', req.params.tag]);
+  res.locals.audit = { release: tag, action };
+  return lifecycle(res, ['update', `--${action}`, tag, '--by', req.identity]);
 }));
 
 // New-chat launcher: an interactive `claude` in a Windows Terminal tab under

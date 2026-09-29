@@ -26,6 +26,8 @@ def _run(env, hook, tool_name, tool_input):
     'node "C:\\x\\BotCorp\\cli\\botcorp.mjs" approve alpha --all',
     "botcorp reject beta ab12cd --reason x",
     "BC=1 node cli/botcorp.mjs accounts use alpha acc1",
+    "node cli/botcorp.mjs update --rollback v0.7.7",
+    "botcorp update --cancel v0.8.0",
 ])
 def test_blocks_operator_verbs(tmp_path, bot_home, tool, command):
     proc = _run(base_env(tmp_path, bot_home), "operator-guard.sh", tool, {"command": command})
@@ -36,6 +38,7 @@ def test_blocks_operator_verbs(tmp_path, bot_home, tool, command):
 @pytest.mark.parametrize("tool,tool_input", [
     ("Grep", {"pattern": "approve"}),
     ("Bash", {"command": "node cli/botcorp.mjs approvals --json"}),
+    ("Bash", {"command": "node cli/botcorp.mjs update --json"}),
     ("Bash", {"command": "node cli/botcorp.mjs config set alpha automations.x.enabled true"}),
     ("PowerShell", {"command": "git log --grep approve"}),
     ("Read", {"file_path": "C:/x/botcorp/approve.md"}),

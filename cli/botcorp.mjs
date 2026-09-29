@@ -40,6 +40,7 @@ const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
 const { ccStatus, botCc, fileSha256 } = await import('../core/cc.mjs');
 const { classifyBlock, decide, chainOf, hhmm, isOwn } = await import('../core/failover.mjs');
+const { releaseView, isOlder, cmpVersion } = await import('../core/releases.mjs');
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
@@ -53,7 +54,7 @@ const {
 } = await import('./_lib.mjs');
 const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak } = await import('./tools.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -2327,37 +2328,75 @@ function readUpdates() {
   return isObj(j) && Array.isArray(j.releases) ? j : { releases: [] };
 }
 
+// The installed version (botcorp.json of this checkout), as the cockpit reads it.
+function installedVersion() { return (readJson(path.join(ROOT, 'botcorp.json')) || {}).version || null; }
+
+// --apply <tag>     a release newer than the installed one: apply_requested
+// --rollback <tag>  a release OLDER than the installed one: apply_requested + rollback
+//                   (the same daemon apply: checkout, smoke test, back on failure)
+// --skip <tag>      skipped; --cancel <tag>: an apply_requested release back to pending
+// One request at a time: a new --apply / --rollback puts any other request back to
+// pending (releases are cumulative, so the newest request covers the older ones).
 function cmdUpdate({ flags }) {
   if (flags.check) return shellDaemonScript('update.ps1', ['-Check'], 'update');
-  if (flags.apply && flags.skip) usage('update: --apply <tag> or --skip <tag>, not both');
-  const tag = flags.apply || flags.skip;
-  if (tag) {
-    requireOperator(`update --${flags.apply ? 'apply' : 'skip'}`, { admin: true, target: String(tag) });
-    const who = requestedBy(flags);
+  const verbs = ['apply', 'rollback', 'skip', 'cancel'].filter((v) => flags[v]);
+  if (verbs.length > 1) usage(`update: one of --apply | --rollback | --skip | --cancel <tag>, not ${verbs.map((v) => `--${v}`).join(' and ')}`);
+  if (verbs.length) {
+    const verb = verbs[0], tag = String(flags[verb]);
+    if (flags[verb] === true) usage(`update --${verb} <tag>`);
+    const caller = requireOperator(`update --${verb}`, { admin: true, target: tag });
+    // the cockpit passes its identity as --by; an admin bot is always bot:<name>
+    const who = caller.admin ? `bot:${caller.admin}` : flags.by && flags.by !== true ? String(flags.by) : requestedBy(flags);
     const u = readUpdates();
-    const rel = u.releases.find((r) => r && String(r.tag) === String(tag));
+    const rel = u.releases.find((r) => r && String(r.tag) === tag);
     if (!rel) fail(`update: no release ${tag} in ${updatesPath()} (botcorp update lists them; --check records new ones)`);
-    if (rel.status === 'applied') fail(`update: ${tag} is already applied`);
-    const target = flags.apply ? 'apply_requested' : 'skipped';
-    if (rel.status === target) { out(`update: ${tag} already ${target}`); return 0; }
-    rel.status = target;
-    rel.decided_at = new Date().toISOString();
-    rel.decided_by = who;
+    const installed = installedVersion();
+    const older = isOlder(tag, installed), same = older && cmpVersion(tag, installed) === 0;
+    const now = new Date().toISOString();
+    if (verb === 'cancel') {
+      if (rel.status !== 'apply_requested') fail(`update: ${tag} is ${rel.status || 'not requested'}, nothing to cancel`);
+      rel.status = 'pending'; delete rel.rollback;
+      Object.assign(rel, { decided_at: now, decided_by: who });
+      writeJsonAtomic(updatesPath(), u);
+      out(`update: ${tag} request cancelled -> pending`);
+      return 0;
+    }
+    if (verb === 'skip') {
+      if (rel.status === 'applied' || older) fail(`update: ${tag} is ${same ? 'the installed version' : older ? `older than the installed v${installed}` : 'already applied'}; only a newer release is skipped`);
+      if (rel.status === 'skipped') { out(`update: ${tag} already skipped`); return 0; }
+      Object.assign(rel, { status: 'skipped', decided_at: now, decided_by: who });
+      delete rel.rollback;
+      writeJsonAtomic(updatesPath(), u);
+      out(`update: ${tag} -> skipped`);
+      return 0;
+    }
+    if (same) fail(`update: ${tag} is the installed version`);
+    if (verb === 'apply' && older) fail(`update: ${tag} is older than the installed v${installed}: botcorp update --rollback ${tag} goes back to it`);
+    if (verb === 'rollback' && !older) fail(`update: ${tag} is not older than the installed v${installed ?? '?'}: botcorp update --apply ${tag}`);
+    if (rel.status === 'apply_requested' && !!rel.rollback === (verb === 'rollback')) { out(`update: ${tag} already requested`); return 0; }
+    for (const r of u.releases) {
+      if (r && r !== rel && r.status === 'apply_requested') { r.status = 'pending'; delete r.rollback; r.superseded_by = tag; out(`update: ${r.tag} request replaced by ${tag} -> pending`); }
+    }
+    Object.assign(rel, { status: 'apply_requested', decided_at: now, decided_by: who });
+    if (verb === 'rollback') rel.rollback = true; else delete rel.rollback;
     writeJsonAtomic(updatesPath(), u);
-    out(flags.apply
-      ? `update: ${tag} -> apply_requested (the daemon applies it at each bot's next safe restart; smoke test and rollback stay on)`
-      : `update: ${tag} -> skipped`);
+    out(verb === 'rollback'
+      ? `update: roll back to ${tag} requested (from v${installed}; the daemon checks it out at the next safe point, runs the smoke test and returns to v${installed} if it fails; migrations are not undone)`
+      : `update: ${tag} -> apply_requested (the daemon applies it at each bot's next safe restart; smoke test and rollback stay on)`);
     return 0;
   }
   const u = readUpdates();
   if (flags.json) { outJson(u); return 0; }
   if (!u.releases.length) { out(`update: no releases recorded in ${updatesPath()} (the daemon's hourly check writes it; botcorp update --check runs one now)`); return 0; }
-  for (const r of u.releases) {
-    out(`${String(r.status || '?').padEnd(15)} ${r.tag}  ${r.date || ''}  ${r.sha ? String(r.sha).slice(0, 10) : ''}`);
-    for (const k of ['what', 'why', 'value']) if (r[k]) out(`    ${k.padEnd(6)} ${String(r[k]).replace(/\s+/g, ' ')}`);
+  const v = releaseView(u.releases, installedVersion());
+  if (v.current) out(`installed        ${v.current.tag}`);
+  for (const r of [...v.available, ...v.history]) {
+    const how = r.included_in && r.view !== 'history' ? ` (with ${r.included_in})` : r.view === 'history' && r.included_in ? ` (came with ${r.included_in})` : '';
+    out(`${String(r.view).padEnd(18)} ${r.tag}  ${r.date || ''}${how}`);
+    if (r.summary && r.view !== 'history') out(`    ${String(r.summary).replace(/\s+/g, ' ')}`);
   }
-  const pending = u.releases.filter((r) => r.status === 'pending').length;
-  out(`update: ${pending} pending  ->  botcorp update --apply <tag> | --skip <tag>   (applied at each bot's next safe restart, never from here)`);
+  const offer = v.available.filter((r) => r.actions.includes('skip')).map((r) => r.tag);
+  out(`update: ${offer.length ? `${offer[0]} is ready` : 'nothing to apply'}  ->  botcorp update --apply <tag> | --skip <tag> | --rollback <older tag> | --cancel <tag>   (applied at the next safe point, never from here)`);
   return 0;
 }
 
@@ -3136,10 +3175,10 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
       [--source cli|cockpit]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
-       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip,
+       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip|--rollback|--cancel,
        cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox.
        An admin bot (bot.yaml role: admin, its launch id matching) may run approve/reject, accounts,
-       secrets set|delete, pair, update --apply|--skip and start/stop/restart of other bots, each line in
+       secrets set|delete, pair, update --apply|--skip|--rollback|--cancel and start/stop/restart of other bots, each line in
        state/admin-audit.jsonl; never a role change, a secret read, or cockpit expose|unexpose)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
@@ -3152,7 +3191,8 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   inbox <bot> [list [--json] [--tail N] | kick | drain]                 (list: each message's status queued|held|delivered|expired|failed)
   (start, stop, restart, sync, secrets, send, inbox and observe also take a '_' fixture: bots/_canary; nothing supervises it)
   automations <bot> [list [--json] | pause|disable <name> | resume|enable <name> | run <name>]   (a bot's enable queues for approval)
-  update [--json] | update --apply <tag> | update --skip <tag> | update --check
+  update [--json] | update --apply|--skip|--rollback|--cancel <tag> | update --check
+      (--rollback: a release older than the installed one; one request at a time, the newest request wins)
   cc status [--json] | cc test | cc rollback [--to <version>]          (the Claude Code pin: bots roll onto it between turns)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)

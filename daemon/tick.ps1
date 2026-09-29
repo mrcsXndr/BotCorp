@@ -247,7 +247,9 @@ function Invoke-UpdateApply {
     try {
         $u = Read-JsonFile -Path (Join-Path $StateDir 'updates.json')
         if (-not $u -or -not $u.releases) { return $null }
-        $req = @($u.releases | Where-Object { "$($_.status)" -eq 'apply_requested' })
+        # `update --apply|--rollback` keeps one request at a time; an older file may hold
+        # several, and the newest wins (applying it includes the older ones)
+        $req = @($u.releases | Where-Object { "$($_.status)" -eq 'apply_requested' } | Sort-Object { try { [version](("$($_.tag)") -replace '^v', '' -replace '[^0-9.].*$', '') } catch { [version]'0.0' } } -Descending)
         if ($req.Count -eq 0) { return $null }
         $tag = "$($req[0].tag)"
         foreach ($b in (Get-BotList)) {
