@@ -78,6 +78,48 @@
     return tag({ name: 'Own token', title: [tok, a.source].filter(Boolean).join(' · ') });
   }
 
+  // ---- Settings: how the sheet edits one bot.yaml value (GET /api/bots/:name/config) ----
+  // enum: a select over the values validate() accepts (plus the current one if
+  // it is something else); readonly: a list, or a value another page owns.
+  const CONFIG_ENUMS = {
+    permissions: ['bypass', 'default'],
+    effort: ['low', 'medium', 'high', 'xhigh', 'max'],
+    role: [null, 'admin'],
+    'harness.channel': ['stable', 'pinned'],
+    'harness.service': ['daemon', 'manual'],
+    'harness.session': ['bg', 'pty'],
+    'harness.tools_registry': ['warn', 'enforce'],
+    'harness.modules.janitor': [true, false, 'report'],
+    'integrations.telegram.dm_policy': ['pairing', 'allowlist', 'disabled'],
+    'integrations.board.type': ['user', 'org'],
+    'vault.lock': [null, 'none', 'operator'],
+  };
+  const CONFIG_ELSEWHERE = {
+    account: 'the Accounts page', backup_accounts: 'the Accounts page', automations: 'the Automations and tools tab',
+    tools: 'the Automations and tools tab', secrets: 'the Secrets tab', 'integrations.telegram.allow_from': 'the Telegram access tab',
+  };
+  function configField(p, value) {
+    const where = CONFIG_ELSEWHERE[p] || CONFIG_ELSEWHERE[String(p).split('.')[0]];
+    if (where) return { kind: 'readonly', note: `changed on ${where}` };
+    if (p === 'name') return { kind: 'readonly', note: 'the bot folder name' };
+    if (Object.hasOwn(CONFIG_ENUMS, p)) { const o = CONFIG_ENUMS[p]; return { kind: 'enum', options: o.includes(value) ? o : [...o, value] }; }
+    if (Array.isArray(value) || (value && typeof value === 'object')) return { kind: 'readonly', note: 'a list: botcorp config set in the terminal' };
+    if (typeof value === 'boolean') return { kind: 'bool' };
+    if (typeof value === 'number') return { kind: 'number' };
+    return { kind: 'text' };
+  }
+  // Every leaf of the effective config as {path, value}; a list is one leaf.
+  function configRows(cfg, pre = '') {
+    if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) return pre ? [{ path: pre, value: cfg === undefined ? null : cfg }] : [];
+    return Object.keys(cfg).flatMap((k) => configRows(cfg[k], pre ? `${pre}.${k}` : k));
+  }
+  // How a value reads when it is not being edited.
+  function configText(v) {
+    if (v === null || v === undefined || v === '') return 'none';
+    if (Array.isArray(v)) return !v.length ? 'none' : v.every((x) => typeof x !== 'object') ? v.join(', ') : `${v.length} ${v.length === 1 ? 'entry' : 'entries'}`;
+    return String(v);
+  }
+
   // The Usage sheet's chain line for one bot row (attention.mjs usageOverview):
   // '' without backups, else the chain in order and, after a failover, which
   // account it is on now.
@@ -162,6 +204,6 @@
     };
   }
 
-  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, chainLine, toolName, toolsLine, WIDENS,
+  root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, chainLine, configField, configRows, configText, toolName, toolsLine, WIDENS,
     fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX, boardLink };
 })(typeof window !== 'undefined' ? window : globalThis);

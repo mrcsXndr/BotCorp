@@ -31,6 +31,7 @@ import { promises as fsp } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import express from 'express';
 import { WebSocketServer } from 'ws';
+import yaml from 'js-yaml';
 
 import * as bots from './bots.mjs';
 import { restrictToUser } from '../core/acl.mjs';
@@ -339,6 +340,46 @@ app.post('/api/bots/:name/accounts', withBot(async (req, res, bot) => {
   attention.invalidate();
   const last = steps.find((s) => s.code !== 0) || steps[steps.length - 1] || { code: 0, out: 'nothing to change', err: '' };
   res.status(ok ? 200 : last.code === 2 ? 409 : 502).json({ ok, steps: steps.map((s) => ({ step: s.args, code: s.code })), out: last.out, err: last.err });
+}));
+
+// The Settings sheet: every bot.yaml value as the CLI sees it (defaults
+// merged), which of them the file sets itself, and one value at a time
+// through `config set`. A widening change queues like a bot's would; the
+// sheet shows the queued entry to decide on the spot.
+const CONFIG_PATH_RE = /^[a-z_][a-z0-9_]*(\.[a-z0-9_-]+){0,4}$/;
+function leafPaths(obj, pre = '') {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return pre ? [pre] : [];
+  return Object.keys(obj).flatMap((k) => leafPaths(obj[k], pre ? `${pre}.${k}` : k));
+}
+app.get('/api/bots/:name/config', withBot(async (_req, res, bot) => {
+  const config = await cliJson(['config', 'get', bot.name, '--json'], null);
+  if (!config) return res.status(502).json({ error: `config get ${bot.name} failed${bot.yamlError ? `: ${bot.yamlError}` : ''}` });
+  let raw = {};
+  try { raw = yaml.load(await fsp.readFile(path.join(bot.home, 'bot.yaml'), 'utf-8')) || {}; } catch {}
+  res.json({ config, set: leafPaths(raw) });
+}));
+app.post('/api/bots/:name/config', withBot(async (req, res, bot) => {
+  const { path: p, value } = req.body || {};
+  if (typeof p !== 'string' || p.length > 100 || !CONFIG_PATH_RE.test(p)) return res.status(400).json({ error: 'path: a dotted bot.yaml key, like harness.modules.debrief' });
+  const scalar = value === null || typeof value === 'boolean' || (typeof value === 'number' && Number.isFinite(value)) || (typeof value === 'string' && value.length <= 2000);
+  if (!scalar) return res.status(400).json({ error: 'value: one scalar (text up to 2000 characters, a number, true / false or null); lists are edited in the terminal' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { config: p };
+  const r = await runCli(['config', 'set', bot.name, p, value === null ? 'null' : String(value), '--requested-by', req.identity]);
+  attention.invalidate();
+  const q = /queued for operator approval: botcorp approve \S+ ([0-9a-f]+)/.exec(r.out);
+  const dup = /already queued for operator approval/.test(r.out);
+  // a refusal (unknown path, invalid value) is the CLI's exit >0 with its reason; <0 = it did not run
+  res.status(r.code === 0 ? 200 : r.code > 0 ? 400 : 502).json({ ok: r.code === 0, applied: r.code === 0 && !q, queued: q ? q[1] : null, duplicate: dup, code: r.code, out: r.out, err: r.err });
+}));
+// The Settings sheet's host section: what runs this cockpit.
+app.get('/api/cockpit', wrap(async (_req, res) => {
+  const cc = ccStatus();
+  res.json({
+    ...(await engine.engineVersion()),
+    exposure: ACCESS ? 'access' : 'loopback',
+    cc: { pinned: cc.pinned ? cc.pinned.version : null, candidate: cc.candidate ? { version: cc.candidate.version, status: cc.candidate.status } : null },
+  });
 }));
 
 app.get('/api/bots/:name/pairing', withBot(async (_req, res, bot) => res.json(await pairing.pairingState(bot.name))));

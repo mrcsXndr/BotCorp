@@ -112,6 +112,30 @@ test('account: a failover marks the name as a backup; failback and recover only 
   assert.equal(accountName({ na: 'no status yet' }, accounts, null, 'failover').name, 'n/a');
 });
 
+test('config field: enums, booleans, numbers, text; lists and other pages read-only', () => {
+  const { configField, configRows, configText } = sandbox.CockpitCards;
+  assert.deepEqual(plain(configField('permissions', 'default')), { kind: 'enum', options: ['bypass', 'default'] });
+  assert.deepEqual(plain(configField('effort', 'turbo')).options.slice(-1), ['turbo'], 'an unknown current value stays selectable');
+  assert.deepEqual(plain(configField('role', null)).options, [null, 'admin']);
+  assert.equal(configField('harness.modules.debrief', false).kind, 'bool');
+  assert.equal(configField('harness.modules.janitor', 'report').kind, 'enum');
+  assert.equal(configField('integrations.hub.interval_s', 300).kind, 'number');
+  assert.equal(configField('persona', 'x').kind, 'text');
+  assert.equal(configField('harness.pin', null).kind, 'text');
+  assert.equal(configField('harness.hooks_disable', []).kind, 'readonly');
+  assert.match(configField('account', 'acc1').note, /Accounts page/);
+  assert.match(configField('backup_accounts', []).note, /Accounts page/);
+  assert.match(configField('automations', []).note, /Automations and tools/);
+  assert.match(configField('integrations.telegram.allow_from', ['1']).note, /Telegram access/);
+  assert.equal(configField('name', 't').kind, 'readonly');
+  assert.deepEqual(plain(configRows({ a: 1, b: { c: [1, 2], d: { e: null } } })), [{ path: 'a', value: 1 }, { path: 'b.c', value: [1, 2] }, { path: 'b.d.e', value: null }]);
+  assert.equal(configText(null), 'none');
+  assert.equal(configText([]), 'none');
+  assert.equal(configText(['a', 'b']), 'a, b');
+  assert.equal(configText([{ name: 'x' }]), '1 entry');
+  assert.equal(configText(false), 'false');
+});
+
 test('chain line: empty without backups; the chain in order, and where it is after a failover', () => {
   const { chainLine } = sandbox.CockpitCards;
   assert.equal(chainLine({ backups: [] }), '');

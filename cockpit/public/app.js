@@ -1204,7 +1204,7 @@ async function operatorAct(method, url, body, okMsg, after) {
 
 function openSheet(id) { el(id).classList.add('show'); }
 function closeSheet(id) { el(id).classList.remove('show'); }
-for (const id of ['attnBg', 'approvalsBg', 'usageBg', 'accountsBg']) el(id).onclick = (e) => { if (e.target === el(id)) closeSheet(id); };
+for (const id of ['attnBg', 'approvalsBg', 'usageBg', 'accountsBg', 'settingsBg']) el(id).onclick = (e) => { if (e.target === el(id)) closeSheet(id); };
 
 // Select a bot and open one of its drawers (from an attention item).
 function openBot(name, drawer, capsTab) {
@@ -1240,6 +1240,7 @@ function renderAttention() {
   el('attnTop').textContent = items.length ? items[0].text : '';
   if (el('attnBg').classList.contains('show')) renderAttnList();
   if (el('approvalsBg').classList.contains('show')) loadApprovals();
+  if (el('settingsBg').classList.contains('show') && setBot) loadApprovals(el('setApprovals'), { bot: setBot });
   loadPending();
 }
 function attnActs(a) {
@@ -1306,6 +1307,7 @@ function wireDecisions(box) {
       operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/approvals/${encodeURIComponent(id)}/${dec}`, null, `${dec === 'approve' ? 'Approved' : 'Declined'}. ${bot} has been told.`, () => {
         loadPending();
         if (el('approvalsBg').classList.contains('show')) loadApprovals();
+        if (el('settingsBg').classList.contains('show')) loadSettings();
       });
     };
   });
@@ -1344,14 +1346,20 @@ function adminRow(r) {
   return `<div class="dec"><span class="out ${r.refused ? 'bad' : 'ok'}">${r.refused ? 'refused' : 'done'}</span><span>by <b>${esc(r.by)}</b></span><span class="dim">${esc(fmtWhen(r.at) || '')}</span>`
     + `<span class="d">${esc(r.verb)}${r.target ? ` ${esc(r.target)}` : ''}${r.refused ? ` (${esc(r.refused)})` : ''}</span></div>`;
 }
-async function loadApprovals() {
-  const box = el('approvalsList');
-  if (!box.children.length) box.innerHTML = '<p class="loading">Loading approvals</p>';
+// The Approvals sheet, or (bot given) one bot's pending entries embedded in
+// the Settings sheet: nothing at all there when none wait.
+async function loadApprovals(box = el('approvalsList'), { bot = null } = {}) {
+  if (!bot && !box.children.length) box.innerHTML = '<p class="loading">Loading approvals</p>';
   try {
     const { pending, recent, admin = [] } = await api('GET', '/api/approvals');
-    box.innerHTML = (pending.length ? pending.map(aprCard).join('') : '<p class="hint">Nothing waiting. A bot that asks for a wider permission shows up here.</p>')
-      + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>')
-      + (admin.length ? '<p class="sub">Done by an admin bot</p>' + admin.map(adminRow).join('') : '');
+    if (bot) {
+      const mine = pending.filter((p) => p.bot === bot);
+      box.innerHTML = mine.length ? '<p class="sub">Waiting for your decision</p>' + mine.map(aprCard).join('') : '';
+    } else {
+      box.innerHTML = (pending.length ? pending.map(aprCard).join('') : '<p class="hint">Nothing waiting. A bot that asks for a wider permission shows up here.</p>')
+        + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>')
+        + (admin.length ? '<p class="sub">Done by an admin bot</p>' + admin.map(adminRow).join('') : '');
+    }
     wireDecisions(box);
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
@@ -1556,6 +1564,105 @@ el('acctAdd').onsubmit = async (e) => {
   } catch (ex) { err.textContent = ex.message; }
   finally { el('acctToken').value = ''; el('acctAddBtn').disabled = false; }   // the token never stays in the page
   loadAccounts();
+};
+
+/* ---- settings sheet: one bot's bot.yaml (defaults merged) with `config set` behind
+   each value, its pending approvals to decide in place, and this machine. ---- */
+let setBot = null;
+let setData = null;   // {config, set}
+const SET_GROUP = { '': 'Bot', harness: 'Harness', 'harness.modules': 'Modules' };
+function setGroupName(prefix) {
+  if (Object.hasOwn(SET_GROUP, prefix)) return SET_GROUP[prefix];
+  const last = prefix.split('.').pop();
+  return last.charAt(0).toUpperCase() + last.slice(1).replace(/_/g, ' ');
+}
+function setControl(p, v, f) {
+  const d = `data-path="${esc(p)}" aria-label="${esc(p)}"`;
+  if (f.kind === 'bool') return `<input type="checkbox" ${d}${v ? ' checked' : ''} />`;
+  if (f.kind === 'enum') return `<select ${d}>${f.options.map((o) => `<option value="${esc(JSON.stringify(o))}"${o === v ? ' selected' : ''}>${esc(o === null ? (f.options.includes('none') ? 'host default' : 'none') : String(o))}</option>`).join('')}</select>`;
+  if (f.kind === 'number') return `<input type="number" ${d} value="${esc(String(v))}" />`;
+  return `<input type="text" ${d} value="${esc(v === null ? '' : String(v))}" placeholder="none" autocomplete="off" spellcheck="false" />`;
+}
+function setRow({ path: p, value: v }, set) {
+  const C = window.CockpitCards;
+  const f = C.configField(p, v);
+  const key = `<span class="k" title="${esc(p)}">${esc(p.split('.').pop().replace(/_/g, ' '))}${set.has(p) ? '' : '<span class="d">default</span>'}</span>`;
+  if (f.kind === 'readonly') return `<div class="srow">${key}<span class="v">${esc(C.configText(v))}<span class="note">${esc(f.note)}</span></span><span></span></div>`;
+  return `<div class="srow">${key}${setControl(p, v, f)}<span class="sv" data-save-slot="${esc(p)}"></span></div>`;
+}
+function renderSettings() {
+  const { config, set } = setData;
+  const rows = window.CockpitCards.configRows(config);
+  const groups = new Map();
+  for (const r of rows) {
+    const prefix = r.path.includes('.') ? r.path.slice(0, r.path.lastIndexOf('.')) : '';
+    if (!groups.has(prefix)) groups.set(prefix, []);
+    groups.get(prefix).push(r);
+  }
+  const have = new Set(set);
+  el('setList').innerHTML = [...groups].map(([prefix, rs]) => `<p class="sub">${esc(setGroupName(prefix))}</p>${rs.map((r) => setRow(r, have)).join('')}`).join('');
+}
+function setValueOf(input) {
+  if (input.type === 'checkbox') return input.checked;
+  if (input.tagName === 'SELECT') return JSON.parse(input.value);
+  if (input.type === 'number') return input.value.trim() === '' ? null : Number(input.value);
+  return input.value.trim() === '' ? null : input.value;
+}
+async function loadSettings() {
+  const pick = el('setBot');
+  if (!setBot) { el('setList').innerHTML = '<p class="hint">No bots yet.</p>'; return; }
+  pick.innerHTML = state.bots.map((b) => `<option value="${esc(b.name)}"${b.name === setBot ? ' selected' : ''}>${esc(b.name)}</option>`).join('');
+  loadApprovals(el('setApprovals'), { bot: setBot });
+  try {
+    setData = await api('GET', `/api/bots/${encodeURIComponent(setBot)}/config`);
+    renderSettings();
+  } catch (e) { el('setList').innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+async function loadHost() {
+  const box = el('setHost');
+  try {
+    const h = await api('GET', '/api/cockpit');
+    const row = (k, v) => `<div class="hostrow"><span class="hk">${esc(k)}</span><span>${esc(v)}</span></div>`;
+    box.innerHTML = row('BotCorp', [h.version, h.commit].filter(Boolean).join(' · ') || 'unknown')
+      + row('Claude Code', h.cc.pinned ? `${h.cc.pinned} pinned${h.cc.candidate ? ` · candidate ${h.cc.candidate.version} ${h.cc.candidate.status}` : ''}` : 'not pinned yet')
+      + row('This cockpit', h.exposure === 'access' ? 'reachable through Cloudflare Access' : 'this machine only (loopback)');
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+function openSettings() {
+  setBot = state.selected || (state.bots[0] && state.bots[0].name) || null;
+  setData = null;
+  el('setApprovals').innerHTML = '';
+  el('setList').innerHTML = '<p class="loading">Loading settings</p>';
+  openSheet('settingsBg');
+  loadSettings();
+  loadHost();
+}
+el('settingsLink').onclick = (e) => { e.preventDefault(); openSettings(); };
+el('settingsClose').onclick = () => closeSheet('settingsBg');
+el('setBot').onchange = () => { setBot = el('setBot').value; el('setApprovals').innerHTML = ''; loadSettings(); };
+// A changed value gets its own Save; putting it back takes the button away.
+el('setList').addEventListener('input', (e) => {
+  const input = e.target.closest('[data-path]');
+  if (!input || !setData) return;
+  const p = input.dataset.path;
+  const slot = el('setList').querySelector(`[data-save-slot="${CSS.escape(p)}"]`);
+  const was = window.CockpitCards.configRows(setData.config).find((r) => r.path === p);
+  let now;
+  try { now = setValueOf(input); } catch { now = undefined; }
+  slot.innerHTML = was && JSON.stringify(now) !== JSON.stringify(was.value) ? `<button class="btn" data-save="${esc(p)}">Save</button>` : '';
+});
+el('setList').onclick = async (e) => {
+  const b = e.target.closest('[data-save]');
+  if (!b) return;
+  const p = b.dataset.save;
+  const input = el('setList').querySelector(`[data-path="${CSS.escape(p)}"]`);
+  b.disabled = true;
+  try {
+    const r = await operatorApi('POST', `/api/bots/${encodeURIComponent(setBot)}/config`, { path: p, value: setValueOf(input) });
+    toast(r.queued ? `${p}: waits for your approval below` : r.duplicate ? `${p}: already waiting for approval` : `${p} saved; applies at the next session roll`);
+  } catch (ex) { toast(ex.message, true); }
+  refreshAttention();
+  loadSettings();
 };
 
 /* ---- boot ---- */

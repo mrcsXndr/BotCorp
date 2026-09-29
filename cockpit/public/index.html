@@ -231,6 +231,20 @@
     .brow .sw { color: var(--warn); font-size: var(--fs-xs); font-weight: 600; }
     .brow select { max-width: 200px; }
     .brow .confirm { flex-basis: 100%; margin-top: 0; }
+    .srow { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 240px) 72px; align-items: center; gap: var(--sp-1) var(--sp-3); padding: 6px 0; border-top: 1px solid var(--line); }
+    .srow .k { font-size: var(--fs-sm); overflow-wrap: anywhere; }
+    .srow .k .d { color: var(--text-3); font-size: var(--fs-xs); margin-left: 6px; }
+    .srow .v { color: var(--text-2); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+    .srow .v .note { display: block; color: var(--text-3); font-size: var(--fs-xs); }
+    .srow select, .srow input[type="text"], .srow input[type="number"] { width: 100%; min-width: 0; }
+    .srow input[type="text"], .srow input[type="number"] { height: 32px; background: var(--field); border: 1px solid var(--line-strong); border-radius: var(--r-btn); color: var(--text); padding: 0 10px; font-size: var(--fs-sm); }
+    .srow input::placeholder { color: var(--text-3); }
+    .srow input:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+    .srow input[type="checkbox"] { justify-self: start; width: 18px; height: 18px; }
+    .srow .btn { justify-self: end; }
+    #setApprovals .apr { margin-bottom: var(--sp-3); }
+    .hostrow { display: flex; gap: var(--sp-3); padding: 4px 0; font-size: var(--fs-sm); }
+    .hostrow .hk { flex: 0 0 140px; color: var(--text-2); }
     .brow .chain { flex-basis: 100%; display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); font-size: var(--fs-sm); }
     .brow .chain .lbl { color: var(--text-2); }
     .brow .chain .bk { display: inline-flex; align-items: center; gap: 2px; padding: 0 2px 0 var(--sp-2); border: 1px solid var(--line); border-radius: var(--r-btn); font-size: var(--fs-sm); }
@@ -491,6 +505,10 @@
       .brow .ub { flex-basis: 100%; }
       .brow select { flex: 1 1 140px; max-width: none; height: 44px; }
       .brow .chain .bk button { min-width: 36px; height: 36px; }
+      .srow { grid-template-columns: minmax(0, 1fr) auto; }
+      .srow .k { grid-column: 1 / -1; }
+      .srow select, .srow input[type="text"], .srow input[type="number"] { height: 44px; }
+      .hostrow .hk { flex-basis: 110px; }
       .acct-add .field input, .acct-add .field input[type="password"] { flex-basis: 100%; }
     }
   </style>
@@ -507,6 +525,7 @@
     <symbol id="i-down" viewBox="0 0 16 16"><path d="M8 2.8v9.4"/><path d="M3.9 8.3L8 12.4l4.1-4.1"/></symbol>
     <symbol id="i-clip" viewBox="0 0 16 16"><path d="M10.6 5.2v5.6a2.6 2.6 0 0 1-5.2 0V4.3a1.7 1.7 0 0 1 3.4 0v6.3a.8.8 0 0 1-1.6 0V5.4"/></symbol>
     <symbol id="i-board" viewBox="0 0 16 16"><path d="M3 2.5h10v11H3z"/><path class="solid" d="M5 5h2.4v2.4H5z"/><path d="M9.2 6.2h1.8M5 10.6h6"/></symbol>
+    <symbol id="i-set" viewBox="0 0 16 16"><path d="M2.5 4.5h11M2.5 11.5h11"/><path class="solid" d="M9 3h2.4v3H9zM4.6 10h2.4v3H4.6z"/></symbol>
     <symbol id="i-tg" viewBox="0 0 16 16"><path d="M13.8 2.4L2 7.1l4 1.5 1.5 4.5 2.2-2.8 3.3 2.4z"/><path class="solid" d="M6 8.6l7.8-6.2-5.1 7.3z"/></symbol>
   </svg>
   <aside>
@@ -517,6 +536,7 @@
       <button class="nav-i" id="usageLink" title="5-hour and 7-day limits per account"><svg class="ic"><use href="#i-use"/></svg><span>Usage</span></button>
       <button class="nav-i" id="accountsLink" title="Claude accounts: add, remove, which bot runs on which"><svg class="ic"><use href="#i-acct"/></svg><span>Accounts</span></button>
       <button class="nav-i" id="updatesLink" title="harness releases"><svg class="ic"><use href="#i-upd"/></svg><span>Updates</span></button>
+      <button class="nav-i" id="settingsLink" title="every bot.yaml value, and this machine"><svg class="ic"><use href="#i-set"/></svg><span>Settings</span></button>
       <div class="nav-sep"></div>
       <button class="nav-i" id="chatLink" title="a plain Claude in a terminal tab on this machine"><svg class="ic"><use href="#i-new"/></svg><span>New chat</span></button>
       <a class="nav-i" href="/guide.html" target="_blank" rel="noopener"><svg class="ic"><use href="#i-guide"/></svg><span>Guide</span></a>
@@ -683,6 +703,19 @@
       </form>
       <div class="err" id="acctErr"></div>
       <div class="modal-foot"><button class="btn" id="accountsClose">Close</button></div>
+    </div>
+  </div>
+
+  <div class="modal-bg sheet" id="settingsBg">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <h2 id="settingsTitle">Settings</h2>
+      <p class="hint">A bot's <code>bot.yaml</code>, one value at a time through <code>botcorp config set</code>. A change that widens what the bot may do waits for approval, and you can decide it right here. Most changes apply at the bot's next session roll.</p>
+      <div class="field stack"><label class="label" for="setBot">bot</label><select id="setBot"></select></div>
+      <div id="setApprovals"></div>
+      <div id="setList"><p class="loading">Loading settings</p></div>
+      <p class="sub">This machine</p>
+      <div id="setHost"></div>
+      <div class="modal-foot"><button class="btn" id="settingsClose">Close</button></div>
     </div>
   </div>
 
