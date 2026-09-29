@@ -199,25 +199,30 @@ never spawns a session itself, attached or not.
 | Vault lock state / unlock | `GET /api/bots/:name/secrets/lock` -> `status <bot> --json` `vault` / `POST /api/bots/:name/unlock {passphrase}` -> `secrets unlock <bot>` (passphrase on stdin) |
 | Pairing state | `pair <bot> --list --json` -> `{policy, allowFrom, pending:[{code, senderId, chatId, age_s, expires_in_s}]}` |
 | Approve / deny a Telegram sender | `pair <bot> <senderId>` / `pair <bot> --deny <senderId>` (CLI writes `allowFrom`, `approved/<senderId>` or the deny record, `bot.yaml`) — never from a chat message, only here or in the terminal |
-| Releases panel | `GET /api/updates` reads `<BOTCORP_HOME>/state/updates.json`; Apply/Skip = `update --apply <tag>` / `update --skip <tag>` |
+| Releases panel | `GET /api/updates` reads `<BOTCORP_HOME>/state/updates.json`, newest first (by date, then version; an undated entry last), each marked `older` (at or below the installed version) and `current` (the installed one); the panel folds the older ones behind "Show N older". Apply/Skip = `update --apply <tag>` / `update --skip <tag>` |
 | Chat send | `POST /api/bots/:name/send {text}` -> `send <bot> --source cockpit --json` (text on stdin); the composer then polls `GET /api/bots/:name/inbox`, which reads the last 50 items of `<BOTCORP_HOME>/state/<bot>/inbox.jsonl` without their text |
 | Runs drawer | reads `<BOTCORP_HOME>/state/<bot>/runs.jsonl` tail (read-only) |
 | Approvals sheet: "Done by an admin bot" | `GET /api/approvals` also returns `admin`: the last 20 lines of `<BOTCORP_HOME>/state/admin-audit.jsonl` (`{at, by, verb, target, refused}`, newest first). The section shows only when there is one. The cockpit itself always runs the CLI as the operator: it removes `BOT_NAME`, `CLAUDECODE` and `BOTCORP_LAUNCH_ID` from the CLI's env (`docs/cli.md`, "Admin bots") |
 | Accounts sheet, New chat: account list | `GET /api/accounts` -> `accounts list --json` + `state/accounts.json` + `state/account-checks.json` + the usage overview: `{accounts:[{id, label, plan, masked, state: ok\|limited\|failed\|no-token, blocked_until, window, failed, check, wanted_by, bots, fiveHour, sevenDay}], bots:[{bot, running, account_wanted, account_pending, on, on_registered}]}`; each bot row also carries `backups` and `account_reason` |
 | Accounts sheet: add | `POST /api/accounts {id, label, plan, token}` -> `accounts add <id> --label --plan --by <identity>` with the token on STDIN (never argv, never the audit line; the reply carries the CLI's masked last 4) |
 | Accounts sheet: remove | `DELETE /api/accounts/:id` -> `accounts remove <id> --by <identity>`; 409 while a bot.yaml still names it |
-| Accounts sheet: Use (per bot) | `POST /api/bots/:name/account {id\|none}` -> `accounts use` (as before) |
+| Accounts sheet: Use (per bot) | the chain route below, with the bot's backups minus the new primary; `POST /api/bots/:name/account {id\|none}` -> `accounts use` stays for other callers |
 | Accounts sheet: a bot's chain (primary + backups) | `POST /api/bots/:name/accounts {primary: id or none, backups: [ids, at most 5]}` -> `accounts use <bot> <primary>` and `accounts backups <bot> <ids\|none>`, each with `--by <identity>`; approval token required |
+| Settings sheet: read | `GET /api/bots/:name/config` -> `config get <bot> --json` (defaults merged) plus `set`, the paths the bot's own `bot.yaml` names (the rest show as "default") |
+| Settings sheet: save one value | `POST /api/bots/:name/config {path, value}` (one scalar) -> `config set <bot> <path> <value> --requested-by <identity>`; the reply says `applied`, or `queued` with the approval id when the change widens what the bot may do; a CLI refusal (unknown path, invalid value) is 400 with its reason. Lists, the accounts, automations, tools, secrets and Telegram senders are shown read-only and changed on their own page |
+| Settings sheet: approvals | the bot's pending entries from `GET /api/approvals`, decided with the same route as the Approvals sheet |
+| Settings sheet: this machine | `GET /api/cockpit` -> `{version, commit, exposure, cc: {pinned, candidate}}` |
 | New chat: recent folders | `GET /api/chat/recent` reads `<BOTCORP_HOME>/state/chat-recent.json` |
 | New chat: launch | `POST /api/chat/launch {account, generic, cwd}` -> `chat --account <id> --generic` or `chat --account <id> --cwd <path>` |
 | Version | `botcorp.json` + `git rev-parse --short HEAD` + `exposure: loopback\|access` |
+| Favicon | `public/favicon.svg`, linked from `index.html` and `guide.html` |
 
 CLI results come back as `{ok, code, out, err}`; `out`/`err` are truncated to
 4 KB and scrubbed of token shapes before they reach the browser.
 
 Operator-gated routes: approve / reject, automation resume / enable, tools
-register, the account switch, account add / remove, pair approve, vault set
-and release Apply / Skip. Behind Cloudflare Access the verified identity is the check; on
+register, the account switch and chain, account add / remove, a Settings
+save, pair approve, vault set and release Apply / Skip. Behind Cloudflare Access the verified identity is the check; on
 loopback they also need the per-boot approval token (`X-Approve-Token`), or
 they answer 403 `{need: "approve-token"}` and the page asks for it once. The
 cockpit prints the token at start and also writes it to
