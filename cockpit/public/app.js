@@ -1021,35 +1021,39 @@ el('copySel').onchange = () => { settings.copyOnSelect = el('copySel').checked; 
 document.addEventListener('click', (e) => { const m = el('more'); if (m.open && !m.contains(e.target)) m.open = false; });
 
 /* ---- releases (machine-wide, not per-bot) ---- */
-function relCard(r) {
-  // a pending tag at or below the checkout is stale bookkeeping, not an action
-  const older = r.status === 'pending' && r.older;
-  const statusCls = older ? '' : ['applied', 'failed', 'pending'].includes(r.status) ? r.status : '';
-  const actions = r.status === 'pending' && !older ? `<div class="actions"><button class="btn primary" data-apply="${esc(r.tag)}">Apply</button><button class="btn" data-skip="${esc(r.tag)}">Skip</button></div>` : '';
-  return `<div class="rel${older ? ' older' : ''}">
-    <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(older ? 'older than installed' : r.status)}</span></div>
-    <dl>
-      <dt>what</dt><dd>${esc(r.what || '(none given)')}</dd>
-      <dt>why</dt><dd>${esc(r.why || '(none given)')}</dd>
-      <dt>value to you</dt><dd>${esc(r.value || '(none given)')}</dd>
-    </dl>
-    ${actions}
+// The server decides each release's `view` and `actions` (core/releases.mjs); the page renders them.
+const REL_STATUS = { installed: 'installed', requested: 'apply requested', available: 'available', failed: 'failed', skipped: 'skipped', rollback_requested: 'roll back requested', history: 'older' };
+const REL_ACTION = { apply: 'Apply', skip: 'Skip', cancel: 'Cancel request', rollback: 'Roll back' };
+function relCard(r, primaryTag) {
+  const status = (r.view === 'comes_with' || r.view === 'will_be_included') ? `comes with ${r.included_in}`
+    : r.view === 'history' && r.included_in ? `older · came with ${r.included_in}` : REL_STATUS[r.view] || r.status;
+  const statusCls = r.view === 'installed' ? 'applied' : r.view === 'failed' ? 'failed' : ['available', 'requested', 'rollback_requested'].includes(r.view) ? 'pending' : '';
+  const notes = (r.notes || []).length
+    ? `<details><summary>What changed (${r.notes.length})</summary><dl>${r.notes.map((n) => `<dt>${esc(n.title || '')}</dt><dd>${esc(n.text || '')}</dd>`).join('')}</dl></details>` : '';
+  const actions = (r.actions || []).map((a) => `<button class="btn${a === 'apply' && r.tag === primaryTag ? ' primary' : ''}" data-rel="${esc(r.tag)}" data-act="${esc(a)}">${esc(REL_ACTION[a] || a)}</button>`).join('');
+  return `<div class="rel${r.view === 'history' ? ' older' : ''}" data-tag="${esc(r.tag)}">
+    <div class="relhead"><span class="tag">${esc(r.tag)}</span><span class="date">${esc(r.date || '')}</span><span class="status ${statusCls}">${esc(status)}</span></div>
+    ${r.summary ? `<p class="hint">${esc(r.summary)}</p>` : ''}${notes}
+    ${r.fail_reason ? `<p class="errbox">${esc(r.fail_reason)}</p>` : ''}
+    ${actions ? `<div class="actions">${actions}</div>` : ''}
   </div>`;
 }
 async function loadUpdates() {
   const box = el('updatesList');
   box.innerHTML = '<p class="loading">Loading releases</p>';
   try {
-    const { releases } = await api('GET', '/api/updates');
-    // newest first (the server sorts); everything below the installed version folds away
-    const shown = releases.filter((r) => !r.older || r.current), folded = releases.filter((r) => r.older && !r.current);
-    box.innerHTML = releases.length
-      ? shown.map(relCard).join('') + (folded.length ? `<button class="btn quiet relmore" id="relMore">Show ${folded.length} older</button><div id="relOlder" hidden>${folded.map(relCard).join('')}</div>` : '')
+    const { current, available = [], history = [] } = await api('GET', '/api/updates');
+    // newest first: newer releases, the installed one, then history folded away.
+    // The one to apply (the newest still pending or failed) is the only primary button.
+    const head = available.find((r) => (r.actions || []).includes('apply') && (r.view === 'available' || r.view === 'failed'));
+    const card = (r) => relCard(r, head && head.tag);
+    const shown = [...available, ...(current ? [current] : [])];
+    box.innerHTML = shown.length || history.length
+      ? shown.map(card).join('') + (history.length ? `<button class="btn quiet relmore" id="relMore">Show ${history.length} older</button><div id="relOlder" hidden>${history.map(card).join('')}</div>` : '')
       : '<p class="hint">No releases recorded yet.</p>';
     const more = el('relMore');
     if (more) more.onclick = () => { el('relOlder').hidden = false; more.remove(); };
-    box.querySelectorAll('[data-apply]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.apply, 'apply'); });
-    box.querySelectorAll('[data-skip]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.skip, 'skip'); });
+    box.querySelectorAll('[data-act]').forEach((btn) => { btn.onclick = () => updateAction(btn.dataset.rel, btn.dataset.act); });
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
   try { box.insertAdjacentHTML('afterbegin', `<p class="hint">${esc(ccLine(await api('GET', '/api/cc')))}</p>`); } catch { /* the releases stand alone */ }
 }
@@ -1062,6 +1066,7 @@ function ccLine(c) {
   return `Claude Code ${c.pinned.version} pinned${cand}`;
 }
 async function updateAction(tag, action) {
+  if (action === 'rollback' && !confirm(`Roll back to ${tag}? The daemon checks it out once every bot is at a safe point, then restarts the cockpit.`)) return;
   try {
     const r = await operatorApi('POST', `/api/updates/${encodeURIComponent(tag)}/${action}`);
     toast(r.ok ? `${action} ok` : `${action} failed (${r.code}): ${r.err || r.out}`, !r.ok);
