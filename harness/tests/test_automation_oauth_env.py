@@ -12,6 +12,7 @@ env carrying the foreign token.
 """
 from __future__ import annotations
 
+import json
 import os
 import secrets
 import shutil
@@ -104,3 +105,21 @@ def test_an_unreadable_account_gives_the_job_the_bot_token(oauth_bot):
     assert _last_log(rt, name, "mine") == "[mine][mine][%ANTHROPIC_API_KEY%]"
     lines = _unreadable_lines(rt, name)
     assert len(lines) == 1 and "account acc1 unreadable -> bot's oauth_token" in lines[0], lines
+
+
+@needs_win
+def test_a_job_follows_the_account_a_failover_moved_the_session_to(oauth_bot):
+    """v0.8.0: bot.yaml account: null + backup_accounts: [acc1]; the daemon failed over (state account_active acc1)."""
+    name, home, rt, env = oauth_bot
+    _account_bot(name, home, rt, env)
+    text = (home / "bot.yaml").read_text(encoding="utf-8").replace("account: acc1\n", "backup_accounts: [acc1]\n")
+    (home / "bot.yaml").write_text(text, encoding="utf-8")
+    (rt / "state" / f"{name}.json").write_text(json.dumps({"bot": name, "account_active": {"id": "acc1", "reason": "failover"}}), encoding="utf-8")
+    _run_now(name, env, "mine")
+    _wait_runs(rt, name, 1)
+    assert _last_log(rt, name, "mine") == f"[{ACCT}][{ACCT}][%ANTHROPIC_API_KEY%]"
+    # taken out of the chain: back to the bot's own token
+    (home / "bot.yaml").write_text(text.replace("backup_accounts: [acc1]\n", ""), encoding="utf-8")
+    _run_now(name, env, "mine")
+    _wait_runs(rt, name, 2)
+    assert _last_log(rt, name, "mine") == "[mine][mine][%ANTHROPIC_API_KEY%]"

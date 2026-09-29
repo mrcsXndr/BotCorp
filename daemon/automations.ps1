@@ -226,7 +226,7 @@ function Invoke-AutomationJob {
     if ($secretNames.Count -gt 0) {
         try {
             . (Join-Path $PSScriptRoot 'vault.ps1')
-            $acct = "$($job.account)"   # bot.yaml account: a job's oauth_token follows the session's account
+            $acct = "$($job.account)"   # the session's active account (Get-ActiveAccount: a failover's, else bot.yaml account): a job's oauth_token follows it
             foreach ($k in $secretNames) {
                 $v = $null
                 if ("$k" -eq 'oauth_token' -and $acct) {
@@ -432,7 +432,7 @@ if ($autos.Count -gt 0 -or $RunNow) {
 
             $runId = $now.ToString('yyyyMMdd-HHmmss') + '-' + ('{0:x4}' -f (Get-Random -Maximum 65535))
             $logPath = Join-Path (Join-Path $P.BotLogDir $name) "$runId.log"
-            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); account = "$($cfg.account)"; log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
+            $job = [ordered]@{ bot = $Bot; run_id = $runId; automation = $a; modules = @($cfg._modules); account = (Get-ActiveAccount -Bot $Bot -Cfg $cfg -State (Read-BotState -Bot $Bot)); log = $logPath; fake_now = $env:BOTCORP_FAKE_NOW; queued_at = (ToIso $now) }
             $jobFile = Join-Path $JobsDir "$runId.json"
             if (-not (Write-JsonFile -Path $jobFile -Object $job -Depth 8)) { Log "could not write job file for $name"; continue }
             if ($eventName) { try { Remove-Item (Join-Path $EventsDir "$eventName.queue") -Force -ErrorAction SilentlyContinue } catch {} }
