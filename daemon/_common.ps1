@@ -621,10 +621,16 @@ function Get-AccountRollAction {
     #          token). A fallback or a shared daemon leaves Attempted equal to
     #          Wanted, so it is never re-rolled; doctor and attention surface it.
     #   roll / defer:phase|midturn|drainer|backoff   the Get-CcRollAction gates
-    param($Observed, [string]$Wanted, [string]$Attempted, [bool]$Breakpoint, [bool]$DrainerLive, $LastRollAt, [datetime]$Now = (Get-Date), [double]$BackoffMin = 30)
+    #   -LimitBlocked  the session is usage-limited (observed.blocked.kind 'limit'):
+    #                  its model calls are rejected, so there is no turn to
+    #                  protect; the phase and midturn gates are skipped, the
+    #                  drainer and backoff gates stay
+    param($Observed, [string]$Wanted, [string]$Attempted, [bool]$Breakpoint, [bool]$DrainerLive, $LastRollAt, [datetime]$Now = (Get-Date), [double]$BackoffMin = 30, [switch]$LimitBlocked)
     if (-not $Observed -or $Observed.alive -ne $true -or $Wanted -eq $Attempted) { return 'none' }
-    if ("$($Observed.phase)" -ne 'idle') { return 'defer:phase' }
-    if (-not ($Breakpoint -or $Observed.awaiting_prompt -eq $true)) { return 'defer:midturn' }
+    if (-not $LimitBlocked) {
+        if ("$($Observed.phase)" -ne 'idle') { return 'defer:phase' }
+        if (-not ($Breakpoint -or $Observed.awaiting_prompt -eq $true)) { return 'defer:midturn' }
+    }
     if ($DrainerLive) { return 'defer:drainer' }
     if ($LastRollAt) {
         $t = ConvertTo-UtcTime $LastRollAt
@@ -1584,7 +1590,11 @@ function Test-SessionBusy {
     #    mid-run workflows). Quiet >= QuietMin => idle. The slug is the bot
     #    folder with every non-alphanumeric char -> '-', exactly as Claude Code
     #    derives it (no drive-letter special case).
-    param([Parameter(Mandatory)][string]$Bot, [int]$QuietMin = 5)
+    # -LimitBlocked: the caller measured the session usage-limited (observe's
+    #    blocked.kind 'limit'): the model rejects every call, so the turn cannot
+    #    produce work and the invariant has nothing to protect => IDLE.
+    param([Parameter(Mandatory)][string]$Bot, [int]$QuietMin = 5, [switch]$LimitBlocked)
+    if ($LimitBlocked) { return $false }
     $P = Get-BotPaths -Bot $Bot
     try {
         if (Test-Path $P.Breakpoint) {
@@ -1611,6 +1621,39 @@ function Test-BreakpointFresh {
         $ttl = 30; try { if ($env:BOT_BREAKPOINT_TTL_MIN) { $ttl = [double]$env:BOT_BREAKPOINT_TTL_MIN } } catch {}
         return (((Get-Date) - (Get-Item $P.Breakpoint).LastWriteTime).TotalMinutes -lt $ttl)
     } catch { return $false }
+}
+
+function Get-AccountFailover {
+    # `botcorp accounts failover <bot> --json` (core/failover.mjs decide): the
+    # account chain, the active account, the live usage limit and the decision
+    # (action failover|failback|recover|wait|hold|none). $Observed = the tick's
+    # fresh observe record, handed over in BOTCORP_FAILOVER_OBSERVED so a
+    # -DryRun tick (which persists nothing) still decides on the live session.
+    # $null when it could not run (fail-open).
+    param([Parameter(Mandatory)][string]$Bot, $Observed, [int]$TimeoutSec = 60)
+    try {
+        $node = Resolve-Node
+        if (-not $node) { return $null }
+        $e = @{ BOTCORP_HOME = $script:RtHome; BOTCORP_BOTS_DIR = $script:BotsDir }
+        if ($Observed) { $e['BOTCORP_FAILOVER_OBSERVED'] = ($Observed | ConvertTo-Json -Depth 8 -Compress) }
+        $r = Invoke-Bounded -Exe $node -Arguments @((Join-Path $script:BotCorp 'cli\botcorp.mjs'), 'accounts', 'failover', $Bot, '--json') -TimeoutSec $TimeoutSec -Label 'failover' -Capture -Env $e -WorkingDirectory $script:BotCorp -Bot $Bot
+        if ($r.ExitCode -ne 0) { Write-DaemonLog "failover: exit=$($r.ExitCode) (fail-open): $("$($r.Output)".Trim() -split "`n" | Select-Object -Last 1)" -Bot $Bot; return $null }
+        return (ConvertFrom-ObserveJson -Text "$($r.Output)")
+    } catch { Write-DaemonLog "failover: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $null }
+}
+
+function Write-ResumePrompt {
+    # <BotHome>/.claude/.botcorp_resume_prompt: the first prompt of the next
+    # launch (launch.ps1 step 5 consumes it when younger than 60 min). Written
+    # right before a restart that resumes a usage-limited session. $true when written.
+    param([Parameter(Mandatory)][string]$Bot, [Parameter(Mandatory)][string]$Text, [hashtable]$Paths)
+    if (-not $Paths) { $Paths = Get-BotPaths -Bot $Bot }
+    try {
+        $f = Join-Path (Join-Path $Paths.BotHome '.claude') '.botcorp_resume_prompt'
+        New-Item -ItemType Directory -Force -Path (Split-Path $f -Parent) | Out-Null
+        [System.IO.File]::WriteAllText($f, $Text)
+        return $true
+    } catch { Write-DaemonLog "resume prompt: write failed (fail-open): $($_.Exception.Message)" -Bot $Bot; return $false }
 }
 
 function Test-BotAccountBlocked {

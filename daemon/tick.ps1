@@ -388,8 +388,9 @@ function Get-AccountRoll {
     # attempted another account is restarted onto it, only between turns
     # (Get-AccountRollAction). Attempted = the launch-env.json record of the
     # session's launcher; a record without `account` (a pre-0.7 launch) = ''.
-    # -> the restart reason, or ''.
-    param([string]$Bot, $Cfg, [hashtable]$Paths, $State)
+    # -> the restart reason, or ''. $Limited = the session is usage-limited
+    # (Get-AccountRollAction -LimitBlocked: no turn to wait for).
+    param([string]$Bot, $Cfg, [hashtable]$Paths, $State, [bool]$Limited = $false)
     try {
         $wanted = "$($Cfg.account)"
         $attempted = ''
@@ -402,13 +403,53 @@ function Get-AccountRoll {
         $o = $script:Observed[$Bot]
         $dp = 0; try { $dp = Get-FirstPid ("" + (Get-Content -LiteralPath (Join-Path $Paths.BotStateDir 'inbox.drainer') -Raw -ErrorAction Stop)) } catch {}
         $lastRoll = $null; try { if ($State -and ($State.PSObject.Properties.Name -contains 'account_roll_at')) { $lastRoll = $State.account_roll_at } } catch {}
-        $a = Get-AccountRollAction -Observed $o -Wanted $wanted -Attempted $attempted -Breakpoint (Test-BreakpointFresh -Bot $Bot) -DrainerLive (Test-ProcAlive $dp @('node')) -LastRollAt $lastRoll
+        $a = Get-AccountRollAction -Observed $o -Wanted $wanted -Attempted $attempted -Breakpoint (Test-BreakpointFresh -Bot $Bot) -DrainerLive (Test-ProcAlive $dp @('node')) -LastRollAt $lastRoll -LimitBlocked:$Limited
         if ($a -eq 'none') { return '' }
         $to = $(if ($wanted) { $wanted } else { 'bot token' })
-        if ($a -eq 'roll') { return "account -> $to" }
+        if ($a -eq 'roll') { return "account -> $to$(if ($Limited) { ' (session usage-limited: no turn to wait for)' })" }
         Write-DaemonLog "account roll -> $to DEFERRED ($($a -replace '^defer:', ''))" -Bot $Bot -Quiet
     } catch { Write-DaemonLog "account roll: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
     return ''
+}
+
+function Get-AccountFailoverWhy {
+    # A usage-limited bg session (observed.blocked.kind 'limit'): ask the
+    # engine (botcorp accounts failover <bot> --json, core/failover.mjs) what
+    # to do. `recover` (its reset has passed, the job record still says
+    # blocked) -> the restart reason; `wait` is logged quietly. The record is
+    # kept in $script:Failover[$Bot] for the restart's resume prompt.
+    # -> the restart reason, or ''.
+    param([string]$Bot, [hashtable]$Paths, [bool]$Limited)
+    if (-not $Limited) { return '' }
+    try {
+        $fo = Get-AccountFailover -Bot $Bot -Observed $script:Observed[$Bot]
+        if (-not $fo -or -not $fo.decision) { return '' }
+        $script:Failover[$Bot] = $fo
+        $d = $fo.decision
+        switch ("$($d.action)") {
+            'recover' { return "usage-limit reset ($($d.why))" }
+            'wait'    {
+                $until = '?'; try { $t = ConvertTo-UtcTime $d.waitUntil; if ($t -ne [datetime]::MinValue) { $until = $t.ToLocalTime().ToString('HH:mm') } } catch {}
+                Write-DaemonLog "usage-limited: $($d.why); waiting until $until" -Bot $Bot -Quiet
+            }
+            'none'    { }
+            default   { Write-DaemonLog "failover: decision $($d.action) -> $($d.to) ($($d.why)) not acted on by this daemon version" -Bot $Bot -Quiet }
+        }
+    } catch { Write-DaemonLog "failover: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+    return ''
+}
+
+function Get-LimitResumeText {
+    # The first prompt of the resumed session after a usage-limit restart:
+    # `recover` (same account) keeps usage_monitor.write_resume_prompt's
+    # wording; a roll onto another account says where it came from.
+    param([string]$Bot, [string]$From, [string]$To, [string]$ResetAt)
+    $hhmm = '?'
+    try { $t = ConvertTo-UtcTime $ResetAt; if ($t -ne [datetime]::MinValue) { $hhmm = $t.ToLocalTime().ToString('HH:mm') } } catch {}
+    if ($To -and $To -ne $From) {
+        return "BotCorp moved this session from account $From (usage-limited until $hhmm) to $To and resumed it at $((Get-Date).ToString('yyyy-MM-dd HH:mm')). Pick up exactly where you were: read memory/TDL.md '## Open' and the session journal; re-arm any background watchers that died with the restart; do not message anyone about the switch."
+    }
+    return "You were cut off mid-work by a Claude usage limit (reset: $hhmm). The limit has now reset. Resume immediately: read memory/TDL.md '## Open' and the session journal, tell the operator on Telegram in one line what you are picking up, then continue that work. Re-arm any background watchers that died with the restart. Do not wait for further instruction."
 }
 
 function Invoke-BoardPoll {
@@ -605,7 +646,14 @@ function Invoke-BotTick {
         }
     }
 
-    Write-DaemonLog "state: alive=$alive service=$service shellPid=$shellPid claudePid=$claudePid$(if ($service -eq 'bg') { " bg=$bgId $bgNote" }) poller=$poller$(if ($blocked) { " blocked='$blocked'" }) modules=$(@($cfg._modules) -join ',')" -Bot $Bot
+    # A usage limit (observe: blocked.kind 'limit') is the one block the daemon
+    # answers itself: the session cannot work, so a restart never kills live
+    # work (Test-SessionBusy -LimitBlocked), and the account gates skip the
+    # turn-boundary checks (Get-AccountRollAction -LimitBlocked).
+    $limited = $false
+    try { $ob = $script:Observed[$Bot]; if ($alive -and $service -eq 'bg' -and $ob -and $ob.blocked -and "$($ob.blocked.kind)" -eq 'limit') { $limited = $true } } catch {}
+
+    Write-DaemonLog "state: alive=$alive service=$service shellPid=$shellPid claudePid=$claudePid$(if ($service -eq 'bg') { " bg=$bgId $bgNote" }) poller=$poller$(if ($blocked) { " blocked='$blocked'$(if ($limited) { ' (usage limit)' })" }) modules=$(@($cfg._modules) -join ',')" -Bot $Bot
 
     if ($alive -and -not $ProbeOnly) {
         $upd = @{ claude_pid = $claudePid; shell_pid = $(if ($shellAlive) { $shellPid } else { $null }); updated_at = (Get-Date).ToString('o'); poller = $poller }
@@ -714,12 +762,16 @@ function Invoke-BotTick {
     $resumeWanted = $false
     if (Test-BotModule $cfg 'usage_resume') { $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun }
     if (Test-BotModule $cfg 'alert_triage') { Invoke-AlertTriage -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
-    $ccRoll = $false; $acctRoll = $false
+    $ccRoll = $false; $acctRoll = $false; $recover = $false
     if ($action -eq 'none') {
-        $ccWhy = Get-CcRoll -Bot $Bot -Paths $P -State $st
-        if ($ccWhy) { $action = 'restart'; $why = $ccWhy; $ccRoll = $true }
+        $foWhy = Get-AccountFailoverWhy -Bot $Bot -Paths $P -Limited $limited
+        if ($foWhy) { $action = 'restart'; $why = $foWhy; $recover = $true }
         if ($action -eq 'none') {
-            $acctWhy = Get-AccountRoll -Bot $Bot -Cfg $cfg -Paths $P -State $st
+            $ccWhy = Get-CcRoll -Bot $Bot -Paths $P -State $st
+            if ($ccWhy) { $action = 'restart'; $why = $ccWhy; $ccRoll = $true }
+        }
+        if ($action -eq 'none') {
+            $acctWhy = Get-AccountRoll -Bot $Bot -Cfg $cfg -Paths $P -State $st -Limited $limited
             if ($acctWhy) { $action = 'restart'; $why = $acctWhy; $acctRoll = $true }
         }
         if (Test-BotModule $cfg 'board') { Invoke-BoardPoll -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
@@ -745,12 +797,20 @@ function Invoke-BotTick {
         # NEVER kill a session that is actively working: a busy session is
         # deferred, not killed (long-running context is load-bearing).
         if (-not $why) { $why = if ($migrateVisible) { 'migrate hidden session-0 bot to visible' } else { "poller $poller" } }
-        if (Test-SessionBusy -Bot $Bot) { Write-DaemonLog "restart DEFERRED ($why): session BUSY (transcript fresh) - not killing live work" -Bot $Bot; return }
+        if ($limited) { Write-DaemonLog 'session usage-limited: the turn cannot proceed -> restart allowed (no live work to protect)' -Bot $Bot }
+        if (Test-SessionBusy -Bot $Bot -LimitBlocked:$limited) { Write-DaemonLog "restart DEFERRED ($why): session BUSY (transcript fresh) - not killing live work" -Bot $Bot; return }
         if ($claudePid -le 0) { Write-DaemonLog 'restart DEFERRED: claude pid unresolved (never restart.ps1 -OldPid 0)' -Bot $Bot; return }
         $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
-        Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session idle -> $rel)" -Bot $Bot
+        Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session $(if ($limited) { 'usage-limited' } else { 'idle' }) -> $rel)" -Bot $Bot
         if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
         if ($acctRoll) { Write-BotState -Bot $Bot -Updates @{ account_roll_at = (Get-Date).ToString('o') } }
+        if ($limited -and $service -eq 'bg' -and ($recover -or $acctRoll)) {
+            # the resumed session's first prompt (launch.ps1 step 5): what happened and what to pick up
+            $fo = $script:Failover[$Bot]
+            $from = $(if ($fo -and $fo.active) { "$($fo.active)" } else { 'its account' })
+            $to = $(if ($acctRoll) { $(if ("$($cfg.account)") { "$($cfg.account)" } else { "own:$Bot" }) } else { $from })
+            if (Write-ResumePrompt -Bot $Bot -Paths $P -Text (Get-LimitResumeText -Bot $Bot -From $from -To $to -ResetAt "$(if ($fo) { $fo.resetAt })")) { Write-DaemonLog "resume prompt written ($(if ($recover) { 'recover on the same account' } else { "account $from -> $to" }))" -Bot $Bot }
+        }
         Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ started_by = 'daemon-restart'; updated_at = (Get-Date).ToString('o') }
         $rp = Start-RestartDetached -Bot $Bot -OldPid $claudePid -OldShellPid $shellPid
         if ($service -eq 'bg') {
@@ -792,6 +852,7 @@ try {
     Write-DaemonLog "tick start (probe=$ProbeOnly dry=$DryRun headless=$(Test-Headless) rt=$RtHome)" -Quiet
     $script:RestartAllWhy = $null
     $script:Observed = @{}
+    $script:Failover = @{}
     if (-not $ProbeOnly) {
         # state schema v2 has its own version (`schema` in each file), migrated here, not by
         # harness/migrations (that number is bot.yaml's); a no-op once every file is v2

@@ -38,6 +38,28 @@ def test_account_roll_gate(obs, wanted, attempted, bp, drainer, last_roll, expec
     assert _ps(body) == expected
 
 
+@needs_pwsh
+@pytest.mark.parametrize("obs,drainer,last_roll,expected", [
+    ({"alive": True, "phase": "blocked", "awaiting_prompt": False}, False, "", "roll"),                         # a limited session has no turn to wait for
+    ({"alive": True, "phase": "blocked", "awaiting_prompt": False}, True, "", "defer:drainer"),                 # the drainer gate stays
+    ({"alive": True, "phase": "blocked", "awaiting_prompt": False}, False, "2026-09-26T11:50:00Z", "defer:backoff"),   # so does the backoff
+    ({"alive": True, "phase": "working"}, False, "", "roll"),                                                    # phase is not consulted while limited
+])
+def test_account_roll_gate_limit_blocked(obs, drainer, last_roll, expected):
+    body = (f"$o = ConvertFrom-Json -InputObject '{json.dumps(obs)}'\n"
+            f"Get-AccountRollAction -Observed $o -Wanted 'acc1' -Attempted '' -Breakpoint $false -DrainerLive ${str(drainer).lower()} "
+            f"-LastRollAt '{last_roll}' -Now ([datetime]'2026-09-26T12:00:00Z') -LimitBlocked")
+    assert _ps(body) == expected
+
+
+@needs_pwsh
+def test_account_roll_gate_not_limited_blocked_defers():
+    """Without -LimitBlocked a blocked phase still defers: a login or a dialog is not the daemon's to answer."""
+    body = ("$o = ConvertFrom-Json -InputObject '{\"alive\": true, \"phase\": \"blocked\"}'\n"
+            "Get-AccountRollAction -Observed $o -Wanted 'acc1' -Attempted '' -Breakpoint $false -DrainerLive $false -LastRollAt '' -Now ([datetime]'2026-09-26T12:00:00Z')")
+    assert _ps(body) == "defer:phase"
+
+
 def _on_pin_with_account(t: dict, launched_account: str | None) -> None:
     """tick_box's bot runs the pin (no cc roll), wants `account: acc1`, and its launcher's record attempted launched_account."""
     rt, home = t["rt"], t["home"]

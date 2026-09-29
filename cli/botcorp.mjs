@@ -306,8 +306,9 @@ function echoPs(r) {
 
 async function cmdAccounts({ pos, flags }) {
   const [, action, id] = pos;
-  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>]');
+  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>] | failover <bot> [--json]');
   if (action === 'use') return accountsUse(id, pos[3], flags);
+  if (action === 'failover') return accountsFailover(id, flags);
   if (action === 'list') {
     if (!flags.json) return echoPs(accountsPs(['-Action', 'list']));
     const r = accountsListJson();
@@ -363,6 +364,53 @@ function accountsUse(bot, id, flags) {
   out(id === 'none'
     ? `applies at the next idle turn boundary; confirm with: botcorp status ${bot} --json (session_env.oauth_last4 = the bot's own vault token)`
     : `applies at the next idle turn boundary; confirm with: botcorp status ${bot} --json (session_env.oauth_last4 = ${last4})`);
+  return 0;
+}
+
+// ---- accounts failover: the chain, the live limit and what the daemon would do (core/failover.mjs) ----
+// Read-only over the files the tick and the launcher read too. A -DryRun tick
+// persists no observe record, so it hands its fresh one over as JSON in
+// BOTCORP_FAILOVER_OBSERVED; the CLI run by hand reads the last tick's.
+function readFailoverInputs(bot) {
+  const cfg = loadBotYaml(botYamlPath(bot));
+  const state = readJson(path.join(STATE_DIR, `${bot}.json`));
+  let observed = null;
+  if (process.env.BOTCORP_FAILOVER_OBSERVED) { try { observed = JSON.parse(process.env.BOTCORP_FAILOVER_OBSERVED); } catch {} }
+  const status = readJson(path.join(configDir(bot), 'botcorp', 'status.json'));
+  const accountsState = readJson(path.join(STATE_DIR, 'accounts.json'));
+  // a cached FAIL of the token check (doctor / accounts use, 24 h) marks a registered account failed up front
+  let failedIds = [];
+  if (chainOf(cfg, bot).some((id) => !isOwn(id))) {
+    const checks = readJson(path.join(STATE_DIR, 'account-checks.json')) || {};
+    const list = accountsListJson();
+    if (list.ok) failedIds = list.rows.filter((r) => r.fp && checks[r.fp] && checks[r.fp].ok === false && Date.now() - Date.parse(checks[r.fp].at || 0) < ACCOUNT_CHECK_TTL_MS).map((r) => r.id);
+  }
+  const lp = state && state.env_launcher_pid != null ? String(state.env_launcher_pid) : '';
+  const launches = (readJson(path.join(configDir(bot), 'botcorp', 'launch-env.json')) || {}).launches || {};
+  const rec = lp ? launches[lp] : null;
+  const launchAccount = rec ? (typeof rec.account === 'string' ? rec.account : '') : null;
+  return { bot, cfg, state, observed, status, accountsState, failedIds, launchAccount, dwellMin: Number(process.env.BOT_FAILOVER_DWELL_MIN) || 30 };
+}
+
+// `accounts failover <bot> [--json]`: prints the chain and the decision; never writes.
+function accountsFailover(bot, flags) {
+  requireBot(bot);
+  const d = decide(readFailoverInputs(bot));
+  if (flags.json) { outJson(d); return 0; }
+  const label = (r) => `${r.id}${r.own ? ' (own token)' : ''}${r.active ? ' ACTIVE' : ''}${r.limited ? ` limited until ${hhmm(r.blocked_until)}${r.window ? ` (${r.window})` : ''}` : r.failed ? ` FAILED: ${r.failed.why || 'token check'}` : ' clear'}${r.bots.length ? ` [bots: ${r.bots.join(', ')}]` : ''}`;
+  out(`accounts: ${bot} chain: ${d.chain.map(label).join(' -> ')}`);
+  if (d.limited) out(`  session: usage-limited (${d.window} window, resets ${hhmm(d.resetAt)}, from ${d.source})`);
+  const dec = d.decision;
+  const text = {
+    failover: `would restart ${bot} onto ${dec.to} (${dec.why})`,
+    failback: `would restart ${bot} back onto ${dec.to} at its next idle turn (${dec.why})`,
+    recover: `would restart ${bot} on ${dec.to} (${dec.why})`,
+    wait: `would wait until ${hhmm(dec.waitUntil)} (${dec.why})`,
+    hold: `would do nothing: ${dec.why}`,
+    none: dec.why ? `nothing to do (${dec.why})` : 'nothing to do',
+  }[dec.action] || dec.action;
+  out(`  decision: ${text}`);
+  out('  (this verb never writes; the daemon tick acts on the same decision)');
   return 0;
 }
 
@@ -2914,6 +2962,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
   accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)
   accounts use <bot> <id|none> [--by <who>]   (operator: run a bot on an account's login; applied at its next idle turn)
+  accounts failover <bot> [--json]            (read-only: the account chain, the live usage limit and what the daemon would do)
   chat [--account <id>] [--cwd <folder>|--generic] [--dry-run]     (plain claude for an account in its own WT tab; a picker without flags)
   attach <bot> [--elevate] | tray <bot> on [--attach-at-login]|off|status   (pull a bg bot up in a WT tab; per-bot tray icon at login)
   sync <bot> [--dry-run]
