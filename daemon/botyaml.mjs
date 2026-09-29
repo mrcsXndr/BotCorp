@@ -44,6 +44,7 @@ export const DEFAULTS = {
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     tools_registry: 'warn',         // warn | enforce: how doctor grades an executable no `tools:` entry covers
+    failover_notify: false,         // one Telegram line (this bot's tg_send.py) when the daemon moves the session to another account; accounts.log always has it
     admin_notify: false,            // role: admin only: one Telegram line (this bot's own tg_send.py) per admin action, on top of the audit log
     modules: {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
@@ -72,6 +73,11 @@ export const DEFAULTS = {
   // bot's own vault oauth_token. null = the bot's own token. `botcorp accounts
   // use` sets it; the tick rolls the session onto it at the next idle turn.
   account: null,
+  // Up to 5 account ids tried in order when the account the session runs on
+  // hits a usage limit (core/failover.mjs). The daemon moves the same
+  // conversation to the first one that is not limited and moves it back to
+  // `account` at an idle turn once that has reset. Changing it is widening.
+  backup_accounts: [],
   // null | admin. An admin bot may run the operator-only verbs listed in
   // docs/cli.md "Admin bots" (accounts, secrets set/delete, approve/reject,
   // pair, update --apply/--skip, start/stop/restart of other bots), each one
@@ -146,6 +152,20 @@ export function validate(cfg) {
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
   // The id shape only: an existence check here would make `accounts remove` stop the bot from launching.
   if (cfg.account !== null && !(typeof cfg.account === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(cfg.account))) errs.push(`account: an account id ([a-z0-9][a-z0-9-]*, max 32) or null (got ${JSON.stringify(cfg.account)})`);
+  {
+    const b = cfg.backup_accounts;
+    const ID_RE = /^[a-z0-9][a-z0-9-]{0,31}$/;
+    if (!Array.isArray(b)) errs.push(`backup_accounts: a list of account ids (got ${JSON.stringify(b)})`);
+    else {
+      if (b.length > 5) errs.push(`backup_accounts: at most 5 (got ${b.length})`);
+      const bad = b.filter((id) => !(typeof id === 'string' && ID_RE.test(id)));
+      if (bad.length) errs.push(`backup_accounts: not an account id: ${bad.map((x) => JSON.stringify(x)).join(', ')}`);
+      const dup = b.filter((id, i) => b.indexOf(id) !== i);
+      if (dup.length) errs.push(`backup_accounts: listed twice: ${[...new Set(dup)].join(', ')}`);
+      if (cfg.account && b.includes(cfg.account)) errs.push(`backup_accounts: ${cfg.account} is the primary (account:), not a backup`);
+    }
+  }
+  if (typeof cfg.harness.failover_notify !== 'boolean') errs.push(`harness.failover_notify: true | false (got ${JSON.stringify(cfg.harness.failover_notify)})`);
   if (cfg.role !== null && cfg.role !== 'admin') errs.push(`role: admin or null (got ${JSON.stringify(cfg.role)})`);
   if (typeof cfg.harness.admin_notify !== 'boolean') errs.push(`harness.admin_notify: true | false (got ${JSON.stringify(cfg.harness.admin_notify)})`);
   if (!['warn', 'enforce'].includes(cfg.harness.tools_registry)) errs.push(`harness.tools_registry: warn | enforce (got ${JSON.stringify(cfg.harness.tools_registry)})`);

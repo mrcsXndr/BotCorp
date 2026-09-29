@@ -59,6 +59,24 @@ def test_service_must_be_daemon_or_manual(tmp_path):
     assert any(e.startswith("harness.service") for e in cfg["_errors"])
 
 
+@pytest.mark.parametrize("backups,error", [
+    ("[a1, a2, a3, a4, a5, a6]", "at most 5"),
+    ("[a1, a1]", "listed twice: a1"),
+    ("[main]", "main is the primary"),
+    ("[Bad!]", "not an account id"),
+    ("spare", "a list of account ids"),
+])
+def test_backup_accounts_are_validated(tmp_path, backups, error):
+    cfg = _effective(tmp_path, f"name: alpha\naccount: main\nbackup_accounts: {backups}\n")
+    assert any(e.startswith("backup_accounts") and error in e for e in cfg["_errors"]), cfg["_errors"]
+
+
+def test_backup_accounts_default_empty_and_a_valid_chain_passes(tmp_path):
+    assert _effective(tmp_path, "name: alpha\n")["backup_accounts"] == []
+    cfg = _effective(tmp_path, "name: alpha\nbackup_accounts: [spare]\nharness:\n  failover_notify: true\n")
+    assert cfg["_errors"] == [] and cfg["backup_accounts"] == ["spare"] and cfg["harness"]["failover_notify"] is True
+
+
 def test_cli_key_is_rejected_outright(tmp_path):
     # Locked B3: Claude only, no driver seam. Even `cli: claude` is a mistake.
     for value in ("codex", "claude"):
