@@ -711,7 +711,14 @@ def test_api_cc_returns_pin(tmp_path):
         r = urllib.request.urlopen(urllib.request.Request(base + "/api/cc", headers={"Cookie": cookie}), timeout=60)
         st = json.loads(r.read())
     finally:
-        subprocess.run(["taskkill", "/PID", str(srv.pid), "/T", "/F"], capture_output=True)
+        if sys.platform == "win32":
+            subprocess.run(["taskkill", "/PID", str(srv.pid), "/T", "/F"], capture_output=True)
+        else:
+            srv.terminate()
+            try:
+                srv.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                srv.kill()
     assert r.status == 200 and st["pinned"]["version"] == "2.1.283" and st["candidate"]["status"] == "failed"
     assert [x["bot"] for x in st["bots"]] == ["alpha"] and st["bots"][0]["on_pin"] is None
 

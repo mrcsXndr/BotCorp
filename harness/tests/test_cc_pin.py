@@ -45,7 +45,7 @@ def _box(tmp_path: Path, *, native: bool = True, pin: str | None = "2.1.900", pi
     (rt / "state").mkdir(parents=True)
     profile = tmp_path / "profile"
     (profile / ".local" / "bin").mkdir(parents=True)
-    native_exe = profile / ".local" / "bin" / "claude.exe"
+    native_exe = profile / ".local" / "bin" / ("claude.exe" if sys.platform == "win32" else "claude")
     if native:
         native_exe.write_bytes(b"native")
     pinned_exe = rt / "cc" / (pin or "none") / "claude.exe"
@@ -56,7 +56,7 @@ def _box(tmp_path: Path, *, native: bool = True, pin: str | None = "2.1.900", pi
         (rt / "state" / "cc.json").write_text(json.dumps({"schema": 1, "pinned": {"version": pin, "exe": str(pinned_exe), "sha256": "x", "by": "bootstrap"}, "previous": [], "rejected": []}), encoding="utf-8")
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
-    path_exe = fake_bin / "claude.cmd"
+    path_exe = fake_bin / ("claude.cmd" if sys.platform == "win32" else "claude")
     if on_path:
         path_exe.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k not in ("BOTCORP_CLAUDE_EXE",)}
