@@ -53,6 +53,7 @@ const {
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
 } = await import('./_lib.mjs');
 const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak, toolInventory } = await import('./tools.mjs');
+const operatorPair = await import('../cockpit/operator-pair.mjs');
 
 const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
@@ -2494,7 +2495,32 @@ async function cmdInstall({ pos, flags }) {
 function cmdCockpit({ pos, flags }) {
   const action = pos[1];
   const file = path.join(BOTCORP_HOME, 'access.json');
-  if (action === 'expose' || action === 'unexpose') requireOperator(`cockpit ${action}`);
+  if (['expose', 'unexpose', 'pair', 'unpair'].includes(action)) requireOperator(`cockpit ${action}`);
+  // browser pairing for a loopback cockpit's operator actions (cockpit/operator-pair.mjs)
+  if (action === 'pair') {
+    if (fs.existsSync(file)) out('note: this cockpit is behind Cloudflare Access (access.json), which already identifies you; a code only matters on loopback');
+    const { code, expires } = operatorPair.mintCode(STATE_DIR);
+    if (flags.json) { outJson({ code, expires }); return 0; }
+    out(`pairing code: ${code}`);
+    out(`enter it in the cockpit when it asks (valid until ${expires}, once). That browser then decides approvals without the token for 90 days; botcorp cockpit unpair <id|--all> revokes it.`);
+    return 0;
+  }
+  if (action === 'unpair') {
+    const id = flags.all ? 'all' : pos[2];
+    if (!id) {
+      const devices = operatorPair.listDevices(STATE_DIR);
+      if (flags.json) { outJson(devices); return 0; }
+      for (const d of devices) out(`${d.id}  ${d.created}  ${d.label}`);
+      if (!devices.length) out('cockpit: no paired browsers');
+      out('unpair: botcorp cockpit unpair <id> | --all');
+      return 0;
+    }
+    if (id !== 'all' && !/^[0-9a-f]{16}$/.test(id)) usage('cockpit unpair <device id> | --all');
+    const n = operatorPair.revoke(STATE_DIR, id);
+    if (!n) fail(`cockpit unpair: no paired browser '${id}'`);
+    out(`cockpit: ${n} paired browser${n === 1 ? '' : 's'} revoked (effective on the next request)`);
+    return 0;
+  }
   if (action === 'expose') {
     const team = flags.team ? String(flags.team) : usage('cockpit expose --team <slug> --aud <aud> --yes');
     const aud = flags.aud ? String(flags.aud) : usage('cockpit expose --team <slug> --aud <aud> --yes');
@@ -2511,7 +2537,7 @@ function cmdCockpit({ pos, flags }) {
     out(`removed ${file}: the cockpit is loopback-only again (restart it; stop any running tunnel too)`);
     return 0;
   }
-  usage('cockpit expose --team <t> --aud <a> --yes | cockpit unexpose');
+  usage('cockpit expose --team <t> --aud <a> --yes | cockpit unexpose | cockpit pair [--json] | cockpit unpair [<id> | --all]');
 }
 
 // ---- suggest -------------------------------------------------------------------------------
@@ -3204,11 +3230,11 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
       [--source cli|cockpit]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
-       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip|--rollback|--cancel,
+       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose|pair|unpair, update --apply|--skip|--rollback|--cancel,
        cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox.
        An admin bot (bot.yaml role: admin, its launch id matching) may run approve/reject, accounts,
        secrets set|delete, pair, update --apply|--skip|--rollback|--cancel and start/stop/restart of other bots, each line in
-       state/admin-audit.jsonl; never a role change, a secret read, or cockpit expose|unexpose)
+       state/admin-audit.jsonl; never a role change, a secret read, or cockpit expose|unexpose|pair|unpair)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
@@ -3226,6 +3252,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   cc status [--json] | cc test | cc rollback [--to <version>]          (the Claude Code pin: bots roll onto it between turns)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)
+  cockpit pair [--json] | cockpit unpair [<id> | --all] [--json]          (a loopback cockpit: a one-time code pairs a browser for operator actions; no id lists them)
   suggest <bot> --topic <t> [--lesson <file>] [--dry-run]
   doctor [--json] [--host] [--no-accounts] [--no-tg-probe]
   help

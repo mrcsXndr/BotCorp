@@ -209,7 +209,8 @@ never spawns a session itself, attached or not.
 | Accounts sheet: Use (per bot) | the chain route below, with the bot's backups minus the new primary; `POST /api/bots/:name/account {id\|none}` -> `accounts use` stays for other callers |
 | Accounts sheet: a bot's chain (primary + backups) | `POST /api/bots/:name/accounts {primary: id or none, backups: [ids, at most 5]}` -> `accounts use <bot> <primary>` and `accounts backups <bot> <ids\|none>`, each with `--by <identity>`; approval token required |
 | Settings sheet: read | `GET /api/bots/:name/config` -> `config get <bot> --json` (defaults merged) plus `set`, the paths the bot's own `bot.yaml` names (the rest show as "default") |
-| Settings sheet: save one value | `POST /api/bots/:name/config {path, value}` (one scalar) -> `config set <bot> <path> <value> --requested-by <identity>`; the reply says `applied`, or `queued` with the approval id when the change widens what the bot may do; a CLI refusal (unknown path, invalid value) is 400 with its reason. Lists, the accounts, automations, tools, secrets and Telegram senders are shown read-only and changed on their own page |
+| Settings sheet: save one value | `POST /api/bots/:name/config {path, value}` (one scalar, or a list of names for `harness.disable` / `harness.hooks_disable` only) -> `config set <bot> <path> <value> --requested-by <identity>`; the reply says `applied`, or `queued` with the approval id when the change widens what the bot may do; a CLI refusal (unknown path, invalid value) is 400 with its reason. Lists, the accounts, automations, tools, secrets and Telegram senders are shown read-only and changed on their own page |
+| Tools inventory | `GET /api/bots/:name/inventory` -> `tools <bot> inventory --json` (read-only): `{bot, groups: [harness, bot, third]}`, each group's `sections` holding items `{id, name, kind, source, license, description, on, toggle, locked, note}`; `toggle` is `{path, on, off}` (a bot.yaml value) or `{list, item}` (membership of `harness.disable` / `harness.hooks_disable` turns it off), `null` when the engine cannot switch it |
 | Settings sheet: approvals | the bot's pending entries from `GET /api/approvals`, decided with the same route as the Approvals sheet |
 | Settings sheet: this machine | `GET /api/cockpit` -> `{version, commit, exposure, cc: {pinned, candidate}}` |
 | New chat: recent folders | `GET /api/chat/recent` reads `<BOTCORP_HOME>/state/chat-recent.json` |
@@ -228,6 +229,30 @@ they answer 403 `{need: "approve-token"}` and the page asks for it once. The
 cockpit prints the token at start and also writes it to
 `<BOTCORP_HOME>/state/cockpit-approve-token`, readable by the operator's
 account only, so a cockpit the daemon started (no terminal) is usable too.
+
+**Browser pairing (loopback, v0.8.3)** replaces the token for one browser:
+
+1. In your own terminal: `botcorp cockpit pair`. It prints an 8-character code
+   (`ABCD-EFGH`), valid 10 minutes, single use. Only its sha256 is stored, in
+   `<BOTCORP_HOME>/state/cockpit-pairing.json`.
+2. The browser posts it to `POST /api/pair/claim {code}`. The server lists a
+   device and sets `botcorp_operator=<id>.<HMAC(key, id)>` (HttpOnly,
+   SameSite=Strict, 90 days). The key is `<BOTCORP_HOME>/state/cockpit-operator.key`,
+   owner-only, made on first use. Five wrong codes lock claiming for 10 minutes
+   (429); a new `cockpit pair` lifts the lock.
+3. `operatorGate` then passes on that cookie while the device is listed.
+   `GET /api/pair/devices` lists them (`current` marks this browser);
+   `DELETE /api/pair/devices/:id` (`:id` or `all`, operator-gated) and
+   `botcorp cockpit unpair <id|--all>` revoke, effective on the next request.
+
+A bot cannot pair: the CLI refuses `cockpit pair|unpair` in any bot session
+(exit 3), the operator guard hook blocks both for every bot, admin included,
+and the vault guard blocks tool calls naming `cockpit-operator` or
+`cockpit-pairing`. Behind Cloudflare Access pairing is not used (the claim
+route answers 404). The residual risk is the same as the token file's: every
+process runs as the same OS user, so a process that reads the browser
+profile's cookie store, or writes the pairing file itself, gets past it.
+Access remains the remote path.
 
 ## The page
 

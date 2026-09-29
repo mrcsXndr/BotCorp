@@ -37,6 +37,7 @@ import * as bots from './bots.mjs';
 import { restrictToUser } from '../core/acl.mjs';
 import * as vault from './vault.mjs';
 import * as pairing from './pairing.mjs';
+import * as operatorPair from './operator-pair.mjs';
 import * as history from './history.mjs';
 import * as chat from './chat.mjs';
 import * as engine from './engine.mjs';
@@ -224,7 +225,8 @@ app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
 // decision a bot must never make for itself: behind Access the verified
 // identity is the check; on loopback any local process can mint a session
 // cookie (a bot's curl too), so those routes also need the per-boot approval
-// token this server prints to the terminal that started it.
+// token this server prints to the terminal that started it, or the operator
+// cookie of a browser paired with `botcorp cockpit pair` (operator-pair.mjs).
 const APPROVE_TOKEN = ACCESS ? null : crypto.randomBytes(16).toString('hex');
 // A cockpit the daemon started has no terminal to print to, so the token also
 // goes to an owner-only file (the ACL is set before the rename makes it visible).
@@ -238,13 +240,44 @@ if (APPROVE_TOKEN) {
     await fsp.rename(tmp, APPROVE_TOKEN_FILE);
   } catch (e) { console.log(`[cockpit] could not write ${APPROVE_TOKEN_FILE}: ${e.message}`); }
 }
+// A browser paired once (operator-pair.mjs) carries the operator cookie instead of the token.
 function operatorGate(req, res) {
   if (!APPROVE_TOKEN) return true;
+  if (operatorPair.deviceOf(bots.STATE_DIR, req.headers.cookie)) return true;
   const got = String(req.headers['x-approve-token'] || '');
   if (got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN))) return true;
-  res.status(403).json({ error: 'needs the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
+  res.status(403).json({ error: 'needs the operator: pair this browser once (`botcorp cockpit pair` in your terminal, then enter the code), or the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
   return false;
 }
+
+// ---- browser pairing (loopback only: behind Access the verified identity is the operator)
+const PAIR_CODE_RE = /^[A-Za-z0-9 -]{4,20}$/;
+const DEVICE_ID_RE = /^[0-9a-f]{16}$/;
+app.post('/api/pair/claim', wrap(async (req, res) => {
+  if (ACCESS) return res.status(404).json({ error: 'not used behind Cloudflare Access: the verified identity already decides' });
+  const code = req.body?.code;
+  if (typeof code !== 'string' || !PAIR_CODE_RE.test(code)) return res.status(400).json({ error: 'code: the 8 characters `botcorp cockpit pair` printed' });
+  const r = operatorPair.claim(bots.STATE_DIR, code, { label: String(req.headers['user-agent'] || '') });
+  if (!r.ok) return res.status(r.status).json({ error: r.error });
+  res.locals.audit = { pair: 'claim', device: r.device.id };
+  res.setHeader('Set-Cookie', operatorPair.setCookieHeader(r.value));
+  res.json({ ok: true, device: r.device });
+}));
+app.get('/api/pair/devices', wrap(async (req, res) => {
+  if (ACCESS) return res.json({ exposure: 'access', devices: [] });
+  const cur = operatorPair.deviceOf(bots.STATE_DIR, req.headers.cookie);
+  res.json({ exposure: 'loopback', devices: operatorPair.listDevices(bots.STATE_DIR).map((d) => ({ ...d, current: !!cur && cur.id === d.id })) });
+}));
+// :id = one device, or `all`
+app.delete('/api/pair/devices/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  if (id !== 'all' && !DEVICE_ID_RE.test(id)) return res.status(400).json({ error: 'a device id, or all' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { pair: 'revoke', device: id };
+  const n = operatorPair.revoke(bots.STATE_DIR, id);
+  if (!n) return res.status(404).json({ error: 'no such device' });
+  res.json({ ok: true, removed: n });
+}));
 async function decided(res, args, audit) {
   res.locals.audit = audit;
   const r = await runCli(args);

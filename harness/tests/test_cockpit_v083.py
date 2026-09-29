@@ -2,6 +2,8 @@
 
 - cockpit/tests/inventory.test.mjs: `tools <bot> inventory --json` and
   GET /api/bots/:name/inventory (three groups, toggles, locked guards).
+- cockpit/tests/operator-pair.test.mjs: browser pairing (a one-time code, the
+  botcorp_operator cookie, the lock, revocation) and the X-Approve-Token still passing.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ ASSEMBLY = Path(__file__).resolve().parents[2]
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
 @pytest.mark.parametrize("suite,minimum", [
     ("inventory.test.mjs", 7),
+    ("operator-pair.test.mjs", 8),
 ])
 def test_cockpit_node_suite(suite, minimum):
     env = {**os.environ, "BOT_TG_MUTE": "1"}

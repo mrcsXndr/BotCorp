@@ -556,6 +556,18 @@ registry is off for that bot and nothing below reports.
   with at least one scan and every worst count at 0; a dirty or missing day
   breaks the streak, and today not scanned yet is not a gap. Run it before
   switching a bot to `enforce`.
+- `inventory [--json]` (read-only, records no day, also takes a `_` fixture)
+  lists everything the bot can use in three groups: the BotCorp harness
+  (modules, skills, agents, hooks, rules, commands, shimmed tools), the bot's
+  own (its registry entries and `.claude/` skills, agents, commands) and
+  third-party (plugins and MCP servers, with their provider). Each item says
+  whether it is on and how it is switched: a `bot.yaml` value
+  (`harness.modules.<m>`, `tools.<name>.enabled`) or membership of
+  `harness.disable` (`skill:<name>` / `agent:<name>`) or
+  `harness.hooks_disable`. vault-guard and operator-guard have no switch.
+  `enabled: false` on a registry entry makes `sync` deny the session any Bash
+  command naming its path; enabling an integration or secret-bearing entry
+  from a bot queues for approval, as does switching off a `-guard` hook.
 
 `bot.yaml` `harness.tools_registry` (`warn`, the default, or `enforce`) sets
 how `doctor` grades a gap: `tools-unregistered`, `automation-unregistered`
@@ -833,6 +845,17 @@ the file. Per-bot `integrations.access` only records which Access app a bot
 expects (`doctor` cross-checks it against the machine file). Restart the
 cockpit after either. Both are operator-only (exit 3 from a bot session).
 
+### `cockpit pair [--json]` / `cockpit unpair [<id> | --all] [--json]`
+
+Browser pairing for a loopback cockpit (`docs/cockpit.md`, "Auth model").
+`pair` prints a one-time 8-character code, valid 10 minutes; entering it in
+the cockpit lets that browser make operator decisions for 90 days without the
+approval token. Only the code's sha256 is stored
+(`<BOTCORP_HOME>/state/cockpit-pairing.json`); a new code also lifts a lock
+left by wrong guesses. `unpair <id>` or `--all` revokes paired browsers; with
+no id it lists them. Both are operator-only for every bot, an admin bot
+included (exit 3; the operator guard hook blocks them too).
+
 ### `suggest <bot> --topic <t> [--lesson <file>] [--dry-run]`
 
 The improvement cycle's upstream path. Refuses when the checkout has no
@@ -1057,7 +1080,7 @@ Three things stay the operator's alone, admin or not:
 2. **Reading secrets.** The vault stays write-only for every bot:
    `secrets export-bundle` refuses, and the vault guard hook still blocks
    every read of a `.vault` folder and of the vault scripts.
-3. **`cockpit expose` and `unexpose`.**
+3. **`cockpit expose`, `unexpose`, `pair` and `unpair`.**
 
 Changing `role` is always a widening change. `botcorp config set <bot> role
 admin` (or `null`) goes to the approval queue even when you run it yourself,
@@ -1130,9 +1153,11 @@ the browser (`cockpit/cli.mjs`). Every cockpit POST, PUT, PATCH and DELETE is au
 `<BOTCORP_HOME>/state/cockpit-audit.jsonl`. Approve, reject, resume, enable,
 register, the account switch, pair, a secret set and a release Apply/Skip
 need the operator: Cloudflare Access when the cockpit is exposed,
-else the per-boot approval token the cockpit prints at start and writes to
+else a browser paired with `cockpit pair` (the `botcorp_operator` cookie) or
+the per-boot approval token the cockpit prints at start and writes to
 the owner-only `<BOTCORP_HOME>/state/cockpit-approve-token`
-(`X-Approve-Token`), or they answer 403.
+(`X-Approve-Token`), or they answer 403. `tools <bot> inventory --json`
+feeds the Tools inventory.
 
 ## Notes
 

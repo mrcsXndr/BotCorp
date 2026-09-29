@@ -3,7 +3,7 @@
 # verbs: `botcorp approve|reject` (its own queued widening change), `accounts
 # add|remove|seed|use|backups`, `secrets set|delete`, `pair <id>`, `update
 # --apply|--skip|--rollback|--cancel`, start/stop/restart of another bot,
-# `cockpit expose|unexpose`.
+# `cockpit expose|unexpose|pair|unpair`.
 # An admin bot (bot.yaml role: admin, its launch id matching; `botcorp
 # whoami`) may run all of them but the last. The CLI refuses them too
 # (BOT_NAME / CLAUDECODE in the env, exit 3); this is the second layer.
@@ -37,8 +37,8 @@ CMD_N=$(printf '%s\n' "$CMD" | tr '[:upper:]' '[:lower:]')
 BC="botcorp(\.mjs)?[\"']?[[:space:]]+"
 
 # Never from a session, admin bot or not.
-if printf '%s\n' "$CMD_N" | grep -qE "${BC}cockpit[[:space:]]+(expose|unexpose)([^a-z0-9_-]|$)"; then
-  echo "BLOCKED: botcorp cockpit expose / unexpose are the operator's alone (an admin bot cannot run them either)." >&2
+if printf '%s\n' "$CMD_N" | grep -qE "${BC}cockpit[[:space:]]+(expose|unexpose|pair|unpair)([^a-z0-9_-]|$)"; then
+  echo "BLOCKED: botcorp cockpit expose / unexpose / pair / unpair are the operator's alone (an admin bot cannot run them either)." >&2
   exit 2
 fi
 
