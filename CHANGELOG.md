@@ -3,6 +3,14 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.8.4
+
+The tool inventory names an MCP server the same way on every host.
+
+- **Fixed:** an MCP server started from a Windows path (`C:\tools\srv.exe`) was
+  listed under its full path on Linux instead of `srv.exe`. v0.8.3's CI failed on
+  this; v0.8.4 is v0.8.3 plus this fix.
+
 ## v0.8.3
 
 Roll back from the cockpit, readable release notes, switch harness skills,

@@ -394,7 +394,8 @@ export function mcpProvider(def) {
   const cmd = String(def.command || '');
   const args = Array.isArray(def.args) ? def.args.map(String) : [];
   if (/(^|[\\/])(npx|uvx|bunx|pnpm|dlx)(\.cmd|\.exe)?$/i.test(cmd)) { const pkg = args.find((a) => !a.startsWith('-')); if (pkg) return pkg.replace(/@[^@/]+$/, ''); }
-  return path.basename(cmd) || 'unknown';
+  // win32 splits on both separators, so a Windows command path reads the same on any host.
+  return path.win32.basename(cmd) || 'unknown';
 }
 
 export function toolInventory({ botHome, cfg, botcorpRoot, scan = null }) {
