@@ -106,11 +106,24 @@ use `--text-2`, which keeps readable contrast on every surface.
   - A usage meter is a 6px `--line` track with a fill in `--text-2`, `--warn`
     from 75% or `--bad` from 90% (the header readouts' `level()`); the value and reset time are mono. Accounts group
     their bots.
-  - Switch account: a quiet "Switch account" under a bot's meters opens a
-    picker on `--task` (`.cap` rows: the account, its masked token, the bots
-    already on it with their 5 h / 7 d, and Use); the bot's own token is the
-    last row. A switch not yet landed is a `--warn` text line, "switching to
-    <id> at next idle", never a badge.
+  - Switch account: a quiet "Switch account" under a bot's meters opens the
+    Accounts sheet on that bot. A switch not yet landed is a `--warn` text
+    line, "switching to <id> at next idle", never a badge.
+- **Accounts sheet:** one `.arow` per registered account: the label (650), the
+  id and the masked token in mono, the plan in `--text-3`, and the state as a
+  coloured `.out` word pushed to the right (`ok`, `limited until HH:MM (5h)`
+  in `--warn`, `failed` / `no token` in `--bad`); under it the same 5 h / 7 d
+  meters as Usage (a limit is per account) and a `--text-2` line naming the
+  bots on it. Remove is a quiet button on the right; it turns into an inline
+  `.confirm` row on `--task` ("Remove <label>? ... Remove / Keep"), never a
+  dialog. An account a bot.yaml still names shows "set for <bot>; move it
+  before removing" instead of the button. Then "Bots": one `.brow` per bot
+  with the account it runs on, a `<select>` (Its own token, then the
+  registered accounts) and Use, which opens the same inline confirm. The
+  add form sits under its own `.sub`: id, label, plan, then the token as a
+  `type="password"` field (`autocomplete="new-password"`) beside the one
+  primary button; the field is cleared as soon as the request is sent and the
+  toast shows only the CLI's masked line.
 - **Operator token:** a 403 `need: approve-token` opens the token modal once;
   the token is kept in `sessionStorage` and sent as `X-Approve-Token`.
 - **Chat:**

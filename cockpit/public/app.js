@@ -1198,7 +1198,7 @@ async function operatorAct(method, url, body, okMsg, after) {
 
 function openSheet(id) { el(id).classList.add('show'); }
 function closeSheet(id) { el(id).classList.remove('show'); }
-for (const id of ['attnBg', 'approvalsBg', 'usageBg']) el(id).onclick = (e) => { if (e.target === el(id)) closeSheet(id); };
+for (const id of ['attnBg', 'approvalsBg', 'usageBg', 'accountsBg']) el(id).onclick = (e) => { if (e.target === el(id)) closeSheet(id); };
 
 // Select a bot and open one of its drawers (from an attention item).
 function openBot(name, drawer, capsTab) {
@@ -1354,34 +1354,19 @@ function meter(k, w) {
   const resets = w.resetsAt ? `resets in ${fmtIn(w.resetsAt - Date.now() / 1000)}` : '';
   return `<div class="meter" title="${esc(`${p}% used${resets ? ', ' + resets : ''}`)}"><span class="mk">${k}</span><span class="track"><span class="fill${level(p)}" style="width:${p}%"></span></span><span class="mv num">${p}%</span>${resets ? `<span class="mr">${esc(resets)}</span>` : ''}</div>`;
 }
-// Switch account (bot.yaml account:): the registered accounts, each with the
-// bots already on it, and the bot's own token. `accounts use` checks the token;
-// the daemon moves the session at its next idle turn boundary.
+// Switch account (bot.yaml account:) is done on the Accounts sheet; here a
+// pending switch is a --warn line and the quiet button opens that sheet.
 let usageData = null;
-let usagePick = null;   // the bot whose picker is open
-const pctOf = (w) => (w && !w.na ? `${Math.round(w.pct)}%` : 'n/a');
-function acctLine(r, registered) {
+function acctLine(r) {
   const to = r.account_wanted || 'its own token';
   const sw = r.account_pending ? `<span class="sw">${r.running ? `switching to ${esc(to)} at next idle` : `switches to ${esc(to)} at next start`}</span>` : '';
-  const btn = registered.length ? `<button class="btn quiet" data-pick="${esc(r.bot)}">${usagePick === r.bot ? 'Hide accounts' : 'Switch account'}</button>` : '';
-  return sw || btn ? `<div class="ua">${sw}${btn}</div>` : '';
-}
-function acctPicker(r, registered, byBot) {
-  const cur = r.account_wanted || 'none';
-  const opts = [...registered.map((g) => ({ id: g.id, name: g.label || g.id, masked: g.masked, bots: g.bots })), { id: 'none', name: 'Its own token', masked: null, bots: [] }];
-  return '<div class="upick">' + opts.map((o) => {
-    const on = o.bots.filter((n) => n !== r.bot && byBot[n]).map((n) => `${n} ${pctOf(byBot[n].fiveHour)} 5 h, ${pctOf(byBot[n].sevenDay)} 7 d`);
-    const meta = on.length ? `on it: ${on.join('; ')}` : o.id === 'none' ? "the token in this bot's own vault" : 'no other bot on it';
-    const act = o.id === cur ? '<span class="out ok">chosen</span>' : `<button class="btn" data-use="${esc(o.id)}" data-name="${esc(o.name)}" data-bot="${esc(r.bot)}">Use</button>`;
-    return `<div class="cap"><div class="grow"><div class="l1"><span class="h">${esc(o.name)}</span>${o.masked ? `<span class="p">${esc(o.masked)}</span>` : ''}</div><div class="l2">${esc(meta)}</div></div>${act}</div>`;
-  }).join('') + '<p class="hint">Applies between turns; the conversation is kept.</p></div>';
+  return `<div class="ua">${sw}<button class="btn quiet" data-accounts="${esc(r.bot)}">Switch account</button></div>`;
 }
 function renderUsage() {
   const { bots, accounts } = usageData;
   const byBot = Object.fromEntries(bots.map((r) => [r.bot, r]));
-  const registered = accounts.filter((g) => g.registered);
   const row = (r) => `<div class="urow"><span class="ub">${esc(r.bot)}${r.running ? '' : ' <span class="dim">stopped</span>'}</span>${meter('5 h', r.fiveHour)}${meter('7 d', r.sevenDay)}`
-    + acctLine(r, registered) + (usagePick === r.bot ? acctPicker(r, registered, byBot) : '') + '</div>';
+    + acctLine(r) + '</div>';
   el('usageList').innerHTML = accounts.length ? accounts.map((g) => `<div class="acct"><div class="acct-h"><span class="h">${esc(g.label)}</span>${g.masked ? `<span class="m">${esc(g.masked)}</span>` : ''}<span class="dim">${g.registered ? 'registered account' : 'not in botcorp accounts'}</span></div>`
     + (g.bots.length ? g.bots.map((n) => row(byBot[n])).join('') : '<p class="hint">No bot runs on it.</p>') + '</div>').join('')
     : '<p class="hint">No bots yet.</p>';
@@ -1394,22 +1379,112 @@ async function loadUsage() {
     renderUsage();
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }
-function openUsage() { usageData = null; usagePick = null; openSheet('usageBg'); loadUsage(); }
+function openUsage() { usageData = null; openSheet('usageBg'); loadUsage(); }
 el('usageLink').onclick = (e) => { e.preventDefault(); openUsage(); };
 el('usageClose').onclick = () => closeSheet('usageBg');
 el('usageList').onclick = (e) => {
-  const pick = e.target.closest('[data-pick]');
-  if (pick) { usagePick = usagePick === pick.dataset.pick ? null : pick.dataset.pick; return renderUsage(); }
-  const use = e.target.closest('[data-use]');
-  if (use) {
-    const { bot, name } = use.dataset;
-    if (!confirm(`Switch ${bot} to ${name}? It applies between turns; the conversation is kept.`)) return;
-    use.disabled = true;
-    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/account`, { id: use.dataset.use }, `${bot} switches to ${name} at its next idle turn`, () => { usagePick = null; loadUsage(); });
-  }
+  const go = e.target.closest('[data-accounts]');
+  if (go) { closeSheet('usageBg'); return openAccounts(go.dataset.accounts); }
   // Tooltips do not exist on a phone: a tap on a meter shows its reading as a toast.
   const m = e.target.closest('.meter');
   if (m && m.title) toast(m.title);
+};
+
+/* ---- accounts sheet: the registered Claude accounts (state, meters, the bots on each),
+   add one (the token goes to the server body and on to `accounts add` on stdin), remove
+   one, and per bot the account it runs on. Every confirmation is an inline row. ---- */
+let acctData = null;
+let acctConfirm = null;   // the one open inline confirmation: {kind: 'remove', id} | {kind: 'use', bot, id, name}
+let acctFocus = null;     // a bot to open the sheet on (from the Usage sheet's Switch account)
+const ACCT_STATE = { ok: ['ok', 'ok'], limited: ['limited', 'warn'], failed: ['failed', 'bad'], 'no-token': ['no token', 'bad'] };
+function acctStateText(a) {
+  if (a.state === 'limited' && a.blocked_until) return `limited until ${new Date(a.blocked_until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}${a.window ? ` (${a.window})` : ''}`;
+  return (ACCT_STATE[a.state] || [a.state])[0];
+}
+function acctRow(a) {
+  const cls = (ACCT_STATE[a.state] || ['', ''])[1];
+  const on = a.bots.length ? `on it: ${a.bots.map((b) => `${b.bot}${b.running ? '' : ' (stopped)'}`).join(', ')}` : 'no bot on it';
+  const why = a.failed && a.failed.why ? ` · ${a.failed.why}` : a.check ? ` · token check ${a.check.ok ? 'passed' : 'failed'}${fmtWhen(a.check.at) ? ' ' + fmtWhen(a.check.at) : ''}` : '';
+  const inUse = a.wanted_by.length ? `<span class="dim">set for ${esc(a.wanted_by.join(', '))}; move ${a.wanted_by.length > 1 ? 'them' : 'it'} before removing</span>` : `<button class="btn quiet" data-remove="${esc(a.id)}">Remove</button>`;
+  const confirm = acctConfirm && acctConfirm.kind === 'remove' && acctConfirm.id === a.id
+    ? `<div class="confirm"><span class="grow">Remove <b>${esc(a.label)}</b>? Its token leaves the vault; its chat history folder stays.</span><button class="btn" data-remove-yes="${esc(a.id)}">Remove</button><button class="btn quiet" data-confirm-no>Keep</button></div>`
+    : `<div class="acts">${inUse}</div>`;
+  return `<div class="arow"><div class="l1"><span class="h">${esc(a.label)}</span><span class="p">${esc(a.id)}</span>${a.masked ? `<span class="p">${esc(a.masked)}</span>` : ''}${a.plan ? `<span class="dim">${esc(a.plan)}</span>` : ''}<span class="out ${cls}">${esc(acctStateText(a))}</span></div>`
+    + `<div class="meters">${meter('5 h', a.fiveHour)}${meter('7 d', a.sevenDay)}</div>`
+    + `<div class="l2">${esc(on)}${esc(why)}</div>${confirm}</div>`;
+}
+function botRow(b, accounts) {
+  const cur = b.account_wanted || 'none';
+  const opts = [{ id: 'none', name: 'Its own token' }, ...accounts.map((a) => ({ id: a.id, name: a.label }))];
+  const sel = `<select data-bot="${esc(b.bot)}" aria-label="account for ${esc(b.bot)}">${opts.map((o) => `<option value="${esc(o.id)}"${o.id === cur ? ' selected' : ''}>${esc(o.name)}</option>`).join('')}</select>`;
+  const sw = b.account_pending ? `<span class="sw">${b.running ? `switching to ${esc(b.account_wanted || 'its own token')} at next idle` : 'switches at next start'}</span>` : '';
+  const confirm = acctConfirm && acctConfirm.kind === 'use' && acctConfirm.bot === b.bot
+    ? `<div class="confirm"><span class="grow">Switch <b>${esc(b.bot)}</b> to <b>${acctConfirm.id === 'none' ? 'its own token' : esc(acctConfirm.name)}</b>? Applies between turns; the conversation is kept.</span><button class="btn primary" data-use-yes="${esc(b.bot)}" data-id="${esc(acctConfirm.id)}">Switch</button><button class="btn quiet" data-confirm-no>Keep</button></div>` : '';
+  // "runs on": what the newest launch recorded; a bot never launched has nothing to say
+  const on = b.on_registered ? `runs on ${b.on}` : b.running ? `runs on ${b.on || 'an unrecorded token'}` : '';
+  return `<div class="brow"><span class="ub">${esc(b.bot)}${b.running ? '' : ' <span class="dim">stopped</span>'}</span><span class="on">${esc(on)}</span>${sw}${sel}<button class="btn" data-use="${esc(b.bot)}">Use</button>${confirm}</div>`;
+}
+function renderAccounts() {
+  const { accounts, bots } = acctData;
+  el('accountsList').innerHTML = (accounts.length ? accounts.map(acctRow).join('') : '<p class="hint">No accounts registered yet. Add one below; <code>botcorp accounts seed</code> registers each bot\'s own token instead.</p>')
+    + '<p class="sub">Bots</p>' + (bots.length ? bots.map((b) => botRow(b, accounts)).join('') : '<p class="hint">No bots yet.</p>');
+  if (acctFocus) {
+    const sel = el('accountsList').querySelector(`select[data-bot="${acctFocus}"]`);
+    acctFocus = null;
+    if (sel) sel.focus();
+  }
+}
+async function loadAccounts() {
+  const box = el('accountsList');
+  if (!acctData) box.innerHTML = '<p class="loading">Loading accounts</p>';
+  try {
+    acctData = await api('GET', '/api/accounts');
+    state.accounts = acctData.accounts;   // the header's account name reads the same list
+    renderAccounts();
+  } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
+}
+function openAccounts(focusBot) { acctData = null; acctConfirm = null; acctFocus = focusBot || null; el('acctErr').textContent = ''; openSheet('accountsBg'); loadAccounts(); }
+el('accountsLink').onclick = (e) => { e.preventDefault(); openAccounts(); };
+el('accountsClose').onclick = () => closeSheet('accountsBg');
+el('accountsList').onclick = (e) => {
+  const at = (sel) => e.target.closest(sel);
+  let b;
+  if ((b = at('[data-confirm-no]'))) { acctConfirm = null; return renderAccounts(); }
+  if ((b = at('[data-remove]'))) { acctConfirm = { kind: 'remove', id: b.dataset.remove }; return renderAccounts(); }
+  if ((b = at('[data-remove-yes]'))) {
+    b.disabled = true;
+    return operatorAct('DELETE', `/api/accounts/${encodeURIComponent(b.dataset.removeYes)}`, null, `removed ${b.dataset.removeYes}`, () => { acctConfirm = null; loadAccounts(); });
+  }
+  if ((b = at('[data-use]'))) {
+    const bot = b.dataset.use;
+    const sel = el('accountsList').querySelector(`select[data-bot="${bot}"]`);
+    acctConfirm = { kind: 'use', bot, id: sel.value, name: sel.options[sel.selectedIndex].text };
+    return renderAccounts();
+  }
+  if ((b = at('[data-use-yes]'))) {
+    b.disabled = true;
+    const { useYes: bot, id } = b.dataset;
+    const said = id === 'none' ? `${bot} goes back to its own token at its next idle turn` : `${bot} switches to ${id} at its next idle turn`;
+    return operatorAct('POST', `/api/bots/${encodeURIComponent(bot)}/account`, { id }, said, () => { acctConfirm = null; usageData = null; loadAccounts(); });
+  }
+  const m = at('.meter');
+  if (m && m.title) toast(m.title);
+};
+el('acctAdd').onsubmit = async (e) => {
+  e.preventDefault();
+  const id = el('acctId').value.trim(), label = el('acctLabel').value.trim(), plan = el('acctPlan').value.trim(), token = el('acctToken').value.trim();
+  const err = el('acctErr');
+  err.textContent = '';
+  if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(id)) { err.textContent = 'id: lowercase letters, digits and hyphens, at most 32'; el('acctId').focus(); return; }
+  if (token.length < 20 || /\s/.test(token)) { err.textContent = 'paste the whole token claude setup-token printed'; el('acctToken').focus(); return; }
+  el('acctAddBtn').disabled = true;
+  try {
+    const r = await operatorApi('POST', '/api/accounts', { id, label, plan, token });
+    if (r.ok) { el('acctId').value = ''; el('acctLabel').value = ''; el('acctPlan').value = ''; toast((r.out || `added ${id}`).trim().split('\n')[0]); }
+    else err.textContent = (r.err || r.out || `add failed (${r.code})`).trim();
+  } catch (ex) { err.textContent = ex.message; }
+  finally { el('acctToken').value = ''; el('acctAddBtn').disabled = false; }   // the token never stays in the page
+  loadAccounts();
 };
 
 /* ---- boot ---- */

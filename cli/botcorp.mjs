@@ -323,14 +323,28 @@ async function cmdAccounts({ pos, flags }) {
     const value = await readSecretValue(`Setup token for account ${id} (from \`claude setup-token\`; hidden): `);
     if (!value) fail('accounts add: empty token');
     const extra = [...(flags.label ? ['-Label', String(flags.label)] : []), ...(flags.plan ? ['-Plan', String(flags.plan)] : [])];
-    return echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
+    const code = echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
+    if (code === 0) logAccountsRegistry({ action: 'add', id, by: decidedBy(flags) });
+    return code;
   }
   if (action === 'remove') {
     const users = listBots().filter((b) => { try { return loadRawYaml(b).account === id; } catch { return false; } });
     if (users.length) fail(`accounts remove: ${id} is the account of ${users.join(', ')} (botcorp accounts use <bot> none first)`, 2);
-    return echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
+    const code = echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
+    if (code === 0) logAccountsRegistry({ action: 'remove', id, by: decidedBy(flags) });
+    return code;
   }
   usage(`accounts: unknown action '${action}'`);
+}
+
+// <rt>/logs/accounts.log: one JSON line per registry change (add / remove), who
+// did it (--by: the cockpit passes its identity), never a token.
+function logAccountsRegistry(rec) {
+  try {
+    const f = path.join(BOTCORP_HOME, 'logs', 'accounts.log');
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...rec }) + '\n');
+  } catch {}
 }
 
 // `accounts use <bot> <id|none>`: bot.yaml `account` only. The tick rolls the

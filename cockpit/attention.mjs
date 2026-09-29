@@ -159,6 +159,53 @@ export async function usageOverview() {
   return { at: new Date().toISOString(), bots: rows, accounts: groups };
 }
 
+async function readJson(file) {
+  try { return JSON.parse(await fsp.readFile(file, 'utf-8')); } catch { return null; }
+}
+
+// GET /api/accounts: every registered account (`accounts list --json`) with
+// its state and the bots on it. state: no-token | failed (a cached FAIL of the
+// token check, or the daemon marked it failed in state/accounts.json) |
+// limited (state/accounts.json blocked_until in the future) | ok. The 5 h /
+// 7 d reading is the freshest bot's on that account (a limit is per account).
+// `bots` lists every bot with the account it runs on and the one bot.yaml wants.
+export async function accountsOverview() {
+  const [rows, usage, limits, checks] = await Promise.all([
+    cliJson(['accounts', 'list', '--json'], []),
+    usageOverview(),
+    readJson(path.join(bots.STATE_DIR, 'accounts.json')),
+    readJson(path.join(bots.STATE_DIR, 'account-checks.json')),
+  ]);
+  const now = Date.now();
+  const known = limits && limits.accounts && typeof limits.accounts === 'object' ? limits.accounts : {};
+  const byBot = Object.fromEntries(usage.bots.map((r) => [r.bot, r]));
+  const groupOf = (bot) => usage.accounts.find((g) => g.bots.includes(bot)) || null;
+  const accounts = (Array.isArray(rows) ? rows : []).map((a) => {
+    const id = String(a.id || '');
+    const group = usage.accounts.find((g) => g.registered && g.id === id);
+    const onIt = (group ? group.bots : []).map((n) => byBot[n]).filter(Boolean)
+      .map((r) => ({ bot: r.bot, running: r.running, fiveHour: r.fiveHour, sevenDay: r.sevenDay, wanted: r.account_wanted, pending: r.account_pending }));
+    const e = known[id] && typeof known[id] === 'object' ? known[id] : null;
+    const until = e && e.blocked_until ? Date.parse(e.blocked_until) : NaN;
+    const c = a.fp && checks && checks[a.fp] ? checks[a.fp] : null;
+    const check = c ? { ok: !!c.ok, at: c.at || null, detail: String(c.detail || '') } : null;
+    const failed = (e && e.failed) || (check && !check.ok ? { why: check.detail } : null);
+    const state = !a.masked ? 'no-token' : failed ? 'failed' : Number.isFinite(until) && until > now ? 'limited' : 'ok';
+    const pick = (k) => onIt.map((r) => r[k]).find((w) => w && !w.na) || (onIt[0] ? onIt[0][k] : null);
+    return {
+      id, label: String(a.label || id), plan: String(a.plan || ''), masked: a.masked ? String(a.masked) : null,
+      state, blocked_until: Number.isFinite(until) ? new Date(until).toISOString() : null, window: (e && e.window) || null, failed, check,
+      wanted_by: usage.bots.filter((r) => r.account_wanted === id).map((r) => r.bot),
+      bots: onIt, fiveHour: pick('fiveHour'), sevenDay: pick('sevenDay'),
+    };
+  });
+  const botList = usage.bots.map((r) => {
+    const g = groupOf(r.bot);
+    return { bot: r.bot, running: r.running, account_wanted: r.account_wanted, account_pending: r.account_pending, on: g ? g.label : null, on_registered: !!(g && g.registered) };
+  });
+  return { at: new Date().toISOString(), accounts, bots: botList };
+}
+
 // The last `limit` decided approvals across bots (state/<bot>.approvals.history.jsonl,
 // written by `botcorp approve|reject`), newest first: who decided, when, what.
 export async function recentDecisions(limit = 20) {

@@ -354,11 +354,37 @@ app.post('/api/updates/:tag/skip', wrap((req, res) => {
 // a chosen account. `chat --account`/`--generic`/`--cwd` opens the tab on the
 // HOST's desktop, not in this response, so over an Access-exposed cockpit the
 // operator only sees the CLI's launch outcome here, not the tab itself.
-app.get('/api/accounts', wrap(async (_req, res) => {
-  const r = await runCli(['accounts', 'list', '--json']);
-  if (r.code !== 0) return res.json({ accounts: [], error: r.err || r.out || `accounts list exited ${r.code}` });
-  try { return res.json({ accounts: JSON.parse(r.out) }); }
-  catch { return res.json({ accounts: [], error: 'bad output from accounts list' }); }
+// The Accounts sheet (and the New-chat picker): every registered account with
+// its state, usage and bots (attention.accountsOverview).
+app.get('/api/accounts', wrap(async (_req, res) => res.json(await attention.accountsOverview())));
+// Add a Claude account. The setup token travels in the JSON body and reaches
+// `accounts add` on stdin: never argv, never a log (auditOnClose records the
+// path, the method and the id only; the CLI's reply carries the last 4).
+const ACCOUNT_TEXT_RE = /^[^\r\n\0]{0,64}$/;
+app.post('/api/accounts', wrap(async (req, res) => {
+  const { id, label, plan, token } = req.body || {};
+  if (!bots.NAME_RE.test(id || '')) return res.status(400).json({ error: 'id: lowercase letters, digits and hyphens, at most 32' });
+  if (![label, plan].every((v) => v === undefined || v === null || (typeof v === 'string' && ACCOUNT_TEXT_RE.test(v)))) return res.status(400).json({ error: 'label and plan: one line, at most 64 characters' });
+  if (typeof token !== 'string' || token.length < 20 || token.length > 400 || /\s/.test(token)) return res.status(400).json({ error: 'token: the whole string `claude setup-token` printed (20 to 400 characters, no spaces)' });
+  if (!operatorGate(req, res)) return;
+  const args = ['accounts', 'add', id, '--by', req.identity];
+  if (label) args.push('--label', label);
+  if (plan) args.push('--plan', plan);
+  res.locals.audit = { account: id, action: 'add' };
+  const r = await runCli(args, { stdin: token + '\n' });
+  attention.invalidate();
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+app.delete('/api/accounts/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  if (!bots.NAME_RE.test(id)) return res.status(400).json({ error: 'bad account id' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { account: id, action: 'remove' };
+  const r = await runCli(['accounts', 'remove', id, '--by', req.identity]);
+  attention.invalidate();
+  // exit 2 = a bot's bot.yaml still names it (the CLI's message says which)
+  if (r.code === 2) return res.status(409).json({ ok: false, code: r.code, error: (r.err || r.out).trim() });
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
 }));
 app.get('/api/chat/recent', wrap(async (_req, res) => res.json(await chatLaunch.listRecent())));
 app.post('/api/chat/launch', wrap((req, res) => {
