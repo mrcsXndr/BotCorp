@@ -366,6 +366,10 @@ $childEnv['BOT_DISABLED_HOOKS']  = (@($cfg.harness.hooks_disable) -join ',')
 $childEnv['BOT_HAS_TG']          = $(if ($canOwn) { '1' } else { '0' })
 $childEnv['BOT_LAUNCHER_PID']    = "$PID"
 $childEnv['BOTCORP_HOME']        = $RtHome
+# Per-launch identity (docs/cli.md "Admin bots"): BOT_NAME alone is not proof;
+# the CLI also wants this id to match <rt>/state/<bot>/launch-id (Write-LaunchId).
+$launchId = New-LaunchId
+$childEnv['BOTCORP_LAUNCH_ID']   = $launchId
 $childEnv['CLAUDE_CODE_ARTIFACT_AUTO_OPEN'] = '0'
 $childEnv['PYTHONIOENCODING']    = 'utf-8'
 $childEnv['GIT_TERMINAL_PROMPT'] = '0'
@@ -450,7 +454,7 @@ if ($DryRun) {
     Write-Host "  cwd : $BotHome"
     foreach ($k in ($childEnv.Keys | Sort-Object)) {
         $v = $childEnv[$k]
-        if ($k -in $secretEnvNames) { $v = Mask $v }
+        if ($k -in $secretEnvNames -or $k -eq 'BOTCORP_LAUNCH_ID') { $v = Mask $v }
         Write-Host "  env : $k=$v"
     }
     Write-Host "  mode: $modeText  service: $botService  poller: $(if ($canOwn) { 'OWNED' } elseif ($hasTgMod) { 'FOREIGN' } else { 'n/a' })  attested: $(if ($attested) { 'yes' } else { 'NO (no secrets would be injected)' })"
@@ -565,6 +569,7 @@ if ($Bg) {
             if ($dmnAction -ne 'inherit' -or (Get-Date) -ge $until) { break }
             Start-Sleep -Milliseconds 1500
         }
+        $gone = $false
         if ($dmnAction -eq 'recycle') {
             $gone = Stop-BgDaemon -Bot $Bot -Paths $paths -DaemonPid $dmn.Pid
             if ($gone) { Write-LaunchLog "bg: daemon pid $($dmn.Pid) (up since $($dmn.StartedAt), started by pid $($dmn.SpawnedByPid)) had no live session -> stopped, so the new one carries this launch's env" }
@@ -573,6 +578,9 @@ if ($Bg) {
             Write-LaunchLog "bg: WARN daemon pid $($dmn.Pid) (up since $($dmn.StartedAt)) still has $(if ($live -lt 0) { 'an unreadable roster' } else { "$live live session(s)" }) -> not stopped; the new session inherits the DAEMON's env, not this launch's (stop them first: botcorp stop $Bot)"
             if ($account -ne $prevAccount) { Write-LaunchLog "bg: WARN account switch to $(if ($account) { $account } else { "the bot's own token" }) will NOT land: the daemon keeps $(if ($live -lt 0) { 'its' } else { $live }) live session(s) with the old token" }
         } else { Write-LaunchLog 'bg: no daemon running -> claude --bg starts one with this launch''s env' }
+        # The launch id travels with the env: only a daemon this launch starts carries it.
+        if ($dmnAction -ne 'inherit' -and ($dmnAction -ne 'recycle' -or $gone)) { if (-not (Write-LaunchId -Bot $Bot -Id $launchId)) { Write-LaunchLog 'launch id: could not write state\<bot>\launch-id (an admin role will not verify for this session)' } }
+        else { Write-LaunchLog 'launch id: kept the previous one (the session inherits the running daemon''s env)' }
 
         $r = Invoke-Bounded -Exe $exe -Arguments $argv -TimeoutSec 120 -Label 'claude --bg' -Capture -Env $childEnv -WorkingDirectory $BotHome -Bot $Bot
         $code = $(if ($null -eq $r.ExitCode) { 124 } else { $r.ExitCode })
@@ -698,6 +706,7 @@ if ($tokenFile) {
     } catch { Write-LaunchLog "telegram: token-file cleanup job did not start ($($_.Exception.Message)); it is removed when the session exits" }
 }
 if ($bootKey) { Write-State @{ boot_kick_boot = $bootKey; boot_kick_at = (Get-Date).ToString('o'); boot_kick_pending = $null }; Write-LaunchLog "boot: boot prompt passed to claude (boot $bootKey)" }
+if (-not (Write-LaunchId -Bot $Bot -Id $launchId)) { Write-LaunchLog 'launch id: could not write state\<bot>\launch-id (an admin role will not verify for this session)' }
 try {
     & $exe @argv
     $code = $LASTEXITCODE

@@ -44,6 +44,7 @@ export const DEFAULTS = {
     tray: true,                     // per-bot tray icon at login (botcorp tray <bot> on; doctor checks the HKCU Run entry)
     hooks_disable: [],
     tools_registry: 'warn',         // warn | enforce: how doctor grades an executable no `tools:` entry covers
+    admin_notify: false,            // role: admin only: one Telegram line (this bot's own tg_send.py) per admin action, on top of the audit log
     modules: {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
       alert_triage: false, hub: false, janitor: true /* | 'report' */, remote_control: false,
@@ -71,6 +72,11 @@ export const DEFAULTS = {
   // bot's own vault oauth_token. null = the bot's own token. `botcorp accounts
   // use` sets it; the tick rolls the session onto it at the next idle turn.
   account: null,
+  // null | admin. An admin bot may run the operator-only verbs listed in
+  // docs/cli.md "Admin bots" (accounts, secrets set/delete, approve/reject,
+  // pair, update --apply/--skip, start/stop/restart of other bots), each one
+  // audited. Changing it is always widening: it waits for the operator.
+  role: null,
   // The capability registry: every executable under tools/ and scripts/ the bot
   // runs, one entry each ({name, path, kind: cli|monitor|integration|lib,
   // purpose, secrets, owner}; a glob path only for lib|cli). null = registry
@@ -140,6 +146,8 @@ export function validate(cfg) {
   if (!Array.isArray(cfg.secrets) || !cfg.secrets.every((k) => typeof k === 'string' && SECRET_KEY_RE.test(k))) errs.push('secrets: must be a list of vault key names ([a-z][a-z0-9_]*)');
   // The id shape only: an existence check here would make `accounts remove` stop the bot from launching.
   if (cfg.account !== null && !(typeof cfg.account === 'string' && /^[a-z0-9][a-z0-9-]{0,31}$/.test(cfg.account))) errs.push(`account: an account id ([a-z0-9][a-z0-9-]*, max 32) or null (got ${JSON.stringify(cfg.account)})`);
+  if (cfg.role !== null && cfg.role !== 'admin') errs.push(`role: admin or null (got ${JSON.stringify(cfg.role)})`);
+  if (typeof cfg.harness.admin_notify !== 'boolean') errs.push(`harness.admin_notify: true | false (got ${JSON.stringify(cfg.harness.admin_notify)})`);
   if (!['warn', 'enforce'].includes(cfg.harness.tools_registry)) errs.push(`harness.tools_registry: warn | enforce (got ${JSON.stringify(cfg.harness.tools_registry)})`);
   if (cfg.tools !== null && !Array.isArray(cfg.tools)) errs.push('tools: must be a list (or absent: registry off)');
   const toolNames = new Set();

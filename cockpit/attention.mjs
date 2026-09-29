@@ -206,6 +206,21 @@ export async function accountsOverview() {
   return { at: new Date().toISOString(), accounts, bots: botList };
 }
 
+// The last `limit` operator-only verbs an admin bot ran or was refused
+// (state/admin-audit.jsonl, written by the CLI), newest first.
+export async function adminActions(limit = 20) {
+  let text = '';
+  try { text = await fsp.readFile(path.join(bots.STATE_DIR, 'admin-audit.jsonl'), 'utf-8'); } catch { return []; }
+  const out = [];
+  for (const line of text.split('\n').filter(Boolean).slice(-limit)) {
+    try {
+      const e = JSON.parse(line);
+      out.push({ at: String(e.at || ''), by: String(e.by || ''), verb: String(e.verb || ''), target: e.target ? String(e.target) : null, refused: e.refused ? String(e.refused) : null });
+    } catch {}
+  }
+  return out.reverse();
+}
+
 // The last `limit` decided approvals across bots (state/<bot>.approvals.history.jsonl,
 // written by `botcorp approve|reject`), newest first: who decided, when, what.
 export async function recentDecisions(limit = 20) {

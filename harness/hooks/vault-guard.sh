@@ -65,6 +65,10 @@ elif printf '%s\n' "$T_N" | grep -qE 'secret-access\.jsonl'; then
 elif printf '%s\n' "$T_N" | grep -qE 'cockpit-approve-token'; then
   # owner-only, but a bot runs as the same user: its tool calls must not reach it
   BLOCKED=1; MATCHED="cockpit-approve-token (the cockpit's operator token)"
+elif printf '%s\n' "$T_N" | grep -qE '(^|[^a-z0-9_-])launch-id($|[^a-z0-9_-])'; then
+  # <rt>/state/<bot>/launch-id: what makes a caller that bot (an admin bot's
+  # powers hang on it); a session never needs to read or write one
+  BLOCKED=1; MATCHED="launch-id (a bot's per-launch identity)"
 fi
 
 [ "$BLOCKED" = "1" ] || exit 0

@@ -1333,13 +1333,19 @@ function decRow(r) {
   return `<div class="dec"><span class="out ${r.decision === 'approved' ? 'ok' : 'bad'}">${esc(r.decision)}</span><span>by <b>${esc(r.by || 'unknown')}</b></span><span class="dim">${esc(r.bot)} · ${esc(fmtWhen(r.at) || '')}</span>`
     + `<span class="d">${esc(r.path)}: ${esc(r.value)}${r.reason ? ` (${esc(r.reason)})` : ''}</span></div>`;
 }
+// state/admin-audit.jsonl: an operator-only verb an admin bot ran, or was refused
+function adminRow(r) {
+  return `<div class="dec"><span class="out ${r.refused ? 'bad' : 'ok'}">${r.refused ? 'refused' : 'done'}</span><span>by <b>${esc(r.by)}</b></span><span class="dim">${esc(fmtWhen(r.at) || '')}</span>`
+    + `<span class="d">${esc(r.verb)}${r.target ? ` ${esc(r.target)}` : ''}${r.refused ? ` (${esc(r.refused)})` : ''}</span></div>`;
+}
 async function loadApprovals() {
   const box = el('approvalsList');
   if (!box.children.length) box.innerHTML = '<p class="loading">Loading approvals</p>';
   try {
-    const { pending, recent } = await api('GET', '/api/approvals');
+    const { pending, recent, admin = [] } = await api('GET', '/api/approvals');
     box.innerHTML = (pending.length ? pending.map(aprCard).join('') : '<p class="hint">Nothing waiting. A bot that asks for a wider permission shows up here.</p>')
-      + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>');
+      + '<p class="sub">Decided</p>' + (recent.length ? recent.map(decRow).join('') : '<p class="hint">No decisions recorded yet.</p>')
+      + (admin.length ? '<p class="sub">Done by an admin bot</p>' + admin.map(adminRow).join('') : '');
     wireDecisions(box);
   } catch (e) { box.innerHTML = `<p class="errbox">${esc(e.message)}</p>`; }
 }

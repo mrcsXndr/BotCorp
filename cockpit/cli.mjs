@@ -33,6 +33,7 @@ export function cliEnv(env = process.env) {
   const e = { ...env };
   delete e.BOT_NAME;
   delete e.CLAUDECODE;
+  delete e.BOTCORP_LAUNCH_ID;   // the cockpit is the operator's surface, never a bot's (admin or not)
   return e;
 }
 

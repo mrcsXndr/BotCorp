@@ -258,7 +258,7 @@ app.get('/api/usage', wrap(async (_req, res) => res.json(await attention.usageOv
 app.get('/api/approvals', wrap(async (_req, res) => {
   const pending = await cliJson(['approvals', '--json'], null);
   if (!Array.isArray(pending)) return res.status(502).json({ error: 'approvals --json failed' });
-  res.json({ pending, recent: await attention.recentDecisions(20) });
+  res.json({ pending, recent: await attention.recentDecisions(20), admin: await attention.adminActions(20) });
 }));
 app.post('/api/bots/:name/approvals/:id/:decision', withBot(async (req, res, bot) => {
   const { id, decision } = req.params;

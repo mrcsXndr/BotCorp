@@ -1642,6 +1642,29 @@ function Get-AccountFailover {
     } catch { Write-DaemonLog "failover: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $null }
 }
 
+function New-LaunchId {
+    # 32 random bytes as hex: the per-launch identity a session carries in
+    # BOTCORP_LAUNCH_ID (docs/cli.md "Admin bots").
+    $b = New-Object byte[] 32
+    $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+    try { $rng.GetBytes($b) } finally { $rng.Dispose() }
+    return (($b | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+function Write-LaunchId {
+    # <rt>/state/<bot>/launch-id: the copy the CLI compares a caller's
+    # BOTCORP_LAUNCH_ID with. Written only when the launch's env really reaches
+    # the session (a bg daemon kept alive keeps the env, and so the id, of the
+    # launch that started it). $true when written.
+    param([Parameter(Mandatory)][string]$Bot, [Parameter(Mandatory)][string]$Id)
+    try {
+        $d = Join-Path $script:StateDir $Bot
+        New-Item -ItemType Directory -Force -Path $d | Out-Null
+        [System.IO.File]::WriteAllText((Join-Path $d 'launch-id'), $Id)
+        return $true
+    } catch { return $false }
+}
+
 function Write-ResumePrompt {
     # <BotHome>/.claude/.botcorp_resume_prompt: the first prompt of the next
     # launch (launch.ps1 step 5 consumes it when younger than 60 min). Written

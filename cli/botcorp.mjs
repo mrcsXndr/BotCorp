@@ -43,7 +43,7 @@ const { classifyBlock, decide, chainOf, hhmm, isOwn } = await import('../core/fa
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
-  CliError, fail, usage, requireOperator, isOperatorContext,
+  CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
@@ -172,7 +172,7 @@ async function cmdSecrets({ pos, flags }) {
     if (r.err.trim()) process.stderr.write(r.err.trim() + '\n');
     return r.code;
   }
-  if (action === 'set' || action === 'delete') requireOperator(`secrets ${action}`);
+  if (action === 'set' || action === 'delete') requireOperator(`secrets ${action}`, { admin: true, target: `${bot}${key ? `/${key}` : ''}` });
   if (action === 'set') {
     if (!key) usage('secrets set <bot> <key>   (any key name, e.g. aws_secret_access_key; value on stdin, or a hidden prompt)');
     const value = await readSecretValue(`Value for ${bot}/${key} (hidden): `);
@@ -211,6 +211,8 @@ async function cmdSecrets({ pos, flags }) {
   // The encrypted bundle (daemon/bundle.ps1, docs/secrets.md): the passphrase
   // travels on stdin to the .ps1 exactly like a secret value, never on argv.
   if (action === 'export-bundle') {
+    // a bundle carries every value: reading the vault stays the operator's, admin bot or not
+    requireOperator('secrets export-bundle');
     if (!flags.out) usage('secrets export-bundle <bot> --out <dir> [--files a,~/b]   (passphrase on stdin, or a hidden prompt; ~/x = relative to USERPROFILE, scope home)');
     const pass = await readSecretValue(`Bundle passphrase for ${bot} (hidden): `);
     if (!pass) fail('secrets export-bundle: empty passphrase');
@@ -316,7 +318,7 @@ async function cmdAccounts({ pos, flags }) {
     outJson(r.rows);
     return 0;
   }
-  if (action === 'add' || action === 'remove' || action === 'seed') requireOperator(`accounts ${action}`);
+  const who = action === 'add' || action === 'remove' || action === 'seed' ? requireOperator(`accounts ${action}`, { admin: true, target: id || null }) : null;
   if (action === 'seed') return echoPs(accountsPs(['-Action', 'seed', ...(flags.json ? ['-Json'] : [])]));
   if (!id || !NAME_RE.test(id)) usage(`accounts ${action}: <id> required (lowercase, digits, hyphens; max 32)`);
   if (action === 'add') {
@@ -324,14 +326,14 @@ async function cmdAccounts({ pos, flags }) {
     if (!value) fail('accounts add: empty token');
     const extra = [...(flags.label ? ['-Label', String(flags.label)] : []), ...(flags.plan ? ['-Plan', String(flags.plan)] : [])];
     const code = echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
-    if (code === 0) logAccountsRegistry({ action: 'add', id, by: decidedBy(flags) });
+    if (code === 0) logAccountsRegistry({ action: 'add', id, by: decidedBy(flags, who) });
     return code;
   }
   if (action === 'remove') {
     const users = listBots().filter((b) => { try { return loadRawYaml(b).account === id; } catch { return false; } });
     if (users.length) fail(`accounts remove: ${id} is the account of ${users.join(', ')} (botcorp accounts use <bot> none first)`, 2);
     const code = echoPs(accountsPs(['-Action', 'remove', '-Id', id]));
-    if (code === 0) logAccountsRegistry({ action: 'remove', id, by: decidedBy(flags) });
+    if (code === 0) logAccountsRegistry({ action: 'remove', id, by: decidedBy(flags, who) });
     return code;
   }
   usage(`accounts: unknown action '${action}'`);
@@ -350,7 +352,7 @@ function logAccountsRegistry(rec) {
 // `accounts use <bot> <id|none>`: bot.yaml `account` only. The tick rolls the
 // session onto it at the next idle turn boundary; nothing signals the session.
 function accountsUse(bot, id, flags) {
-  requireOperator('accounts use');
+  const who = requireOperator('accounts use', { admin: true, target: `${bot} ${id || ''}`.trim() });
   requireBot(bot);
   if (!id || !(id === 'none' || NAME_RE.test(id))) usage('accounts use <bot> <id|none> [--by <who>]');
   let last4 = '';
@@ -367,7 +369,7 @@ function accountsUse(bot, id, flags) {
   const from = raw.account ?? null;
   if (id === 'none') delete raw.account; else raw.account = id;
   writeValidated(bot, raw, 'accounts use');
-  const by = decidedBy(flags);
+  const by = decidedBy(flags, who);
   try {
     const f = path.join(BOTCORP_HOME, 'logs', bot, 'accounts.log');
     fs.mkdirSync(path.dirname(f), { recursive: true });
@@ -601,7 +603,7 @@ function cmdPair({ pos, flags }) {
     return 0;
   }
   if (!SENDER_RE.test(senderId)) usage('senderId must be a numeric Telegram id');
-  requireOperator('pair');
+  requireOperator('pair', { admin: true, target: `${bot} ${senderId}` });
   const r = pairApply(bot, senderId);
   out(`pair: ${bot} allowFrom ${r.added ? 'added' : 'already had'} ${senderId}`);
   out(`pair: pending entries cleared: ${r.cleared}`);
@@ -715,6 +717,8 @@ function isWidening(cfg, segs, value, op = 'set') {
   if (p === 'secrets') return listOf(value).some((k) => !listOf(cfg.secrets).includes(k)) ? 'declares a new vault secret' : null;
   if (p === 'harness.tools_registry') return cfg.harness.tools_registry === 'enforce' && value === 'warn' ? 'relaxes the tools registry enforce -> warn' : null;
   if (p === 'account') return (value ?? null) !== (cfg.account ?? null) ? 'switches the Claude account' : null;
+  // any change, either way: only the operator decides who is an admin bot
+  if (p === 'role') return (value ?? null) !== (cfg.role ?? null) ? `changes the bot role (${cfg.role ?? 'none'} -> ${value ?? 'none'}; operator only)` : null;
   if (segs[0] === 'automations' && segs[2] === 'enabled' && segs.length === 3) {
     const el = findElem(cfg.automations, segs[1]);
     return value === true && el && el.enabled === false ? `enables automation ${el.name}` : null;
@@ -801,7 +805,9 @@ function requestedBy(flags) {
 // Who decided (the cockpit passes its Access identity as --by). The decided
 // entry, stamped, goes to state/<bot>.approvals.history.jsonl: the queue only
 // ever holds pending entries.
-function decidedBy(flags) {
+// An admin bot is always `bot:<name>`, whatever --by says.
+function decidedBy(flags, who = null) {
+  if (who && who.admin) return `bot:${who.admin}`;
   return flags.by && flags.by !== true ? String(flags.by) : `operator:${process.env.USERNAME || process.env.USER || 'unknown'}`;
 }
 function recordDecision(bot, entry, decision, by, extra = {}) {
@@ -939,6 +945,17 @@ async function notifyRequester(entry, decision, { source, notes = [], reason = '
   } catch (e) { out(`  could not tell ${m[1]}: ${e.message}`); }
 }
 
+// An admin bot never decides a `role` change, any bot's, its own included:
+// named explicitly -> refused (exit 3, audited); swept up by --all -> skipped.
+function adminDecidable(admin, bot, entries, verb, explicit) {
+  const role = entries.filter((e) => e.path === 'role');
+  if (!role.length) return entries;
+  for (const e of role) auditAdmin(admin, verb, { target: `${bot} ${e.id}`, refused: 'a role change is the operator\'s to decide' });
+  if (explicit) fail(`${verb}: ${role.map((e) => e.id).join(', ')} changes the bot role; only the operator decides that (an admin bot cannot, for any bot)`, 3);
+  out(`${verb}: skipped ${role.map((e) => e.id).join(', ')} (a role change; only the operator decides that)`);
+  return entries.filter((e) => e.path !== 'role');
+}
+
 async function cmdApprove({ pos, flags }) {
   const [, bot, id] = pos;
   requireBot(bot);
@@ -950,11 +967,12 @@ async function cmdApprove({ pos, flags }) {
     return 0;
   }
   if (!id && !flags.all) usage('approve <bot> <id|--all> [--by <who>] [--source cli|cockpit] | approve <bot> --list');
-  requireOperator('approve');
-  const by = decidedBy(flags);
+  const who = requireOperator('approve', { admin: true, target: `${bot} ${flags.all ? '--all' : id}` });
+  const by = decidedBy(flags, who);
   const source = decisionSource(flags);
-  const pick = flags.all ? q : q.filter((e) => e.id === id);
+  let pick = flags.all ? q : q.filter((e) => e.id === id);
   if (!pick.length) { if (flags.all) { out(`approvals: ${bot} queue empty`); return 0; } fail(`approve: no pending entry ${id} for ${bot}`); }
+  if (who.admin) pick = adminDecidable(who.admin, bot, pick, 'approve', !flags.all);
   for (const e of pick) {
     const notes = applyApproved(bot, e);
     // out of the queue as soon as it is applied: a later entry that fails
@@ -975,13 +993,14 @@ async function cmdReject({ pos, flags }) {
   const [, bot, id] = pos;
   requireBot(bot);
   if (!id) usage('reject <bot> <id> [--by <who>] [--reason <text>] [--source cli|cockpit]');
-  requireOperator('reject');
-  const by = decidedBy(flags);
+  const who = requireOperator('reject', { admin: true, target: `${bot} ${id}` });
+  const by = decidedBy(flags, who);
   const source = decisionSource(flags);
   const reason = flags.reason && flags.reason !== true ? String(flags.reason) : '';
   const q = readApprovals(bot);
   const e = q.find((x) => x.id === id);
   if (!e) fail(`reject: no pending entry ${id} for ${bot}`);
+  if (who.admin) adminDecidable(who.admin, bot, [e], 'reject', true);
   writeApprovals(bot, q.filter((x) => x !== e));
   recordDecision(bot, e, 'rejected', by, reason ? { rejected_reason: reason } : {});
   logApproval(bot, `REJECTED ${e.id} ${entryText(e)} by ${by}`);
@@ -1235,11 +1254,36 @@ function stopBot(bot) {
   return before;
 }
 
-async function cmdStart({ pos, flags }) { return startBot(requireBot(pos[1], HAND_NAME_RE), !!flags.fresh, !!flags.debug, !!flags['dry-run']); }
-async function cmdStop({ pos }) { stopBot(requireBot(pos[1], HAND_NAME_RE)); return 0; }
+// `whoami [--json]`: callerIdentity() of this process (read-only). The
+// operator-guard hook runs it with the session's own env, so an inline
+// `BOT_NAME=x` in a command changes nothing.
+function cmdWhoami({ flags }) {
+  const w = callerIdentity();
+  if (flags.json) { outJson(w); return 0; }
+  out(w.operator ? 'operator' : w.admin ? `admin bot ${w.bot}` : `bot ${w.bot || '(unnamed Claude Code session)'}`);
+  out(`  ${w.why}`);
+  return 0;
+}
+
+// start/stop/restart from inside a bot (BOT_NAME set): its own session, or (an
+// admin bot) any other. A bot whose launch recorded an id must carry it, so BOT_NAME=<other>
+// set by hand does not pass as "its own".
+function requireBotControl(bot, verb) {
+  if (!process.env.BOT_NAME) return;   // the operator, or their own plain Claude Code (unchanged)
+  if (process.env.BOT_NAME === bot) {
+    const want = readLaunchId(bot);
+    if (!want || process.env.BOTCORP_LAUNCH_ID === want) return;
+    fail(`${verb} ${bot}: BOT_NAME=${bot} but this process does not carry ${bot}'s launch id (${launchIdFile(bot)}); refused`, 3);
+  }
+  requireOperator(`${verb} ${bot}`, { admin: true, target: bot });
+}
+
+async function cmdStart({ pos, flags }) { const bot = requireBot(pos[1], HAND_NAME_RE); requireBotControl(bot, 'start'); return startBot(bot, !!flags.fresh, !!flags.debug, !!flags['dry-run']); }
+async function cmdStop({ pos }) { const bot = requireBot(pos[1], HAND_NAME_RE); requireBotControl(bot, 'stop'); stopBot(bot); return 0; }
 
 async function cmdRestart({ pos, flags }) {
   const bot = requireBot(pos[1], HAND_NAME_RE);
+  requireBotControl(bot, 'restart');
   const before = stopBot(bot);
   if (before) {
     const deadline = Date.now() + 10_000;
@@ -2193,7 +2237,7 @@ function cmdUpdate({ flags }) {
   if (flags.apply && flags.skip) usage('update: --apply <tag> or --skip <tag>, not both');
   const tag = flags.apply || flags.skip;
   if (tag) {
-    requireOperator(`update --${flags.apply ? 'apply' : 'skip'}`);
+    requireOperator(`update --${flags.apply ? 'apply' : 'skip'}`, { admin: true, target: String(tag) });
     const who = requestedBy(flags);
     const u = readUpdates();
     const rel = u.releases.find((r) => r && String(r.tag) === String(tag));
@@ -2977,6 +3021,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)
   accounts use <bot> <id|none> [--by <who>]   (operator: run a bot on an account's login; applied at its next idle turn)
   accounts failover <bot> [--json]            (read-only: the account chain, the live usage limit and what the daemon would do)
+  whoami [--json]                             (who this process counts as: the operator, an admin bot, or a bot; the operator guard asks it)
   chat [--account <id>] [--cwd <folder>|--generic] [--dry-run]     (plain claude for an account in its own WT tab; a picker without flags)
   attach <bot> [--elevate] | tray <bot> on [--attach-at-login]|off|status   (pull a bg bot up in a WT tab; per-bot tray icon at login)
   sync <bot> [--dry-run]
@@ -2996,7 +3041,10 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
       [--source cli|cockpit]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
        accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose, update --apply|--skip,
-       cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox)
+       cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox.
+       An admin bot (bot.yaml role: admin, its launch id matching) may run approve/reject, accounts,
+       secrets set|delete, pair, update --apply|--skip and start/stop/restart of other bots, each line in
+       state/admin-audit.jsonl; never a role change, a secret read, or cockpit expose|unexpose)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
@@ -3027,6 +3075,7 @@ const COMMANDS = {
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   send: cmdSend, inbox: cmdInbox,
   update: cmdUpdate, cc: cmdCc, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,
+  whoami: cmdWhoami,
   help: () => { out(HELP); return 0; },
 };
 

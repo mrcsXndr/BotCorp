@@ -65,8 +65,73 @@ export function usage(message) { throw new CliError(message, 2); }
 // gives a session BOT_NAME, Claude Code sets CLAUDECODE. Defense in depth, not
 // a boundary (a bot runs as the same user); the cockpit's runCli strips both.
 export function isOperatorContext(env = process.env) { return !env.BOT_NAME && !env.CLAUDECODE; }
-export function requireOperator(verb) {
-  if (!isOperatorContext()) fail(`${verb}: operator-only: run from the cockpit or your own terminal`, 3);
+
+// Admin bots (bot.yaml role: admin; docs/cli.md "Admin bots"). A caller is bot
+// X only when its env carries BOT_NAME=X AND the per-launch id launch.ps1 gave
+// X's session (BOTCORP_LAUNCH_ID), matching the copy in <rt>/state/X/launch-id:
+// a BOT_NAME set by hand is refused. Every bot runs as the same Windows user,
+// so this is policy plus audit, not a sandbox.
+const LAUNCH_ID_RE = /^[0-9a-f]{32,128}$/;
+export function launchIdFile(bot) { return path.join(STATE_DIR, bot, 'launch-id'); }
+export function readLaunchId(bot) {
+  try { const t = fs.readFileSync(launchIdFile(bot), 'utf-8').trim(); return LAUNCH_ID_RE.test(t) ? t : null; } catch { return null; }
+}
+export function botRole(bot) {
+  try { const y = yaml.load(fs.readFileSync(botYamlPath(bot), 'utf-8')) || {}; return y.role === 'admin' ? 'admin' : null; } catch { return null; }
+}
+// -> { operator, admin, bot, spoofed, why }
+export function callerIdentity(env = process.env) {
+  if (isOperatorContext(env)) return { operator: true, admin: false, bot: null, spoofed: false, why: 'the operator (no bot-session markers in the env)' };
+  const bot = String(env.BOT_NAME || '');
+  if (!bot) return { operator: false, admin: false, bot: null, spoofed: false, why: 'a Claude Code session (CLAUDECODE) that names no bot' };
+  if (!NAME_RE.test(bot) || !fs.existsSync(botYamlPath(bot))) return { operator: false, admin: false, bot, spoofed: false, why: `BOT_NAME=${bot} names no bot` };
+  if (botRole(bot) !== 'admin') return { operator: false, admin: false, bot, spoofed: false, why: `${bot} is not an admin bot (bot.yaml role)` };
+  const want = readLaunchId(bot);
+  const have = String(env.BOTCORP_LAUNCH_ID || '');
+  if (!want || !LAUNCH_ID_RE.test(have) || have !== want) {
+    return { operator: false, admin: false, bot, spoofed: true,
+      why: `BOT_NAME=${bot} is an admin bot, but this process does not carry that bot's launch id (${want ? 'it does not match' : `none recorded in ${launchIdFile(bot)}: the session predates v0.8.0, restart it`}); refused` };
+  }
+  return { operator: false, admin: true, bot, spoofed: false, why: `admin bot ${bot} (its launch id matches)` };
+}
+
+// <rt>/state/admin-audit.jsonl: one line per operator-only verb an admin bot
+// ran (or was refused, `refused: <why>`). The cockpit shows it. Never a value.
+export function auditAdmin(bot, verb, extra = {}) {
+  const rec = { at: new Date().toISOString(), by: `bot:${bot}`, verb, ...extra };
+  try {
+    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.appendFileSync(path.join(STATE_DIR, 'admin-audit.jsonl'), JSON.stringify(rec) + '\n');
+  } catch {}
+  notifyAdmin(bot, rec);
+  return rec;
+}
+// harness.admin_notify: true -> one Telegram line through the admin bot's own
+// tg_send.py (its session env has its token). Best effort, bounded.
+function notifyAdmin(bot, rec) {
+  try {
+    const y = yaml.load(fs.readFileSync(botYamlPath(bot), 'utf-8')) || {};
+    if (!(y.harness && y.harness.admin_notify === true)) return;
+    const home = botHome(bot);
+    const own = path.join(home, 'tools', 'tg', 'tg_send.py');
+    const script = fs.existsSync(own) ? own : path.join(ROOT, 'harness', 'tools', 'tg', 'tg_send.py');
+    const py = process.env.BOT_PYTHON || 'python';
+    const line = `admin: ${rec.verb}${rec.target ? ` ${rec.target}` : ''}${rec.refused ? ` (refused: ${rec.refused})` : ''}`;
+    spawnSync(py, [script, line], { cwd: home, timeout: 30_000, windowsHide: true, stdio: 'ignore', env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+  } catch {}
+}
+
+// The operator-only verbs. { admin: true } lets an admin bot through too (and
+// audits it). -> { operator: true } | { admin: <bot> }.
+export function requireOperator(verb, { admin = false, target = null } = {}) {
+  if (isOperatorContext()) return { operator: true, admin: null };
+  const who = callerIdentity();
+  if (admin && who.admin) {
+    auditAdmin(who.bot, verb, target ? { target } : {});
+    return { operator: false, admin: who.bot };
+  }
+  if (who.spoofed) fail(`${verb}: operator-only: ${who.why}`, 3);
+  fail(`${verb}: operator-only${admin ? ' (or an admin bot: bot.yaml role: admin)' : ''}: run from the cockpit or your own terminal`, 3);
 }
 
 // ---- files ---------------------------------------------------------------------
