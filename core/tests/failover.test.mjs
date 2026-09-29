@@ -86,6 +86,16 @@ test('select: chain order; failover from a limited primary to the first clear, u
   assert.equal(selectAccount({ chain: ['a', 'b'], limits: { a: lim(16) }, active: 'a', now, switchAt: new Date(now - 60_000).toISOString() }).action, 'failover');
 });
 
+test('select: a failed active account is left for the next usable one; nothing usable -> wait', () => {
+  const s = selectAccount({ chain: ['a', 'b', 'c'], limits: { a: lim(16) }, failed: { b: { why: 'login after failover' } }, active: 'b', now });
+  assert.equal(s.action, 'failover');
+  assert.equal(s.to, 'c');
+  assert.match(s.why, /b failed \(login after failover\)/);
+  const none = selectAccount({ chain: ['a', 'b'], limits: { a: lim(16) }, failed: { b: { why: 'x' } }, active: 'b', now });
+  assert.equal(none.action, 'wait');
+  assert.equal(none.waitUntil, new Date(T(16)).toISOString());
+});
+
 test('select: nothing limited, on the primary -> none', () => {
   assert.equal(selectAccount({ chain: ['a', 'b'], limits: {}, active: 'a', now }).action, 'none');
   assert.equal(selectAccount({ chain: ['a'], limits: {}, active: 'a', now }).action, 'none');

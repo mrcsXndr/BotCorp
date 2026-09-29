@@ -104,6 +104,8 @@ export function hhmm(at) {
 //      blocked -> recover (restart on the same account)
 //   3. active != chain[0], chain[0] clear, >= dwellMin since the last switch -> failback
 //   4. >= holdMax switches in the last holdWindowH hours -> hold (no switch)
+// A `failed` active account (the daemon saw its launch fail to log in) is left
+// like a limited one; failed accounts are never picked.
 export function selectAccount({ chain, limits = {}, failed = {}, active, now = Date.now(), dwellMin = 30, switchAt = null, switches = [], holdMax = 4, holdWindowH = 6 } = {}) {
   const until = (id) => ms(limits[id] && limits[id].blocked_until);
   const isLimited = (id) => { const u = until(id); return u !== null && u > now; };
@@ -111,6 +113,14 @@ export function selectAccount({ chain, limits = {}, failed = {}, active, now = D
   const recent = (switches || []).map(ms).filter((t) => t !== null && now - t < holdWindowH * HOUR_MS).length;
   const hold = (to, why) => ({ action: 'hold', to, from: active, why: `${why}; ${recent} switches in the last ${holdWindowH} h (cap ${holdMax}): holding` });
   const activeUntil = until(active);
+  // the active account failed (its launch could not log in): leave it like a limited one
+  if (isFailed(active) && !(activeUntil !== null && activeUntil > now)) {
+    const to = chain.find((id) => id !== active && !isLimited(id) && !isFailed(id));
+    const why = `${active} failed (${(failed[active] && failed[active].why) || 'login'})`;
+    if (to) return recent >= holdMax ? hold(to, why) : { action: 'failover', to, from: active, why };
+    const waits = chain.map(until).filter((u) => u !== null && u > now);
+    return { action: 'wait', to: null, from: active, why: `${why}; no other usable account in the chain`, waitUntil: waits.length ? iso(Math.min(...waits)) : null };
+  }
   if (activeUntil !== null) {
     if (activeUntil > now) {
       const to = chain.find((id) => id !== active && !isLimited(id) && !isFailed(id));

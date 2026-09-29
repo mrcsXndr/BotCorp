@@ -73,6 +73,86 @@ def test_session_busy_bypass_for_a_limited_session(tick_box):
     assert _ps("Test-SessionBusy -Bot alpha -LimitBlocked", env) == "False"
 
 
+# --- tick: failover / failback with backup_accounts ------------------------------------------
+def _chain_box(t: dict, *, launched: str, state: dict | None = None, accounts: dict | None = None, rate_limits: dict | None = None) -> None:
+    """alpha on `account: acc1` with `backup_accounts: [acc2]`; its newest launch ran on `launched`; no cc pin (no cc roll in the way)."""
+    home, rt = t["home"], t["rt"]
+    (home / "bot.yaml").write_text("name: alpha\naccount: acc1\nbackup_accounts: [acc2]\nharness:\n  service: manual\n  modules:\n    telegram: false\n"
+                                   "    janitor: false\n    usage_resume: false\n", encoding="utf-8")
+    (rt / "state" / "cc.json").unlink()
+    cfg = home / ".claude-alpha"
+    (cfg / "botcorp").mkdir(exist_ok=True)
+    (cfg / "botcorp" / "launch-env.json").write_text(json.dumps({"launches": {"4242": {"launcher_pid": 4242, "at": _iso(datetime.now(timezone.utc) - timedelta(hours=1)), "account": launched}}}), encoding="utf-8")
+    if rate_limits is not None:
+        (cfg / "botcorp" / "status.json").write_text(json.dumps({"rate_limits": rate_limits}), encoding="utf-8")
+    st = json.loads((rt / "state" / "alpha.json").read_text(encoding="utf-8"))
+    st.update({"env_launcher_pid": 4242, **(state or {})})
+    (rt / "state" / "alpha.json").write_text(json.dumps(st), encoding="utf-8")
+    if accounts is not None:
+        (rt / "state" / "accounts.json").write_text(json.dumps({"accounts": accounts}), encoding="utf-8")
+
+
+@needs_pwsh
+def test_tick_dryrun_fails_over_to_the_backup(tick_box):
+    reset = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
+    _chain_box(tick_box, launched="acc1", rate_limits={"five_hour": {"used_percentage": 101, "resets_at": reset}})
+    _limit_block(tick_box["home"] / ".claude-alpha", datetime.now(timezone.utc) - timedelta(minutes=5))
+    log = _tick_dry(tick_box)
+    assert "DRYRUN would restart alpha" in log and "(account -> acc2 (failover: acc1 limited until" in log, log[-3000:]
+    assert not (tick_box["rt"] / "state" / "accounts.json").exists()   # a dry run writes nothing
+    assert "account_active" not in (tick_box["rt"] / "state" / "alpha.json").read_text(encoding="utf-8-sig")
+
+
+@needs_pwsh
+def test_tick_dryrun_waits_when_every_account_is_limited(tick_box):
+    later = _iso(datetime.now(timezone.utc) + timedelta(hours=3))
+    reset = int((datetime.now(timezone.utc) + timedelta(hours=2)).timestamp())
+    _chain_box(tick_box, launched="acc1", rate_limits={"five_hour": {"used_percentage": 101, "resets_at": reset}},
+               accounts={"acc2": {"blocked_until": later, "window": "7d", "bots": []}})
+    _limit_block(tick_box["home"] / ".claude-alpha", datetime.now(timezone.utc) - timedelta(minutes=5))
+    log = _tick_dry(tick_box)
+    assert "every account in the chain is limited or failed; waiting until" in log, log[-3000:]
+    assert "DRYRUN would restart" not in log, log[-3000:]
+
+
+@needs_pwsh
+def test_tick_dryrun_fails_back_after_the_reset_and_the_dwell(tick_box):
+    now = datetime.now(timezone.utc)
+    _chain_box(tick_box, launched="acc2",
+               state={"account_active": {"id": "acc2", "reason": "failover"}, "account_switch_at": _iso(now - timedelta(minutes=45))},
+               accounts={"acc1": {"blocked_until": _iso(now - timedelta(minutes=40)), "window": "5h", "bots": []}})
+    log = _tick_dry(tick_box)
+    assert "DRYRUN would restart alpha" in log and "(account -> acc1 (failback))" in log, log[-3000:]
+
+
+@needs_pwsh
+def test_tick_dryrun_defers_the_failback_inside_the_dwell(tick_box):
+    now = datetime.now(timezone.utc)
+    _chain_box(tick_box, launched="acc2",
+               state={"account_active": {"id": "acc2", "reason": "failover"}, "account_switch_at": _iso(now - timedelta(minutes=10))},
+               accounts={"acc1": {"blocked_until": _iso(now - timedelta(minutes=40)), "window": "5h", "bots": []}})
+    log = _tick_dry(tick_box)
+    assert "account failback -> acc1 DEFERRED (dwell)" in log, log[-3000:]
+    assert "DRYRUN would restart" not in log, log[-3000:]
+
+
+@needs_pwsh
+def test_update_account_limits_writes_the_bots_list_the_limit_and_a_failed_account(tick_box):
+    env = tick_box["env"]
+    fo = {"active": "acc2", "limited": True, "resetAt": "2099-01-01T00:00:00.000Z", "window": "5h", "source": "text"}
+    seed = {"acc1": {"blocked_until": "2000-01-01T00:00:00Z", "bots": ["alpha", "beta"]}}
+    (tick_box["rt"] / "state" / "accounts.json").write_text(json.dumps({"accounts": seed}), encoding="utf-8")
+    body = (f"$fo = ConvertFrom-Json -InputObject '{json.dumps(fo)}'\n"
+            f"[void](Update-AccountLimits -Bot alpha -Fo $fo -LoginBlocked $true -SwitchAt ((Get-Date).ToUniversalTime().AddMinutes(-3).ToString('o')))\n'ok'")
+    assert _ps(body, env) == "ok"
+    acc = json.loads((tick_box["rt"] / "state" / "accounts.json").read_text(encoding="utf-8-sig"))["accounts"]
+    assert acc["acc1"]["bots"] == ["beta"] and acc["acc2"]["bots"] == ["alpha"]
+    assert acc["acc2"]["blocked_until"].startswith("2099-01-01") and acc["acc2"]["seen_by"] == "alpha"
+    assert "could not log in" in acc["acc2"]["failed"]["why"]
+    assert _ps("[bool](Test-BotAccountBlocked -Bot alpha)", env) == "True"
+    assert _ps("[bool](Test-BotAccountBlocked -Bot beta)", env) == "False"   # acc1's limit is long over
+
+
 # --- cli -------------------------------------------------------------------------------------
 @pytest.fixture
 def fbox(tmp_path):

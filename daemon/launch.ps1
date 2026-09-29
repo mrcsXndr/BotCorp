@@ -279,6 +279,18 @@ $vaultNote = @()
 $tokenFile = ''
 $declared = @(); try { $declared = @($cfg.secrets | Where-Object { $_ }) } catch {}
 $account = "$($cfg.account)"   # '' = the bot's own oauth_token
+$accountReason = 'primary'
+# With backup_accounts the failover engine picks the account (core/failover.mjs
+# effective: a switch the tick decided, else the account the session is on
+# while it is still in the chain); the tick and this launch read the same files.
+if (@($cfg.backup_accounts | Where-Object { $_ }).Count -gt 0) {
+    $foL = Get-AccountFailover -Bot $Bot
+    if ($foL -and $foL.effective -and $foL.effective.id) {
+        $account = $(if ("$($foL.effective.id)" -like 'own:*') { '' } else { "$($foL.effective.id)" })
+        $accountReason = "$($foL.effective.reason)"
+        Write-LaunchLog "account: $(if ($account) { $account } else { 'the bot''s own token' }) ($accountReason$(if ($foL.decision -and $foL.decision.why) { ": $($foL.decision.why)" }))"
+    } else { Write-LaunchLog "account: failover engine unavailable -> bot.yaml account ($(if ($account) { $account } else { 'own token' }))" }
+}
 $oauthFrom = ''                # account | vault-fallback once the account path ran
 if (-not $attested) { $vaultNote += 'vault: skipped (unattested launch)' }
 else { try {
@@ -492,7 +504,7 @@ try {
 $oauthSrc = $(if ($secrets.ContainsKey('oauth_token')) { $(if ($oauthFrom) { $oauthFrom } else { 'vault' }) } elseif ($env:CLAUDE_CODE_OAUTH_TOKEN) { 'inherited' } else { 'none' })
 $oauthVal = $(if ($secrets.ContainsKey('oauth_token')) { $secrets['oauth_token'] } elseif ($oauthSrc -eq 'inherited') { $env:CLAUDE_CODE_OAUTH_TOKEN } else { '' })
 [void](Add-LaunchEnvRecord -ConfigDir $ConfigDir -LauncherPid $PID -OauthLast4 ((Mask $oauthVal) -replace '^\*+') -OauthSource $oauthSrc `
-                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames -AutoCompactWindow "$($cfg._context_window)" -Account $account)
+                           -TelegramLast4 ((Mask "$($secrets['telegram_token'])") -replace '^\*+') -At ((Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')) -SecretEnv $secretEnvNames -AutoCompactWindow "$($cfg._context_window)" -Account $account -AccountReason $accountReason)
 $launchT0 = (Get-Date).AddSeconds(-2)
 
 # Inherited from a parent Claude Code session these make the child run with

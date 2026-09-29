@@ -1116,20 +1116,32 @@ function ConvertTo-UtcTime {
     } catch { return [datetime]::MinValue }
 }
 
+function ConvertTo-IsoUtc {
+    # A time for a file node reads back: ISO 8601 UTC, never "$datetime" (that
+    # is the invariant culture's "MM/dd/yyyy HH:mm:ss" with no zone). $null
+    # when unparsable.
+    param($Value)
+    if ($null -eq $Value -or "$Value" -eq '') { return $null }
+    $t = ConvertTo-UtcTime $Value
+    if ($t -eq [datetime]::MinValue) { return $null }
+    return $t.ToString('yyyy-MM-ddTHH:mm:ss.fffZ', [Globalization.CultureInfo]::InvariantCulture)
+}
+
 function Add-LaunchEnvRecord {
     # Records this launch's env (last 4 only; source vault | account |
     # vault-fallback | inherited | none), keyed by launcher pid, newest $Keep
     # kept. Fail-open. $SecretEnv = the env var NAMES of the vault keys it
     # injected (bot.yaml secrets:), never values; $AutoCompactWindow = the
     # CLAUDE_CODE_AUTO_COMPACT_WINDOW it set ('' = auto); $Account = the
-    # bot.yaml account this launch attempted ('' = the bot's own token).
-    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [string[]]$SecretEnv = @(), [string]$AutoCompactWindow = '', [string]$Account = '', [int]$Keep = 20)
+    # account this launch attempted ('' = the bot's own token); $AccountReason =
+    # why that one (core/failover.mjs effective: primary | failover | failback | recover).
+    param([Parameter(Mandatory)][string]$ConfigDir, [int]$LauncherPid, [string]$OauthLast4, [string]$OauthSource, [string]$TelegramLast4, [string]$At, [string[]]$SecretEnv = @(), [string]$AutoCompactWindow = '', [string]$Account = '', [string]$AccountReason = 'primary', [int]$Keep = 20)
     try {
         $path = Join-Path $ConfigDir 'botcorp\launch-env.json'
         $all = @{}
         $j = Read-JsonFile -Path $path
         if ($j -and $j.launches) { foreach ($p in $j.launches.PSObject.Properties) { $all[$p.Name] = $p.Value } }
-        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }); secret_env = @($SecretEnv | Where-Object { $_ }); auto_compact_window = $(if ($AutoCompactWindow) { [int]$AutoCompactWindow } else { $null }); account = $Account }
+        $all["$LauncherPid"] = [ordered]@{ launcher_pid = $LauncherPid; at = $At; oauth_last4 = $(if ($OauthLast4) { $OauthLast4 } else { $null }); oauth_source = $OauthSource; telegram_last4 = $(if ($TelegramLast4) { $TelegramLast4 } else { $null }); secret_env = @($SecretEnv | Where-Object { $_ }); auto_compact_window = $(if ($AutoCompactWindow) { [int]$AutoCompactWindow } else { $null }); account = $Account; account_reason = $AccountReason }
         $kept = [ordered]@{}
         foreach ($k in @($all.Keys | Sort-Object { ConvertTo-UtcTime $all[$_].at } -Descending | Select-Object -First $Keep)) { $kept[$k] = $all[$k] }
         return (Write-JsonFile -Path $path -Object @{ launches = $kept })
@@ -1640,6 +1652,67 @@ function Get-AccountFailover {
         if ($r.ExitCode -ne 0) { Write-DaemonLog "failover: exit=$($r.ExitCode) (fail-open): $("$($r.Output)".Trim() -split "`n" | Select-Object -Last 1)" -Bot $Bot; return $null }
         return (ConvertFrom-ObserveJson -Text "$($r.Output)")
     } catch { Write-DaemonLog "failover: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $null }
+}
+
+function Update-AccountLimits {
+    # <rt>/state/accounts.json, written by the tick only (Test-BotAccountBlocked
+    # and core/failover.mjs read it):
+    #   {"accounts":{"<id>":{"blocked_until","window","source","seen_by","at","failed","bots":[]}}}
+    # From one bot's failover record ($Fo = `accounts failover <bot> --json`):
+    #  - `bots`: the bot sits on its active account only (own token = own:<bot>);
+    #  - the live limit of the active account is stamped; a passed one is
+    #    cleared once the session on it is not blocked;
+    #  - `failed`: the session blocked on a login within 10 min of a switch onto
+    #    that account ($LoginBlocked), or its launch fell back to the bot's own
+    #    token (launch-env oauth_source vault-fallback).
+    # $true when written.
+    param([Parameter(Mandatory)][string]$Bot, [Parameter(Mandatory)]$Fo, [bool]$LoginBlocked = $false, $SwitchAt = $null, [string]$OauthSource = '', [datetime]$Now = (Get-Date))
+    try {
+        $file = Join-Path $script:StateDir 'accounts.json'
+        $j = Read-JsonFile -Path $file
+        $src = $(if ($j -and ($j.PSObject.Properties.Name -contains 'accounts')) { $j.accounts } elseif ($j) { $j } else { $null })
+        $map = [ordered]@{}
+        if ($src) { foreach ($p in $src.PSObject.Properties) { $e = [ordered]@{}; foreach ($q in $p.Value.PSObject.Properties) { $e[$q.Name] = $q.Value }; $map[$p.Name] = $e } }
+        $active = "$($Fo.active)"
+        if (-not $active) { return $false }
+        foreach ($k in @($map.Keys)) { if ($map[$k].Contains('bots')) { $map[$k]['bots'] = @(@($map[$k]['bots']) | Where-Object { $_ -and "$_" -ne $Bot }) } }
+        if (-not $map.Contains($active)) { $map[$active] = [ordered]@{ blocked_until = $null; failed = $null; bots = @() } }
+        $e = $map[$active]
+        $e['bots'] = @(@($e['bots']) + $Bot | Where-Object { $_ } | Select-Object -Unique)
+        $nowUtc = $Now.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+        if ($Fo.limited -eq $true -and $Fo.resetAt) {
+            $e['blocked_until'] = (ConvertTo-IsoUtc $Fo.resetAt); $e['window'] = "$($Fo.window)"; $e['source'] = "$($Fo.source)"; $e['seen_by'] = $Bot; $e['at'] = $nowUtc
+        } elseif ($e.Contains('blocked_until') -and $e['blocked_until']) {
+            $u = ConvertTo-UtcTime $e['blocked_until']
+            if ($u -ne [datetime]::MinValue -and $u -le $Now.ToUniversalTime()) { $e['blocked_until'] = $null }
+        }
+        if ($active -notlike 'own:*') {
+            $why = ''
+            if ($OauthSource -eq 'vault-fallback') { $why = "its vault was unreadable at launch (the session fell back to $Bot's own token)" }
+            elseif ($LoginBlocked -and $SwitchAt) {
+                $t = ConvertTo-UtcTime $SwitchAt
+                if ($t -ne [datetime]::MinValue -and ($Now.ToUniversalTime() - $t).TotalMinutes -le 10) { $why = 'the session could not log in after the switch' }
+            }
+            if ($why -and -not ($e.Contains('failed') -and $e['failed'])) { $e['failed'] = [ordered]@{ at = $nowUtc; why = $why; seen_by = $Bot } }
+        }
+        return (Write-JsonFile -Path $file -Object ([ordered]@{ accounts = $map }))
+    } catch { Write-DaemonLog "accounts.json: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $false }
+}
+
+function Get-ActiveAccount {
+    # The account a bot's session runs on, as launch.ps1 records it ('' = the
+    # bot's own token): state account_active.id when it is still in the bot's
+    # chain (account + backup_accounts), else bot.yaml `account`.
+    param([Parameter(Mandatory)][string]$Bot, $Cfg, $State)
+    $primary = "$($Cfg.account)"
+    try {
+        if ($State -and ($State.PSObject.Properties.Name -contains 'account_active') -and $State.account_active -and $State.account_active.id) {
+            $id = "$($State.account_active.id)"
+            $chain = @($(if ($primary) { $primary } else { "own:$Bot" })) + @($Cfg.backup_accounts | Where-Object { $_ } | ForEach-Object { "$_" })
+            if ($chain -contains $id) { return $(if ($id -like 'own:*') { '' } else { $id }) }
+        }
+    } catch {}
+    return $primary
 }
 
 function New-LaunchId {

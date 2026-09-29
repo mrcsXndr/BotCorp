@@ -137,6 +137,22 @@ def test_unreadable_account_and_no_bot_token_refuses(abot):
     assert not [ln for ln in calls.splitlines() if "--plugin-dir" in ln], calls
 
 
+def test_a_failover_in_state_picks_the_backup_and_records_why(abot):
+    """v0.8.0: account: null + backup_accounts: [acc1]; the tick failed over (state account_active acc1, just now)."""
+    name, home, rt, env, seen = abot
+    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n"
+                                   "secrets: [oauth_token]\nbackup_accounts: [acc1]\n", encoding="utf-8")
+    _bot_token(env, home, name)
+    now = subprocess.run(["node", "-e", "console.log(new Date().toISOString())"], capture_output=True, text=True).stdout.strip()
+    (rt / "state" / f"{name}.json").write_text(json.dumps({"bot": name, "account_active": {"id": "acc1", "reason": "failover"}, "account_switch_at": now}), encoding="utf-8")
+    r = _launch(name, env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert _session_token(seen) == ACCT
+    rec = _record(home, name)
+    assert rec["account"] == "acc1" and rec["account_reason"] == "failover" and rec["oauth_source"] == "account"
+    assert "account: acc1 (failover" in _log(rt, name)
+
+
 def test_no_account_keeps_the_bot_token(abot):
     name, home, rt, env, seen = abot
     _yaml(home, name, None)
