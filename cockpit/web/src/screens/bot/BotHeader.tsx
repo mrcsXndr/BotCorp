@@ -47,10 +47,6 @@ export function BotHeader({ bot, status, view, onView, onAction, onStart, starti
         )}
         <Menu label={COPY.button.botMenu} trigger={<IconButton icon="cog" size={20} label={COPY.button.botMenu} />} onAction={(k: Key) => onAction(k as BotAction)}>
           <MenuItem id="settings" icon="set">{COPY.tab.settings}</MenuItem>
-          <MenuItem id="telegram" icon="tg">{COPY.tab.telegram}</MenuItem>
-          <MenuItem id="secrets" icon="lock">{COPY.tab.secrets}</MenuItem>
-          <MenuItem id="automations" icon="clock">{COPY.tab.automations}</MenuItem>
-          <MenuItem id="tools" icon="tool">{COPY.tab.tools}</MenuItem>
           <MenuSeparator />
           <MenuItem id="history" icon="board">{COPY.button.history}</MenuItem>
           <MenuSeparator />
