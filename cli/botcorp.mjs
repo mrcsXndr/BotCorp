@@ -2837,7 +2837,21 @@ function cmdCc({ pos, flags }) {
     requireOperator('cc rollback');
     return shellDaemonScript('cc.ps1', ['-Rollback', ...(flags.to ? ['-To', String(flags.to)] : [])], 'cc rollback');
   }
-  usage('cc status [--json] | cc test | cc rollback [--to <version>]');
+  if (action === 'models') return ccModelsVerb(flags);
+  usage('cc status [--json] | cc test | cc rollback [--to <version>] | cc models [--json] [--refresh]');
+}
+
+// `cc models`: what the pinned Claude Code offers (core/ccprobe.mjs), cached per pin.
+async function ccModelsVerb(flags) {
+  const { ccModels } = await import('../core/ccprobe.mjs');
+  const r = await ccModels({ pin: (readCcState() || {}).pinned, refresh: !!flags.refresh });
+  if (flags.json) { outJson(r); return r.models.length ? 0 : 1; }
+  if (!r.models.length) { out(`cc models: none (${r.error || 'the probe found no models'})`); return 1; }
+  out(`Claude Code ${r.cc_version} offers${r.cached ? ' (cached)' : ''}:`);
+  for (const m of r.models) {
+    out(`${m.value.padEnd(18)} ${m.resolvedModel.padEnd(28)} effort ${m.supportedEffortLevels.join('|') || '-'}  ultracode ${m.ultracodeAvailable === null ? '?' : m.ultracodeAvailable ? 'yes' : 'no'}${m.price ? `  $${m.price.input}/$${m.price.output} per Mtok` : ''}`);
+  }
+  return 0;
 }
 
 const INSTALL_PIPE_HINT = 'pipe it on stdin, never on the command line (process listings show argv):  $pw | node cli\\botcorp.mjs install   (elevated), or register without a stored password with --s4u';
@@ -3645,6 +3659,7 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   update [--json] | update --apply|--skip|--rollback|--cancel <tag> | update --check
       (--rollback: a release older than the installed one; one request at a time, the newest request wins)
   cc status [--json] | cc test | cc rollback [--to <version>]          (the Claude Code pin: bots roll onto it between turns)
+  cc models [--json] [--refresh]                                        (the models, effort levels and ultracode the pinned Claude Code offers; asked of the binary, no token, cached per pin)
   install [--s4u] [--unregister] [--dry-run]                            (password: piped stdin "$pw | botcorp install", or a hidden TTY prompt; never argv)
   cockpit expose --team <t> --aud <a> --yes | cockpit unexpose            (machine-wide)
   cockpit pair [--json] | cockpit unpair [<id> | --all] [--json]          (a loopback cockpit: a one-time code pairs a browser for operator actions; no id lists them)

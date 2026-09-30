@@ -5,7 +5,7 @@
 // Idempotent: run at create, after every harness update apply, and whenever
 // bot.yaml changes. Writes:
 //   bots/<name>/.claude/settings.json                 GENERATED (header says so): env,
-//                                                     permissions, model, effortLevel,
+//                                                     permissions, model, effortLevel, ultracode (when set),
 //                                                     statusLine, autoMemoryDirectory,
 //                                                     disabledSkills, autoContinueAtUsageLimit,
 //                                                     claudeMdExcludes (the operator's ~/.claude/CLAUDE.md).
@@ -136,6 +136,8 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     // a tier (harness/models.json) -> its id, and its effort unless bot.yaml sets one (none for tiny: the key is left out)
     model: resolveModel(cfg.model).id,
     effortLevel: cfg.effort ?? resolveModel(cfg.model).effort ?? undefined,
+    // bot.yaml ultracode: true only; the key is left out otherwise (Claude Code's default is off)
+    ultracode: cfg.ultracode === true ? true : undefined,
     statusLine: { type: 'command', command: `"${fwd(nodeExe)}" "${statusline}"` },
     autoMemoryDirectory: fwd(path.join(botHome, 'memory', 'auto')),
     autoContinueAtUsageLimit: true,

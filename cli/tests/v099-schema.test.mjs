@@ -73,6 +73,11 @@ test('ultracode from a bot queues; from the operator it applies', () => {
   const o = cli(base, 'config', 'set', 'demo', 'ultracode', 'true');
   assert.equal(o.status, 0, o.stdout + o.stderr);
   assert.match(yaml(), /^ultracode: true$/m);
+  // sync writes it into the generated settings only while it is on
+  const settings = () => JSON.parse(fs.readFileSync(path.join(HOME, '.claude', 'settings.json'), 'utf-8'));
+  assert.equal(settings().ultracode, true);
+  assert.equal(cli(base, 'config', 'set', 'demo', 'ultracode', 'false').status, 0);
+  assert.ok(!('ultracode' in settings()));
 });
 
 test('a bot sets a description and a purpose itself, as text', () => {
