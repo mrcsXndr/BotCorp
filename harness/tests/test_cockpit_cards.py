@@ -17,11 +17,14 @@ from pathlib import Path
 
 import pytest
 
+from _node import needs_node_ts
+
 ASSEMBLY = Path(__file__).resolve().parents[2]
 SUITE = ASSEMBLY / "cockpit" / "tests" / "cards.test.mjs"
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
+@needs_node_ts
 def test_cockpit_cards_suite():
     r = subprocess.run(["node", "--test", "--test-reporter=tap", str(SUITE)],
                        capture_output=True, text=True, encoding="utf-8", timeout=120, cwd=str(ASSEMBLY))
