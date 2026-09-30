@@ -187,6 +187,20 @@ def test_session_end_keeps_live_foreign_lock(tmp_path, bot_home):
     assert "lock_released=false" in proc.stderr
 
 
+# v0.8.6 R5 (review 2026-09-30, finding 21): /clear or /resume ends the SESSION,
+# not the process: the launcher's poller keeps running, so its lock stays.
+@pytest.mark.parametrize("reason,released", [("clear", False), ("resume", False), ("prompt_input_exit", True), ("logout", True), ("other", True)])
+def test_session_end_keeps_the_own_lock_while_the_process_lives_on(tmp_path, bot_home, reason, released):
+    env = base_env(tmp_path, bot_home, {"BOT_LAUNCHER_PID": str(os.getpid())})
+    lock_file = Path(env["CLAUDE_CONFIG_DIR"]) / "botcorp" / "tg_owner.lock"
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    lock_file.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    proc = run_hook("session-end.sh", env, json.dumps({"session_id": "t1", "reason": reason}))
+    assert proc.returncode == 0, proc.stderr
+    assert lock_file.exists() is not released
+    assert f"lock_released={'true' if released else 'false'}" in proc.stderr
+
+
 # --- (g) user-prompt-submit.sh: inbound TG logging --------------------------
 
 def test_user_prompt_submit_logs_tg_channel(tmp_path, bot_home):

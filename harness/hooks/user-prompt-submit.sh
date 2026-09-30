@@ -119,7 +119,9 @@ esac
 CMD_TEXT=""
 if [ "${PROMPT_REAL:0:1}" = "/" ]; then
   CMD_TEXT="$PROMPT_REAL"
-elif [ "${TG_BODY:0:1}" = "/" ]; then
+elif [ "${TG_BODY:0:1}" = "/" ] && [[ "${TG_BODY//$'\r'/}" != *$'\n'* ]]; then
+  # one line only: `read` sees line 1, but tg_commands.py parses the whole body,
+  # so "/board" + newline + "move x Done" would pass as a read-only /board
   read -r TG_CMD TG_ARG1 _ <<< "$TG_BODY"
   case "${TG_CMD,,}" in
     /status|/journal|/timeline|/costs|/help) CMD_TEXT="$TG_BODY" ;;

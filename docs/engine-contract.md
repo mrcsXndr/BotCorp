@@ -72,17 +72,24 @@ project).
   Telegram `access.json`. Those go through the guarded writers
   (`botcorp config set`, `botcorp secrets set`, the cockpit pairing panel)
   instead, so widening changes (new allow-listed sender, loosened policy, a
-  new secret) can be gated on operator approval.
-- **`vault-guard.sh`** (`PreToolUse` on `Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit`; cannot be turned off with `hooks_disable`)
+  new secret) can be gated on operator approval. An edit of
+  `.claude/settings.local.json` or the config home's `settings.json` is
+  blocked only when it changes `env` or `disableAllHooks` (either can switch
+  the guards off); the bot's own hooks there stay editable.
+- **`vault-guard.sh`** (`PreToolUse` on `Read|Glob|Grep|Bash|PowerShell|Monitor|mcp__*|Edit|Write|MultiEdit|NotebookEdit`; cannot be turned off with `hooks_disable`)
   — FAIL-CLOSED (exit 2): blocks any tool call that touches a bot vault
   (`.vault/`, any bot's — its own included), `secrets.ps1`/`vault.ps1`/
-  `accounts.ps1`, the `ProtectedData` DPAPI API, the `secret-access.jsonl`
+  `accounts.ps1`, the vault functions (`Get-VaultSecret`, `Read-VaultStore`, ...),
+  the `ProtectedData` DPAPI API, the `secret-access.jsonl`
   audit log, the cockpit's `cockpit-approve-token` file, or the secrets CLI's mutating verbs (`botcorp secrets
   get|unlock|lock|import-bundle|export-bundle|migrate`); `secrets
   set|list|delete|audit` stay open since that's the operator flow.
-- **`operator-guard.sh`** (`PreToolUse` on `Bash|PowerShell`; cannot be
+- **`operator-guard.sh`** (`PreToolUse` on `Bash|PowerShell|Monitor|mcp__*`; cannot be
   turned off with `hooks_disable` either) — FAIL-CLOSED (exit 2): blocks
   `botcorp approve|reject|accounts use` in a command.
+- All the tool guards run in ONE `node guard.mjs pre|post` process (exec-form
+  hooks, 15 s timeout; the `.sh` names are thin wrappers for tests and doctor),
+  and fail closed on a payload they cannot parse.
 - **`core-guard.sh`** (`PostToolUse` on `Edit|Write|MultiEdit|NotebookEdit`) — warn-only: tells
   the bot the moment it edits a TRACKED harness file outside a `suggest/*`
   branch, before the divergence becomes a silent one.

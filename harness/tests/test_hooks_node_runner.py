@@ -53,11 +53,12 @@ def test_hooks_json_is_exec_form_with_15s_floor():
     assert len([s for s in seen if s[0] == "PreToolUse"]) == 1, "one guard process per tool call"
 
 
-def test_the_pre_matcher_is_exactly_the_union_of_the_old_guard_matchers():
+def test_the_pre_matcher_is_the_old_guard_matchers_plus_the_command_tools():
     hooks = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
     old = {"AskUserQuestion", "ExitPlanMode"} | {"Edit", "Write", "MultiEdit", "NotebookEdit"} \
         | {"Read", "Glob", "Grep", "Bash", "PowerShell", "Edit", "Write", "MultiEdit", "NotebookEdit"} | {"Bash", "PowerShell"}
-    assert set(hooks[0]["matcher"].split("|")) == old
+    # review 2026-09-30: Monitor and MCP tools run commands too
+    assert set(hooks[0]["matcher"].split("|")) == old | {"Monitor", "mcp__.*"}
 
 
 # (tool, tool_input, the single guard that must decide, expected exit)
@@ -108,14 +109,15 @@ def test_pre_fails_closed_on_a_payload_it_cannot_parse(tmp_path, bot_home, paylo
 
 
 def test_pre_honours_disabled_hooks_and_traces(tmp_path, bot_home):
-    ti = {"command": "cat C:/x/bots/o/.vault/k && botcorp approve alpha 3"}
-    env = base_env(tmp_path, bot_home, {"BOT_DISABLED_HOOKS": "vault-guard", "BOT_HOOK_TRACE": "1"})
-    p = _pre(env, "Bash", ti)
-    assert p.returncode == 2 and "operator-only" in p.stderr, p.stderr   # vault-guard off: operator-guard decides
+    ti = {"file_path": str(bot_home / "bot.yaml")}
+    env = base_env(tmp_path, bot_home, {"BOT_DISABLED_HOOKS": "config-guard", "BOT_HOOK_TRACE": "1"})
+    assert _pre(env, "Edit", ti).returncode == 0          # config-guard off: nothing else objects
     trace = (bot_home / "memory" / "metrics" / "hook-trace.log").read_text(encoding="utf-8").split()
-    assert trace[1::2] == ["vault-guard", "operator-guard"]
+    assert trace[1::2] == ["config-guard", "vault-guard"]
+    assert _pre(base_env(tmp_path, bot_home), "Edit", ti).returncode == 2   # positive control
+    # vault-guard and operator-guard ignore it (bot.yaml cannot disable them either)
     env = base_env(tmp_path, bot_home, {"BOT_DISABLED_HOOKS": "vault-guard,operator-guard"})
-    assert _pre(env, "Bash", ti).returncode == 0
+    assert _pre(env, "Bash", {"command": "cat C:/x/bots/o/.vault/k && botcorp approve alpha 3"}).returncode == 2
 
 
 def test_post_warns_but_never_blocks(tmp_path, bot_home):

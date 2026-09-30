@@ -13,16 +13,16 @@
 // cancelled PreToolUse hook lets the tool call through. Node starts in ~70 ms.
 //
 // The decisions are the bash guards', ported as they were (the header of each
-// <name>.sh says what it guards). Exit 2 blocks the tool call and feeds stderr
-// back to the model. vault-guard FAILS CLOSED on a payload it cannot parse and
-// on any error of its own; config-guard and operator-guard block what they
-// name and let an unparsable payload through, as before; the PostToolUse
-// guards never block.
+// <name>.sh says what it guards), with the bypasses the 2026-09-30 review found
+// closed. Exit 2 blocks the tool call and feeds stderr back to the model.
+// vault-guard, config-guard and operator-guard FAIL CLOSED on a payload they
+// cannot parse and on any error of their own; the PostToolUse guards never
+// block.
 //
 // Gates as in _guard.sh: BOT_HOOK_TRACE=1 appends `<iso> <guard>` to
 // memory/metrics/hook-trace.log for each guard that runs, before its gate; a
-// guard named in BOT_DISABLED_HOOKS is skipped (bot.yaml refuses to disable
-// vault-guard and operator-guard).
+// guard named in BOT_DISABLED_HOOKS is skipped, except vault-guard and
+// operator-guard (bot.yaml refuses to disable them; see ALWAYS_ON).
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,12 +34,15 @@ const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const HARNESS = process.env.CLAUDE_PLUGIN_ROOT || path.dirname(HOOKS_DIR);
 const BOT_HOME = process.env.BOT_HOME || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-// The tools each guard used to be registered for (hooks.json matchers).
+// The tools each guard runs for: the matchers the separate hooks had, plus
+// every other tool that runs a command (Monitor, an MCP shell tool; review
+// 2026-09-30), which the guards only ever read the command/path fields of.
+const SHELL = ['Bash', 'PowerShell', 'Monitor', /^mcp__/];
 const PRE = [
   ['block-dialogs', ['AskUserQuestion', 'ExitPlanMode']],
   ['config-guard', ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
-  ['vault-guard', ['Read', 'Glob', 'Grep', 'Bash', 'PowerShell', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
-  ['operator-guard', ['Bash', 'PowerShell']],
+  ['vault-guard', ['Read', 'Glob', 'Grep', ...SHELL, 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
+  ['operator-guard', SHELL],
 ];
 const POST = [
   ['core-guard', ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
@@ -58,7 +61,10 @@ function trace(name) {
     fs.appendFileSync(path.join(dir, 'hook-trace.log'), `${new Date().toISOString().replace(/\.\d{3}Z$/, 'Z')} ${name}\n`);
   } catch {}
 }
-const disabled = (name) => `,${process.env.BOT_DISABLED_HOOKS || ''},`.includes(`,${name},`);
+// bot.yaml refuses to disable these two, and a settings `env` could set
+// BOT_DISABLED_HOOKS behind its back, so the env is not asked for them.
+const ALWAYS_ON = new Set(['vault-guard', 'operator-guard']);
+const disabled = (name) => !ALWAYS_ON.has(name) && `,${process.env.BOT_DISABLED_HOOKS || ''},`.includes(`,${name},`);
 
 // {ok, d}: d is the parsed payload; ok false = not JSON. An empty payload is null.
 function parse(raw) {
@@ -82,14 +88,46 @@ function blockDialogs() {
 }
 
 // ---- config-guard ----------------------------------------------------------------
+const unparsed = (name) => `BLOCKED: ${name} could not parse this tool call, so it cannot tell what it touches; it fails closed.`;
+
+// .claude/settings.local.json and the config home's settings.json are the
+// bot's to edit (its own hooks), but Claude Code applies their `env` over the
+// launch env, hooks included, and `disableAllHooks` stops every hook: either
+// switches the guards off. -> why the edit is refused, or null. The edit is
+// applied to the file as it is now and the two keys compared before/after.
+function settingsSwitch(file, ti) {
+  const strip = (s) => String(s).replace(/^﻿/, '');
+  let now = '';
+  try { now = strip(fs.readFileSync(file, 'utf-8')); } catch {}
+  let before = {};
+  try { before = JSON.parse(now); } catch {}
+  let text = now;
+  if (typeof ti.content === 'string') text = strip(ti.content);
+  else {
+    for (const e of Array.isArray(ti.edits) ? ti.edits : [ti]) {
+      if (!isObj(e) || typeof e.old_string !== 'string' || typeof e.new_string !== 'string') continue;
+      text = e.replace_all ? text.split(e.old_string).join(e.new_string) : text.replace(e.old_string, () => e.new_string);
+    }
+  }
+  let after;
+  try { after = JSON.parse(text); } catch { return 'leaves it unparsable, so what it switches cannot be checked'; }
+  const keys = (o) => JSON.stringify(isObj(o) ? [o.env ?? null, o.disableAllHooks ?? null] : [null, null]);
+  return keys(before) === keys(after) ? null : 'changes `env` or `disableAllHooks`';
+}
+
 function configGuard(p) {
-  if (!p.ok || p.d === null) return null;
-  let file;
-  try { const ti = toolInput(p.d); file = ti.file_path || ti.notebook_path || ''; } catch { return null; }
+  if (p.ok && p.d === null) return null;
+  if (!p.ok) return unparsed('config-guard');
+  let ti, file;
+  try { ti = toolInput(p.d); file = ti.file_path || ti.notebook_path || ''; } catch { return unparsed('config-guard'); }
   if (!file) return null;
   const f = low(str(file));
   const home = low(BOT_HOME);
   const cfg = low(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
+  if (f === `${home}/.claude/settings.local.json` || f === `${cfg}/settings.json`) {
+    const why = settingsSwitch(str(file), ti);
+    return why ? `BLOCKED: this edit of ${str(file)} ${why}. A settings env (BOT_DISABLED_HOOKS, PATH, NODE_OPTIONS, ...) or disableAllHooks can switch the hook guards off for the session. The session env comes from bot.yaml (botcorp config set <bot> ...); hooks and other keys in this file stay yours to edit.` : null;
+  }
   const hit = f === `${home}/bot.yaml` || f === `${home}/.claude/settings.json` || f.startsWith(`${home}/.vault/`)
     || f === `${cfg}/channels/telegram/access.json`;
   if (!hit) return null;
@@ -99,10 +137,12 @@ function configGuard(p) {
 // ---- vault-guard -----------------------------------------------------------------
 // Line by line, as grep read the joined fields. `.vault` as a path segment: the
 // bash guard anchored it on `/` or a line start only, so `cat .vault/x` or
-// `ls .vault` passed; a shell word boundary counts too now.
+// `ls .vault` passed; any non-name character before it counts now.
 const VAULT_RULES = [
-  [/(^|[\s/"'=:;|&(<>])\.vault([\s/"';|&)<>]|$)/, ".vault (a bot's secrets vault directory)"],
+  [/(^|[^a-z0-9_-])\.vault($|[^a-z0-9_-])/, ".vault (a bot's secrets vault directory)"],
   [/(secrets|vault|accounts)\.ps1/, 'secrets.ps1/vault.ps1/accounts.ps1'],
+  // the vault's own functions, reachable by dot-sourcing daemon/_common.ps1 (it loads vault.ps1)
+  [/(get|set|read|write|remove|unprotect|unlock)-vault/, 'the vault functions (Get-VaultSecret, Read-VaultStore, ...)'],
   [/botcorp.*secrets.*(get|unlock|lock|import-bundle|export-bundle|migrate)/, 'botcorp secrets get/unlock/lock/import-bundle/export-bundle/migrate'],
   [/protecteddata/, 'ProtectedData (the DPAPI API)'],
   [/secret-access\.jsonl/, 'secret-access.jsonl (the secrets audit log)'],
@@ -121,7 +161,7 @@ function vaultGuard(p) {
   let parts = [];
   try {
     const ti = toolInput(p.d);
-    for (const k of ['file_path', 'notebook_path', 'path', 'pattern', 'glob', 'command']) if (ti[k]) parts.push(str(ti[k]));
+    for (const k of ['file_path', 'notebook_path', 'path', 'pattern', 'glob', 'command', 'files']) if (ti[k]) parts.push(str(ti[k]));
     if (Array.isArray(ti.edits)) for (const e of ti.edits) if (isObj(e) && e.file_path) parts.push(str(e.file_path));
   } catch { return VAULT_UNPARSED; }
   const text = lines(low(parts.join('\n')));
@@ -132,8 +172,12 @@ function vaultGuard(p) {
 }
 
 // ---- operator-guard --------------------------------------------------------------
-// Matches the COMMAND field only, never file paths or Grep patterns.
-const BC = String.raw`botcorp(\.mjs)?["']?\s+`;
+// Matches the COMMAND field only, never file paths or Grep patterns, after
+// joining continued lines (`\` or a PowerShell backtick before a newline) and
+// dropping quotes, so `"approve"` is approve. `$BC` is the CLI as the bots'
+// own runtime notes spell it (BC=node .../botcorp.mjs).
+const BC = String.raw`(botcorp(\.mjs)?|\$\{?bc\}?)\s+`;
+const normCmd = (cmd) => cmd.replace(/[\\`]\r?\n/g, ' ').replace(/["']/g, '').toLowerCase();
 const NEVER = [
   [new RegExp(`${BC}cockpit\\s+(expose|unexpose|pair|unpair)([^a-z0-9_-]|$)`), 'BLOCKED: botcorp cockpit expose / unexpose / pair / unpair are the operator\'s alone (an admin bot cannot run them either).'],
   [new RegExp(`${BC}accounts\\s+(rename([^a-z0-9_-]|$)|seed\\s[^;&|]*--link([^a-z0-9_-]|$))`), 'BLOCKED: botcorp accounts rename / accounts seed --link are the operator\'s alone (an admin bot cannot run them either): the cockpit Accounts page or the operator\'s terminal.'],
@@ -152,11 +196,12 @@ function isAdmin() {
 }
 
 function operatorGuard(p) {
-  if (!p.ok || p.d === null) return null;
+  if (p.ok && p.d === null) return null;
+  if (!p.ok) return unparsed('operator-guard');
   let cmd;
-  try { cmd = String(toolInput(p.d).command || ''); } catch { return null; }
+  try { cmd = String(toolInput(p.d).command || ''); } catch { return unparsed('operator-guard'); }
   if (!cmd) return null;
-  const ls = lines(cmd.toLowerCase());
+  const ls = lines(normCmd(cmd));
   for (const [re, msg] of NEVER) if (ls.some((l) => re.test(l))) return msg;
   let need = '';
   if (ls.some((l) => OPERATOR_VERB.test(l))) need = 'operator-only verb';
@@ -227,9 +272,9 @@ async function toolsNudge(p) {
 
 const GUARDS = {
   'block-dialogs': { run: blockDialogs, block: true },
-  'config-guard': { run: configGuard, block: true },
+  'config-guard': { run: configGuard, block: true, closed: 'BLOCKED: config-guard failed, so it cannot tell what this edit touches; it fails closed.' },
   'vault-guard': { run: vaultGuard, block: true, closed: 'BLOCKED: vault-guard failed, so it cannot rule out a vault access; it fails closed.' },
-  'operator-guard': { run: operatorGuard, block: true },
+  'operator-guard': { run: operatorGuard, block: true, closed: 'BLOCKED: operator-guard failed, so it cannot rule out an operator verb; it fails closed.' },
   'core-guard': { run: coreGuard, block: false },
   'tools-nudge': { run: toolsNudge, block: false },
 };
@@ -244,7 +289,8 @@ async function main() {
     const table = mode === 'pre' ? PRE : POST;
     const tool = p.ok && isObj(p.d) && typeof p.d.tool_name === 'string' ? p.d.tool_name : null;
     // no tool name: every guard but the dialog one (an unparsable payload still meets vault-guard)
-    names = table.filter(([n, tools]) => (tool === null ? n !== 'block-dialogs' : tools.includes(tool))).map(([n]) => n);
+    const meets = (tools) => tools.some((t) => (typeof t === 'string' ? t === tool : t.test(tool)));
+    names = table.filter(([n, tools]) => (tool === null ? n !== 'block-dialogs' : meets(tools))).map(([n]) => n);
   } else if (GUARDS[mode]) names = [mode];
   else { fs.writeSync(2, `guard.mjs: unknown mode '${mode}' (pre | post | ${Object.keys(GUARDS).join(' | ')})\n`); process.exit(0); }
 

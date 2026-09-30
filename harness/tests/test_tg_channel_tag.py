@@ -135,7 +135,10 @@ def test_hook_intercepts_a_channel_wrapped_readonly_command(tmp_path, source):
 
 
 @pytest.mark.parametrize("body", ["/update check", "/compact", "/board move x Done",
-                                  "please run /status", "hello"])
+                                  "please run /status", "hello",
+                                  # v0.8.6 (review 2026-09-30, finding 20): only line 1 was read, the handler parses all of it
+                                  # (on Windows python's CRLF hides the first two; the third shows it)
+                                  "/board\nmove x Done", "/status\n/board move x Done", "/status now\n/board move x Done"])
 def test_hook_passes_mutating_commands_and_text_from_telegram_through(tmp_path, body):
     proc, journal = _run_prompt_hook(tmp_path, _tg(body))
     assert proc.returncode == 0, proc.stderr

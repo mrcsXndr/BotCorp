@@ -42,7 +42,12 @@ if [ -f "$LOCK_FILE" ]; then
   SHOULD_RELEASE=0
   if [ -n "$LOCK_PID" ]; then
     if [ -n "${BOT_LAUNCHER_PID:-}" ] && [ "$LOCK_PID" = "$BOT_LAUNCHER_PID" ]; then
-      SHOULD_RELEASE=1
+      # /clear and /resume end the SESSION, not the process: its poller keeps
+      # running, so its own lock stays.
+      case "${REASON%$'\r'}" in
+        clear|resume) ;;
+        *) SHOULD_RELEASE=1 ;;
+      esac
     else
       # Liveness check WITHOUT os.kill(pid, 0): on Windows that call does not
       # merely probe the process — CPython's os.kill implements signal 0 via

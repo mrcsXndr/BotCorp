@@ -3,7 +3,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "AskUserQuestion|ExitPlanMode|Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
+        "matcher": "AskUserQuestion|ExitPlanMode|Read|Glob|Grep|Bash|PowerShell|Monitor|mcp__.*|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs", "pre"], "timeout": 15 }
         ]
