@@ -339,7 +339,7 @@ const INITIAL_TAIL = 50;
 // Read new turns from `file` starting at BYTE offset `after`. cursor = offset
 // just past the last COMPLETE line; a trailing partial line waits for the next
 // read. A shrunk file (rotation) restarts from 0.
-async function readTurns(file, after = 0) {
+export async function readTurns(file, after = 0) {
   let stat;
   try { stat = await fs.stat(file); } catch { return { turns: [], cursor: after }; }
   const start = (after > stat.size || after < 0) ? 0 : after;
