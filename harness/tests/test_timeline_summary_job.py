@@ -76,6 +76,27 @@ def test_summarize_stale_distills_skips_and_reports_a_fallback(tmp_path):
     assert r.returncode == 1 and "fell back to structural" in r.stdout, r.stdout + r.stderr
 
 
+@needs_win  # the stand-in claude is a .cmd
+def test_summarize_stale_also_distills_a_concatenated_current_week(tmp_path):
+    from datetime import datetime, timezone
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    wk = tmp_path / "bot" / "memory" / "timelines" / f"{y}-W{w:02d}.md"
+    wk.parent.mkdir(parents=True)
+    wk.write_text(f"# Cross-session timelines for {y}-W{w:02d} (concatenated fallback)\n\n=== Session s ===\nx\n", encoding="utf-8")
+    sessions = tmp_path / "bot" / "memory" / "sessions" / "s"
+    sessions.mkdir(parents=True)
+    (sessions / "timeline.md").write_text("---\nphase: 2-distilled\n---\nbody\n", encoding="utf-8")
+    fake = _fake_claude(tmp_path)
+    r = _summarize(tmp_path, tmp_path / "bot", fake)
+    assert r.returncode == 0 and "distilled the weekly timeline" in r.stdout, r.stdout + r.stderr
+    assert "concatenated fallback" not in wk.read_text(encoding="utf-8")
+    r = _summarize(tmp_path, tmp_path / "bot", fake)            # distilled now: nothing more to do
+    assert len((tmp_path / "calls.log").read_text(encoding="utf-8").splitlines()) == 1
+    wk.write_text(f"# Cross-session timelines for {y}-W{w:02d} (concatenated fallback)\n\nx\n", encoding="utf-8")
+    r = _summarize(tmp_path, tmp_path / "bot", _fake_claude(tmp_path, rc=1))
+    assert r.returncode == 1 and "weekly distill fell back" in r.stdout, r.stdout + r.stderr
+
+
 @needs_win
 def test_the_module_runs_the_builtin_job_with_the_vault_token(oauth_bot, tmp_path):  # noqa: F811
     name, home, rt, env = oauth_bot

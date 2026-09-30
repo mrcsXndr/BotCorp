@@ -282,12 +282,37 @@ def cmd_build(session_id: str, structural_only: bool = False) -> int:
     return _llm_distill(session_id)
 
 
+def _week_is_structural(tp: Path) -> bool:
+    return tp.exists() and "(concatenated fallback)" in tp.read_text(encoding="utf-8")[:200]
+
+
+def _summarize_week() -> int:
+    """Distill the current ISO week's roll-up when the PreCompact hook left it
+    concatenated (memory/timelines/<week>.md). No file yet = nothing to do."""
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    week = f"{y}-W{w:02d}"
+    tp = TIMELINES_DIR / f"{week}.md"
+    if not _week_is_structural(tp):
+        return 0
+    cmd_distill(week)
+    if not _week_is_structural(tp):
+        print(f"SUMMARY: distilled the weekly timeline {week} ({DISTILL_MODEL})")
+        return 0
+    print(f"SUMMARY: weekly distill fell back to concatenation for {week} (the reason is on stderr above)")
+    return 1
+
+
 def cmd_summarize_stale(session_id: str) -> int:
-    """The daemon's timeline-summary job (module timeline_summary): distill the
-    session's timeline when it is missing or structural. Hooks have no Claude
-    credentials and fall back to structural; the daemon runs this with the
-    vault token. 0 = distilled or nothing to do; 1 = the distill fell back, so
-    the job's failure streak (and its one alerts.log line) sees it."""
+    """The daemon's timeline-summary job: the session's timeline, then the
+    current week's roll-up. 1 if either distill fell back."""
+    return max(_summarize_session(session_id), _summarize_week())
+
+
+def _summarize_session(session_id: str) -> int:
+    """Distill the session's timeline when it is missing or structural. Hooks
+    have no Claude credentials and fall back to structural; the daemon runs this
+    with the vault token. 0 = distilled or nothing to do; 1 = the distill fell
+    back, so the job's failure streak (and its one alerts.log line) sees it."""
     jp, tp = _journal_path(session_id), _timeline_path(session_id)
     if not jp.exists():
         print(f"SUMMARY: no journal for session {session_id}; nothing to do")
@@ -389,7 +414,7 @@ Usage:
   timeline.py build <session_id> --structural   # fast structural extraction
   timeline.py read <session_id>
   timeline.py distill <since> [--structural]    # cross-session, e.g. "2026-W18"; --structural: concatenate, no LLM
-  timeline.py summarize-stale [<session_id>]    # distill only a missing/structural timeline (the daemon job)
+  timeline.py summarize-stale [<session_id>]    # distill only a missing/structural timeline, then a concatenated current-week roll-up (the daemon job)
 
 Env:
   BOT_DISTILL_MODEL    (default: the workhorse id in harness/models.json)

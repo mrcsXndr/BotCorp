@@ -88,7 +88,7 @@ the daemon tick runs a module's job only for bots that have it on.
 | `auto_roll` | off | the tick's fresh restart at a declared breakpoint once the last-turn context passes `harness.roll_tokens` (`docs/daemon.md` "Auto-roll") |
 | `context_warn` | off | one line the `user-prompt-submit` hook adds to the prompt when the last turn's context (the statusline's `status.json`) passes 90% of `harness.roll_tokens`: finish the step, update journal and TDL, declare a breakpoint; at most once per 30 min per session |
 | `session_summarize` | on | the `session-summarize` Stop hook (a disk snapshot per turn in `memory/sessions/<stamp>.md`) |
-| `timeline_summary` | off | the built-in `timeline-summary` automation: every 60 min, `timeline.py summarize-stale` with the vault `oauth_token` (real spend). It is the only timeline LLM distill: the `precompact-timeline` hook builds structurally either way |
+| `timeline_summary` | off | the built-in `timeline-summary` automation: every 60 min, `timeline.py summarize-stale` with the vault `oauth_token` (real spend). It is the only timeline LLM distill (session timelines and the current week's roll-up): the `precompact-timeline` hook builds structurally either way |
 | `backup` | `backup.git_remote` set | `botcorp backup` and the push in `auto-commit` |
 
 A hook with no module (`-` in `hooks.json`) runs for every bot; any hook but
