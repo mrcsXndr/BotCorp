@@ -494,7 +494,10 @@ alone; so is anything matching `<rt>/protect.json` (`{"pids":[...],
 "patterns":[regex...]}`, operator-maintained: `SKIP protected`). A daemon once
 killed a process that merely looked like a launcher; this is why.
 
-**Idle gate (`Test-SessionBusy`).** Busy = defer. Idle when the bot's
+**Idle gate (`Test-SessionBusy`).** Busy = defer. Busy first when the bg
+job record (`<config>/jobs/<bg_id>/state.json`) says `tempo: active` and is
+under 30 min old: a turn is running, whatever the marker or the transcript say.
+The next prompt deletes the marker (`user-prompt-submit.sh`). Idle when the bot's
 `.claude/.botcorp_breakpoint` is younger than `BOT_BREAKPOINT_TTL_MIN` (30),
 else when the newest `*.jsonl` under `<config>/projects/<slug>/` (RECURSIVE:
 subagents write under `<session>/subagents/**`) is quiet for 5 min, where

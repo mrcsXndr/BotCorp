@@ -58,7 +58,8 @@ running model.
   turn. For the next `BOT_BREAKPOINT_TTL_MIN` (30) minutes the daemon's
   session-busy check treats the session as IDLE and may act on it — a
   deferred idle-gated heal, an update restart (`update_restart.py`, which
-  consumes the marker). Without a marker the daemon counts a session as idle
+  consumes the marker). The next prompt deletes it, so it never outlives
+  the turn it closed. Without a marker the daemon counts a session as idle
   once its transcripts have been quiet for 5 minutes; a stale marker is
   ignored. The invariant holds because the Director only drops it when the
   turn is genuinely over — never mid-task, never with work in flight.

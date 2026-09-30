@@ -219,3 +219,14 @@ def test_user_prompt_submit_logs_tg_channel(tmp_path, bot_home):
 
     tg_file = bot_home / "memory" / "tg" / "123456.jsonl"
     assert tg_file.is_file()
+
+
+# --- (h) user-prompt-submit.sh: a new prompt ends a declared breakpoint (D7) ---
+
+def test_user_prompt_submit_consumes_the_breakpoint(tmp_path, bot_home):
+    marker = bot_home / ".claude" / ".botcorp_breakpoint"
+    marker.write_text("", encoding="utf-8")
+    env = base_env(tmp_path, bot_home)
+    proc = run_hook("user-prompt-submit.sh", env, json.dumps({"session_id": "t1", "prompt": "next task"}))
+    assert proc.returncode == 0, proc.stderr
+    assert not marker.exists(), "a new turn is live work: the daemon must not read the session idle"

@@ -54,6 +54,10 @@ if [ -z "$PROMPT" ]; then
   exit 0
 fi
 
+# A new prompt ends a declared breakpoint (D7): the daemon reads a fresh
+# .botcorp_breakpoint as IDLE for 30 min, and this turn is live work.
+rm -f "$BOT_HOME/.claude/.botcorp_breakpoint" 2>/dev/null || true
+
 if [ -z "$SESSION_ID" ] && [ -f "$BOT_HOME/.claude/.current_session_id" ]; then
   SESSION_ID=$(cat "$BOT_HOME/.claude/.current_session_id" 2>/dev/null || true)
 fi
