@@ -48,7 +48,9 @@ case "$ORIGIN_URL" in
   */BotCorp|*/BotCorp.git) exit 0 ;;
 esac
 
-if [ -n "$(git -C "$BOT_HOME" status --porcelain)" ]; then
+# At most one checkpoint per BOT_AUTO_COMMIT_EVERY_MIN, never for memory/metrics/
+# churn alone (harness/tools/infra/commit_gate.cjs, v0.8.6 R13).
+if "${BOT_NODE:-node}" "$HARNESS/tools/infra/commit_gate.cjs" "$BOT_HOME" "chore(auto): session checkpoint" >/dev/null 2>&1; then
   git -C "$BOT_HOME" add -A
   git -C "$BOT_HOME" commit -m "chore(auto): session checkpoint $(date +%Y-%m-%d' '%H:%M)" 2>/dev/null || true
 fi

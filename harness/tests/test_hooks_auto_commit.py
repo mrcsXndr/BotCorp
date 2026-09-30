@@ -100,3 +100,74 @@ def test_bot_home_inside_a_parent_repo_is_a_noop(tmp_path):
     proc = _run(_env(tmp_path, home), cwd=home)
     assert proc.returncode == 0, proc.stderr
     assert _commits(parent) == "1"
+
+
+# v0.8.6 R13: runtime churn (memory/metrics/) never commits on its own, and
+# one checkpoint per BOT_AUTO_COMMIT_EVERY_MIN at most.
+def _churn(home, n="1"):
+    (home / "memory" / "metrics").mkdir(parents=True, exist_ok=True)
+    (home / "memory" / "metrics" / "usage_state.json").write_text(f'{{"n": {n}}}\n', encoding="utf-8")
+
+
+def _status(home):
+    return subprocess.run(["git", "status", "--porcelain"], cwd=home, capture_output=True, text=True).stdout
+
+
+def test_churn_alone_never_commits(tmp_path):
+    home = _git_repo(tmp_path / "root" / "bots" / "demo")
+    _churn(home)
+    proc = _run(_env(tmp_path, home), cwd=home)
+    assert proc.returncode == 0, proc.stderr
+    assert _commits(home) == "1"
+    assert "memory/" in _status(home)
+
+
+def test_churn_rides_along_with_a_real_change(tmp_path):
+    home = _git_repo(tmp_path / "root" / "bots" / "demo")
+    _churn(home)
+    (home / "notes.md").write_text("real\n", encoding="utf-8")
+    proc = _run(_env(tmp_path, home), cwd=home)
+    assert proc.returncode == 0, proc.stderr
+    assert _commits(home) == "2"
+    assert _status(home) == ""
+
+
+def test_a_second_stop_inside_the_window_waits(tmp_path):
+    home = _git_repo(tmp_path / "root" / "bots" / "demo")
+    (home / "notes.md").write_text("one\n", encoding="utf-8")
+    assert _run(_env(tmp_path, home), cwd=home).returncode == 0
+    assert _commits(home) == "2"
+    (home / "notes.md").write_text("two\n", encoding="utf-8")
+    assert _run(_env(tmp_path, home), cwd=home).returncode == 0
+    assert _commits(home) == "2"
+    assert "notes.md" in _status(home)  # kept in the work tree, not dropped
+    # past the window (0 = no window) the waiting change is committed
+    assert _run(_env(tmp_path, home, BOT_AUTO_COMMIT_EVERY_MIN="0"), cwd=home).returncode == 0
+    assert _commits(home) == "3"
+    assert _status(home) == ""
+
+
+def _sync(home, env):
+    return subprocess.run(
+        ["node", str(HARNESS / "tools" / "infra" / "memory-sync-hook.cjs")],
+        input='{"hook_event_name": "Stop", "session_id": "abcdef1234"}', capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+# The memory-sync committer obeys the same gate (its own marker, its own window).
+def test_memory_sync_holds_churn_and_honours_the_window(tmp_path):
+    home = _git_repo(tmp_path / "root" / "bots" / "demo")
+    env = _env(tmp_path, home)
+    _churn(home)
+    assert _sync(home, env).returncode == 0
+    assert _commits(home) == "1"
+    (home / "memory" / "notes.md").write_text("real\n", encoding="utf-8")
+    assert _sync(home, env).returncode == 0  # commits, then the pull fails: no origin
+    assert _commits(home) == "2"
+    assert "auto: memory sync" in subprocess.run(["git", "log", "-1", "--format=%s"], cwd=home, capture_output=True, text=True).stdout
+    (home / "memory" / "notes.md").write_text("more\n", encoding="utf-8")
+    assert _sync(home, env).returncode == 0
+    assert _commits(home) == "2"
+    env["BOT_AUTO_COMMIT_EVERY_MIN"] = "0"
+    assert _sync(home, env).returncode == 0
+    assert _commits(home) == "3"

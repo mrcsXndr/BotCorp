@@ -36,6 +36,7 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
+const gate = require('./commit_gate.cjs');
 
 function botHome() {
   return process.env.BOT_HOME || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -175,6 +176,17 @@ function safePullRebase(repoDir) {
 function commitAndPush(repoDir, message) {
   if (!hasMemoryChanges(repoDir)) {
     return { ok: true, action: 'no-changes' };
+  }
+
+  // Not for memory/metrics/ churn alone, at most once per
+  // BOT_AUTO_COMMIT_EVERY_MIN (v0.8.6 R13).
+  const d = gate.decide({
+    paths: gate.changedPaths(repoDir, [`${MEMORY_DIR_NAME}/`]),
+    sinceMin: gate.minutesSince(repoDir, 'auto: memory sync'),
+    everyMin: gate.everyMin(),
+  });
+  if (!d.commit) {
+    return { ok: true, action: `held: ${d.why}` };
   }
 
   // Stage memory changes
