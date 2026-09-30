@@ -1204,13 +1204,14 @@ function decisionSource(flags) {
   if (!['cli', 'cockpit'].includes(s)) usage('approve|reject: --source cli|cockpit');
   return s;
 }
-async function notifyRequester(entry, decision, { source, notes = [], reason = '' }) {
+async function notifyRequester(entry, decision, { source, notes = [], reason = '', admin = null }) {
   const m = /^bot:(.+)$/.exec(String(entry.requested_by || ''));
   if (!m || !HAND_NAME_RE.test(m[1]) || !fs.existsSync(botYamlPath(m[1]))) return;
   const what = `${entryText(entry)}${entry.reason ? ` (${entry.reason})` : ''}`;
+  const decider = admin ? `an admin bot (${admin})` : 'the operator';
   const text = decision === 'approved'
-    ? `BotCorp: the operator approved your request ${entry.id}: ${what}. Applied to bot.yaml and synced${notes.length ? `; ${notes.join('; ')}` : ''}. It takes effect at the next session roll. Nothing to do.`
-    : `BotCorp: the operator declined your request ${entry.id}: ${what}. Nothing was applied.${reason ? ` Reason: ${reason}.` : ''} Do not queue it again unless you are asked to.`;
+    ? `BotCorp: ${decider} approved your request ${entry.id}: ${what}. Applied to bot.yaml and synced${notes.length ? `; ${notes.join('; ')}` : ''}. It takes effect at the next session roll. Nothing to do.`
+    : `BotCorp: ${decider} declined your request ${entry.id}: ${what}. Nothing was applied.${reason ? ` Reason: ${reason}.` : ''} Do not queue it again unless you are asked to.`;
   try {
     const ib = await inboxLib();
     const item = ib.enqueue(m[1], { text, source });
@@ -1256,7 +1257,7 @@ async function cmdApprove({ pos, flags }) {
     logApproval(bot, `APPROVED ${e.id} ${entryText(e)} by ${by}`);
     out(`approved ${e.id}: ${entryText(e)} (by ${by})`);
     for (const n of notes) out(`  ${n}`);
-    await notifyRequester(e, 'approved', { source, notes });
+    await notifyRequester(e, 'approved', { source, notes, admin: who.admin });
   }
   doSync(bot);
   out(`approvals: ${readApprovals(bot).length} pending`);
@@ -1279,7 +1280,7 @@ async function cmdReject({ pos, flags }) {
   recordDecision(bot, e, 'rejected', by, reason ? { rejected_reason: reason } : {});
   logApproval(bot, `REJECTED ${e.id} ${entryText(e)} by ${by}`);
   out(`rejected ${e.id}: ${entryText(e)} (by ${by})`);
-  await notifyRequester(e, 'rejected', { source, reason });
+  await notifyRequester(e, 'rejected', { source, reason, admin: who.admin });
   return 0;
 }
 
