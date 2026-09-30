@@ -102,7 +102,7 @@ def test_statusline_shows_used_against_the_ceiling(tmp_path):
     payload = {"model": {"display_name": "Test"}, "workspace": {"current_dir": str(tmp_path)},
                "context_window": cw}
     line, status = run_statusline(tmp_path, payload, CLAUDE_CODE_AUTO_COMPACT_WINDOW="500000")
-    assert "[██████████] ctx 483K/500K (97%)" in line, line
+    assert "ctx 483K/500K (97%)" in line, line
     assert "52%" not in line
     # status.json keeps its shape: CC's context_window copied verbatim.
     assert status["context_window"] == cw
@@ -120,4 +120,4 @@ def test_statusline_reads_settings_window(tmp_path):
                "context_window": {"context_window_size": 1_000_000,
                                   "current_usage": {"input_tokens": 157_000}}}
     line, _ = run_statusline(tmp_path, payload)
-    assert "[███░░░░░░░] ctx 157K/500K (31%)" in line, line
+    assert "ctx 157K/500K (31%)" in line, line

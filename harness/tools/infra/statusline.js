@@ -1,5 +1,8 @@
 #!/usr/bin/env node
-// statusline.js — model, git, context %, cost, rate limits, TG health, harness version.
+// statusline.js — folder (git), model + effort, context, rate limits, account.
+// One convention with the TG footer (harness/tools/v2/status_footer.py format_line —
+// change both together), segments joined by " · ", empty ones dropped:
+//   mybot (main*) · Opus 5.5 high · ctx 361K/500K (72%) · 🟢 5h 12% · wk 62% ↻02:50 · acct ⇄backup
 //
 // Renders one line from Claude Code's statusline stdin JSON, and on every
 // render also writes <config_home>/botcorp/status.json — the file the daemon
@@ -36,22 +39,46 @@ function harnessVersion() {
   }
 }
 
-// TG channel health: green if the plugin's bot.pid process is alive, red otherwise.
-// Only shown for the instance that OWNS the TG poller — set BOT_HAS_TG=0 when a
-// foreign owner holds the poll slot (this instance launched without --channels).
-// Unset => legacy/unknown, keep showing it.
-function tgStatus() {
-  if (process.env.BOT_HAS_TG === '0') return '';
-  try {
-    const pidFile = path.join(CONFIG_HOME, 'channels', 'telegram', 'bot.pid');
-    const pid = parseInt(fs.readFileSync(pidFile, 'utf8').trim(), 10);
-    if (!pid) return 'TG\u{1F534}';
-    process.kill(pid, 0); // throws ESRCH if dead, EPERM if alive-but-not-ours (still alive)
-    return 'TG\u{1F7E2}';
-  } catch (e) {
-    if (e && e.code === 'EPERM') return 'TG\u{1F7E2}';
-    return 'TG\u{1F534}';
+// Effort: stdin effort.level -> env CLAUDE_CODE_EFFORT_LEVEL -> settings effortLevel
+// (the workspace's .claude/settings.json, then the config home's). Same order as
+// status_footer.py _effort().
+function effortLevel(j, dir) {
+  const e = j.effort;
+  const level = (e && typeof e === 'object' ? e.level : e) || process.env.CLAUDE_CODE_EFFORT_LEVEL;
+  if (level) return String(level).trim().toLowerCase();
+  const files = [dir && path.join(dir, '.claude', 'settings.json'), path.join(CONFIG_HOME, 'settings.json')];
+  for (const f of files) {
+    if (!f) continue;
+    try {
+      const v = JSON.parse(fs.readFileSync(f, 'utf8')).effortLevel;
+      if (v) return String(v).toLowerCase();
+    } catch (e2) {}
   }
+  return '';
+}
+
+// Account of the newest launch record in <config_home>/botcorp/launch-env.json, like
+// status_footer.py _account_status(). Empty for the bot's own token (nothing to say).
+function accountSegment() {
+  try {
+    const launches = Object.values(JSON.parse(fs.readFileSync(path.join(CONFIG_HOME, 'botcorp', 'launch-env.json'), 'utf8')).launches || {})
+      .filter(r => r && typeof r === 'object');
+    if (!launches.length) return '';
+    const newest = launches.reduce((a, b) => (String(b.at || '') > String(a.at || '') ? b : a));
+    const account = String(newest.account || '');
+    if (!account || account === 'own') return '';
+    const moved = ['failover', 'failback'].includes(newest.account_reason);
+    return `acct ${moved ? '⇄' : ''}${account}`;
+  } catch (e) {
+    return '';
+  }
+}
+
+// The one line format, mirrored by status_footer.py format_line().
+function formatLine({ folder, git, model, effort, ctx, usage, account, short }) {
+  const parts = [[folder, git].filter(Boolean).join(' '), [model, effort].filter(Boolean).join(' '), ctx];
+  if (!short) parts.push(usage, account);
+  return parts.filter(Boolean).join(' · ');
 }
 
 function pct(v) {
@@ -60,7 +87,7 @@ function pct(v) {
   return (Math.abs(n - Math.round(n)) < 0.05 ? n.toFixed(0) : n.toFixed(1)) + '%';
 }
 
-// Rate-limit segment: "<dot><5h%>/<7d%>↻HH:MM". Missing windows render as '?'
+// Rate-limit segment: "<dot> 5h <5h%> · wk <7d%> ↻HH:MM". Missing windows render as '?'
 // rather than being dropped, so the shape stays predictable; the whole segment
 // is omitted only when BOTH windows are entirely absent.
 function usageStatus(rateLimits) {
@@ -78,7 +105,7 @@ function usageStatus(rateLimits) {
     .filter(d => !isNaN(d))
     .sort((a, b) => a - b);
   const hhmm = resets.length ? resets[0].toTimeString().slice(0, 5) : '';
-  return `${dot}${pct(u5)}/${pct(u7)}` + (hhmm ? `↻${hhmm}` : '');
+  return `${dot} 5h ${pct(u5)} · wk ${pct(u7)}` + (hhmm ? ` ↻${hhmm}` : '');
 }
 
 // Where Claude Code compacts, the same rule as status_footer.py _compact_ceiling():
@@ -162,36 +189,23 @@ process.stdin.on('end', () => {
       g = s.trim() ? `(${b}*)` : `(${b})`;
     } catch (e) {}
 
-    const BAR = 10;
     const cw = j.context_window || {};
     const cu = cw.current_usage;
-    let bar;
+    let ctx;
     if (cu) {
       const used = (cu.input_tokens || 0) + (cu.cache_read_input_tokens || 0) + (cu.cache_creation_input_tokens || 0);
       const ceiling = compactCeiling(Number(cw.context_window_size) || 0);
-      const usedPct = Math.round(used / ceiling * 100);
-      const filled = Math.min(BAR, Math.round(usedPct / 100 * BAR));
-      bar = '[' + '█'.repeat(filled) + '░'.repeat(BAR - filled) + `] ctx ${fmtTokens(used)}/${fmtTokens(ceiling)} (${usedPct}%)`;
+      ctx = `ctx ${fmtTokens(used)}/${fmtTokens(ceiling)} (${Math.round(used / ceiling * 100)}%)`;
     } else {
       // No usage yet (before the first API call): the raw-window remaining %.
-      const ctxPct = Math.round(cw.remaining_percentage || 0);
-      const filled = Math.round(ctxPct / 100 * BAR);
-      bar = '[' + '█'.repeat(filled) + '░'.repeat(BAR - filled) + '] ' + ctxPct + '%';
+      ctx = `ctx ${Math.round(100 - (cw.remaining_percentage == null ? 100 : cw.remaining_percentage))}%`;
     }
 
-    const totalCost = j.cost && typeof j.cost.total_cost_usd === 'number' ? j.cost.total_cost_usd : null;
-    const costStr = totalCost != null ? `$${totalCost.toFixed(2)}` : '';
-
-    const line = [
-      m,
-      dir + (g ? ' ' + g : ''),
-      bar,
-      costStr,
-      usageStatus(j.rate_limits),
-      tgStatus(),
-      `harness v${harnessV}`,
-    ].filter(Boolean).join(' | ');
-    console.log(line);
+    const short = process.argv.includes('--short');
+    console.log(formatLine({
+      folder: path.basename(dir), git: g, model: m, effort: effortLevel(j, dir), ctx,
+      usage: usageStatus(j.rate_limits), account: accountSegment(), short,
+    }));
   } catch (e) {
     console.error(process.env.BOTCORP_DEBUG ? e.stack : '');
     console.log('...');

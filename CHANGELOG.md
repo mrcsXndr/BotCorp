@@ -42,6 +42,14 @@ versions follow SemVer.
   `effort` defaults to the tier's (an explicit id with no effort keeps
   `high`). sync writes the resolved id and effort; `GET /api/models` lists the
   tiers that are not opt-in.
+- **One status-line convention.** The terminal statusline and the TG status footer now render the
+  same line: `mybot (main*) · Opus 5.5 high · ctx 361K/500K (72%) · 🟢 5h 12% · wk 62% ↻02:50 · acct ⇄backup`.
+  Folder name and branch, model and effort (stdin/status.json, then
+  `CLAUDE_CODE_EFFORT_LEVEL`, then settings), context against the compaction
+  ceiling, usage, and the account only when it is not the bot's own token.
+  Removed from both: session id, journal count, TG dot, harness version, cost.
+  `status_footer.py --json` keeps its keys and adds `folder` and `effort`;
+  `status.json` is written as before.
 
 ## v0.8.4
 

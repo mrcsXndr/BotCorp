@@ -2,20 +2,20 @@
 """Status footer — short single-line system summary for TG messages and prompts.
 
 Pulls:
-  - bot name + git branch + dirty marker
-  - session id (short) + journal entry count
-  - context %% (from the latest session jsonl in ~/.claude/projects)
-  - tg channel health (from ~/.claude/channels/telegram/bot.pid)
+  - folder name + git branch + dirty marker
+  - model + effort (status.json / env CLAUDE_CODE_EFFORT_LEVEL / settings)
+  - context (from status.json, else the latest session jsonl in ~/.claude/projects)
   - subscription usage (from <config_home>/botcorp/status.json)
-  - harness version (from harness/.claude-plugin/plugin.json)
+  - account, only when it is not the bot's own token (launch-env.json)
 
-Output format (one line):
-  📍 my-bot (main*) · sess 20260509-... · ctx 287K/1M (29%) · TG🟢 · harness v1.0.0
+ONE convention, identical to harness/tools/infra/statusline.js (format_line here,
+formatLine there — change both together). Segments joined by " · ", empty ones dropped:
+  mybot (main*) · Opus 5.5 high · ctx 361K/500K (72%) · 🟢 5h 12% · wk 62% ↻02:50 · acct ⇄backup
 
 CLI
 ---
 status_footer.py             # full footer
-status_footer.py --short     # bot name + ctx only
+status_footer.py --short     # folder + model/effort + ctx only
 status_footer.py --json      # structured
 """
 from __future__ import annotations
@@ -88,6 +88,18 @@ def _git_status() -> str:
         return ""
 
 
+def format_line(folder: str, git: str, model: str, effort: str, ctx: str, usage: str = "",
+                account: str = "", account_reason: str = "", short: bool = False) -> str:
+    """The one status-line convention (mirrored by statusline.js formatLine)."""
+    parts = [f"{folder} {git}".strip(), f"{model} {effort}".strip(), ctx]
+    if not short:
+        parts.append(usage)
+        if account and account != "own":
+            # ⇄ = moved there by a failover or failback
+            parts.append(f"acct {'⇄' if account_reason in ('failover', 'failback') else ''}{account}")
+    return " · ".join(p for p in parts if p)
+
+
 def _session_id() -> str:
     f = REPO_ROOT / ".claude" / ".current_session_id"
     if f.exists():
@@ -140,6 +152,7 @@ def _project_hash_dir() -> Path | None:
 
 
 _LAST_MODEL = ""  # set as a side effect of the same jsonl tail read
+_LAST_DISPLAY = ""  # status.json model.display_name, when that was the source
 
 
 def _context_window() -> tuple[int, int, float]:
@@ -151,7 +164,8 @@ def _context_window() -> tuple[int, int, float]:
     the entry's model id in _LAST_MODEL (the live session model, which can
     differ from the settings.json pin).
     """
-    global _LAST_MODEL
+    global _LAST_MODEL, _LAST_DISPLAY
+    _LAST_DISPLAY = ""
     # Preferred source: the statusline's status.json (CC 2.1.281 stdin carries
     # context_window.current_usage + context_window_size; docs/cc-compat.md i).
     # The transcript tail below is the fallback for a session with no statusline
@@ -165,6 +179,7 @@ def _context_window() -> tuple[int, int, float]:
             used = int(cu.get("input_tokens") or 0) + int(cu.get("cache_read_input_tokens") or 0) \
                 + int(cu.get("cache_creation_input_tokens") or 0)
             _LAST_MODEL = (st.get("model") or {}).get("id") or _LAST_MODEL
+            _LAST_DISPLAY = str((st.get("model") or {}).get("display_name") or "")
             ceiling = _compact_ceiling(size)
             return (used, ceiling, max(0.0, 1.0 - used / ceiling))
     except Exception:
@@ -230,24 +245,41 @@ def _context_window() -> tuple[int, int, float]:
 
 
 def _model_short() -> str:
-    """'claude-opus-4-8' -> 'Opus4.8', 'claude-fable-5' -> 'Fable5' (+ effort)."""
-    mid = _LAST_MODEL
+    """Display name: status.json display_name minus "Claude ", else derived from
+    the id ('claude-opus-5-5' -> 'Opus 5.5', 'claude-fable-5-1' -> 'Fable 5.1')."""
+    if _LAST_DISPLAY:
+        return _LAST_DISPLAY.removeprefix("Claude ").strip()
+    mid = _LAST_MODEL.split("[")[0]
     if not mid:
         return ""
-    core = mid.replace("claude-", "")
-    parts = core.split("-")
+    parts = mid.replace("claude-", "").split("-")
     name = parts[0].capitalize()
-    nums = [p for p in parts[1:] if p.isdigit()][:2]  # drop date suffixes like 20251001
-    ver = ".".join(nums)
-    label = f"{name}{ver}" if ver else name
+    nums = [p for p in parts[1:] if p.isdigit() and len(p) < 4][:2]  # drop date suffixes like 20251001
+    return f"{name} {'.'.join(nums)}" if nums else name
+
+
+def _effort() -> str:
+    """status.json effort.level (fresh) -> env CLAUDE_CODE_EFFORT_LEVEL -> settings effortLevel."""
     try:
-        settings = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text(encoding="utf-8"))
-        effort = (settings.get("effortLevel") or "").capitalize()
-        if effort:
-            label += f" {effort}"
+        st = json.loads(STATUS_JSON.read_text(encoding="utf-8"))
+        if time.time() - float(st.get("ts") or 0) < 600:
+            e = st.get("effort")
+            level = e.get("level") if isinstance(e, dict) else e
+            if level:
+                return str(level).lower()
     except Exception:
         pass
-    return label
+    env = os.environ.get("CLAUDE_CODE_EFFORT_LEVEL")
+    if env:
+        return env.strip().lower()
+    for f in (REPO_ROOT / ".claude" / "settings.json", config_home() / "settings.json"):
+        try:
+            level = json.loads(f.read_text(encoding="utf-8")).get("effortLevel")
+            if level:
+                return str(level).lower()
+        except Exception:
+            continue
+    return ""
 
 
 def _fmt_tokens(n: int) -> str:
@@ -304,7 +336,7 @@ def _usage_status() -> str:
             except Exception:
                 continue
         hhmm = min(resets).strftime("%H:%M") if resets else ""
-        return f"{dot}5h {p(u5)} · wk {p(u7)}" + (f" ↻{hhmm}" if hhmm else "")
+        return f"{dot} 5h {p(u5)} · wk {p(u7)}" + (f" ↻{hhmm}" if hhmm else "")
     except Exception:
         return ""
 
@@ -363,6 +395,7 @@ def _harness_version() -> str:
 
 def build_footer(short: bool = False, as_json: bool = False) -> str:
     name = bot_name()
+    folder = REPO_ROOT.name
     git = _git_status()
     sess = _session_id()
     sess_short = sess[-8:] if sess else ""
@@ -370,6 +403,7 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
     used, mx, rem = _context_window()  # also stashes _LAST_MODEL
     pct_used = round((used / mx) * 100) if mx else 0
     model = _model_short()
+    effort = _effort()
     usage = _usage_status()
     account, account_reason = _account_status()
     tg = _tg_status()
@@ -378,6 +412,7 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
     if as_json:
         return json.dumps({
             "bot_name": name,
+            "folder": folder,
             "git": git,
             "session_id": sess,
             "journal_entries": jcount,
@@ -385,6 +420,7 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
             "context_max": mx,
             "context_pct_used": pct_used,
             "model": model,
+            "effort": effort,
             "usage": usage,
             "account": account,
             "account_reason": account_reason,
@@ -392,23 +428,8 @@ def build_footer(short: bool = False, as_json: bool = False) -> str:
             "harness_version": harness_ver,
         })
 
-    parts = [f"📍 {name} {git}".strip()]
-    if model:
-        parts.append(model)
-    if not short:
-        if sess_short:
-            parts.append(f"sess {sess_short} ({jcount}j)")
-    parts.append(f"ctx {_fmt_tokens(used)}/{_fmt_tokens(mx)} ({pct_used}%)")
-    if usage:
-        parts.append(usage)
-    if account:
-        # "acct own" / "acct spare" / "acct ⇄spare" (⇄ = moved there by a failover or failback)
-        parts.append(f"acct {'⇄' if account_reason in ('failover', 'failback') else ''}{account}")
-    if not short:
-        parts.append(tg)
-        if harness_ver:
-            parts.append(harness_ver)
-    return " · ".join(parts)
+    return format_line(folder, git, model, effort, f"ctx {_fmt_tokens(used)}/{_fmt_tokens(mx)} ({pct_used}%)",
+                       usage, account, account_reason, short=short)
 
 
 def main() -> int:
