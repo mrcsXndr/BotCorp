@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { useCockpit, useUpdateAction, useUpdates } from '../../api/queries';
 import { Button, Disclosure, EmptyState, SkeletonRow, toast, useConfirm } from '../../ui';
 import { ScreenHeader } from '../../app/ScreenHeader';
-import { primaryTag, releaseStatus, scrub, type Release } from '../../lib/updates';
+import { newestFirst, primaryTag, releaseStatus, scrub, type Release } from '../../lib/updates';
 import { ago } from '../../lib/settings';
 import { COPY, t } from '../../lib/copy';
 
@@ -77,27 +77,32 @@ export function UpdatesScreen() {
     } catch (e) { toast((e as Error).message, 'bad'); }
   };
   const cur = view.current;
-  const primary = primaryTag(view.available);
+  const available = newestFirst(view.available);
+  const history = newestFirst(view.history);
+  const primary = primaryTag(available);
+  // one list, newest at the top: Newer, then the installed release, then History
   return (
     <div className="mx-auto w-full max-w-[720px] pb-8">
       <ScreenHeader>{COPY.title.updates}</ScreenHeader>
-      <Block card installed expanded onAction={onAction}
-        r={cur ?? { tag: view.installed ? `v${String(view.installed).replace(/^v/, '')}` : '' } as Release}>
-        {engine && (
-          <p data-engine className="m-0 mt-2 text-sm text-text-2">
-            {COPY.row.engine} · <span className="num">{COPY.row.engineName} {engine}</span>
-          </p>
-        )}
-      </Block>
-      <section data-newer aria-label={COPY.row.newer} className="mt-5">
-        <h2 className="m-0 px-4 pb-1 text-sm font-semibold text-text-2">{COPY.row.newer}<span className="num ml-1.5 font-normal text-text-3">{view.available.length}</span></h2>
-        {view.available.length ? view.available.map((r, i) => <Block key={r.tag} card r={r} primary={r.tag === primary} expanded={i === 0} onAction={onAction} />)
+      <section data-newer aria-label={COPY.row.newer}>
+        <h2 className="m-0 px-4 pb-1 text-sm font-semibold text-text-2">{COPY.row.newer}<span className="num ml-1.5 font-normal text-text-3">{available.length}</span></h2>
+        {available.length ? available.map((r, i) => <Block key={r.tag} card r={r} primary={r.tag === primary} expanded={i === 0} onAction={onAction} />)
           : <EmptyState inline>{COPY.status.upToDate}</EmptyState>}
       </section>
-      {view.history.length > 0 && (
+      <div className="mt-5">
+        <Block card installed expanded onAction={onAction}
+          r={cur ?? { tag: view.installed ? `v${String(view.installed).replace(/^v/, '')}` : '' } as Release}>
+          {engine && (
+            <p data-engine className="m-0 mt-2 text-sm text-text-2">
+              {COPY.row.engine} · <span className="num">{COPY.row.engineName} {engine}</span>
+            </p>
+          )}
+        </Block>
+      </div>
+      {history.length > 0 && (
         <section data-history className="mt-4 px-4">
-          <Disclosure title={COPY.row.history} meta={<span className="num">{view.history.length}</span>}>
-            <div className="-ml-6">{view.history.map((r) => <Block key={r.tag} r={r} onAction={onAction} />)}</div>
+          <Disclosure title={COPY.row.history} meta={<span className="num">{history.length}</span>}>
+            <div className="-ml-6">{history.map((r) => <Block key={r.tag} r={r} onAction={onAction} />)}</div>
           </Disclosure>
         </section>
       )}

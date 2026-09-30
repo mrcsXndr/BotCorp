@@ -7,7 +7,7 @@ import { MemoryRouter } from 'react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { UpdatesScreen } from './UpdatesScreen';
 import { MotionRoot, ToastRegion } from '../../ui';
-import { primaryTag, releaseStatus, scrub } from '../../lib/updates';
+import { newestFirst, primaryTag, releaseStatus, scrub } from '../../lib/updates';
 
 const day = (n: number) => new Date(Date.now() - n * 864e5).toISOString();
 const REL = (tag: string, extra: object = {}) => ({ tag, sha: 'deadbeef0f00', date: day(1), status: 'pending', summary: `Summary of ${tag}.`, notes: [{ title: 'What changed', text: `Notes for ${tag} at commit 3fa9c2e1.` }], actions: [], ...extra });
@@ -21,10 +21,10 @@ const UPDATES = {
 
 type Call = { method: string; url: string; body: unknown };
 const calls: Call[] = [];
-function serve() {
+function serve(updates: object = UPDATES) {
   calls.length = 0;
   const routes: Record<string, [number, unknown]> = {
-    'GET /api/updates': [200, UPDATES], 'GET /api/cockpit': [200, { exposure: 'access', cc: { pinned: '2.3.1', candidate: { version: '2.3.2', status: 'rejected' } } }],
+    'GET /api/updates': [200, updates], 'GET /api/cockpit': [200, { exposure: 'access', cc: { pinned: '2.3.1', candidate: { version: '2.3.2', status: 'rejected' } } }],
     'POST /api/updates/v0.8.5/rollback': [200, { ok: true, code: 0 }], 'POST /api/updates/v0.10.0/apply': [200, { ok: true, code: 0 }],
   };
   vi.stubGlobal('fetch', vi.fn(async (url: string, init: RequestInit = {}) => {
@@ -55,6 +55,19 @@ it('cards in releaseView order; one primary; no build id, no transport word', as
   expect(text).toContain('comes with v0.10.0');
   expect(document.querySelector('[data-engine]')!.textContent).toBe('Engine · Claude Code 2.3.1');
   expect(text).not.toMatch(/2\.3\.2|rejected|canary/i);   // a held-back candidate is an Inbox item, not this page
+});
+
+it('newest first, top to bottom: Newer, the installed release, then History, each descending by version', async () => {
+  serve({ ...UPDATES, installed: '0.9.0', current: REL('v0.9.0', { view: 'installed' }),
+    available: [REL('v0.9.1', { view: 'available', actions: ['apply'] }), REL('v0.10.0', { view: 'available', actions: ['apply'] }), REL('v0.9.2', { view: 'available', actions: ['apply'] })],
+    history: [REL('v0.7.0', { view: 'history', actions: ['rollback'] }), REL('v0.8.5', { view: 'history', actions: ['rollback'] }), REL('v0.8.10', { view: 'history', actions: ['rollback'] })] });
+  mount();
+  await screen.findByText('v0.10.0');
+  const tags = [...document.querySelectorAll('[data-release], [data-installed]')]
+    .map((e) => (e as HTMLElement).dataset.release ?? e.querySelector('h3')!.textContent);
+  expect(tags).toEqual(['v0.10.0', 'v0.9.2', 'v0.9.1', 'v0.9.0', 'v0.8.10', 'v0.8.5', 'v0.7.0']);
+  expect(newestFirst([{ tag: 'v0.9.0' }, { tag: 'v0.10.0' }, { tag: 'v0.9.10' }, { tag: 'v0.2.7', date: '2026-01-02' }, { tag: 'v0.2.7', date: '2026-03-01' }].map((r) => r)).map((r) => r.tag))
+    .toEqual(['v0.10.0', 'v0.9.10', 'v0.9.0', 'v0.2.7', 'v0.2.7']);
 });
 
 it('Roll back exists only in History and asks first', async () => {

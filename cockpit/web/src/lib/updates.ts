@@ -11,6 +11,18 @@ export interface Release {
 const SHA_LIKE = /\b[0-9a-f]{7,40}\b/gi;
 export const scrub = (s: unknown): string => String(s ?? '').replace(SHA_LIKE, '').replace(/[ \t]{2,}/g, ' ').trim();
 
+// Newest first by version (a date breaks a tie), whatever order the server sent:
+// Newer and History both read top-down from the latest release.
+const semver = (tag: string): number[] => (/(\d+)\.(\d+)\.(\d+)/.exec(tag) || [, 0, 0, 0]).slice(1).map(Number);
+export function newestFirst<T extends { tag: string; date?: string | null }>(list: readonly T[]): T[] {
+  const when = (r: T) => { const v = Date.parse(String(r.date ?? '')); return Number.isFinite(v) ? v : 0; };
+  return [...list].sort((a, b) => {
+    const x = semver(a.tag), y = semver(b.tag);
+    for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return y[i] - x[i];
+    return when(b) - when(a);
+  });
+}
+
 // One status word or two (never the reason a release failed: it can quote a build).
 export function releaseStatus(r: Release): { text: string; tone: 'warn' | 'bad' | 'idle' } | null {
   switch (r.view) {
