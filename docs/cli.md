@@ -34,7 +34,13 @@ Conventions:
 Creates a bot from `templates/bot/`. Default name = first free `bot-1`,
 `bot-2`, ... A bot folder is a PLAIN folder that BotCorp's `.gitignore`
 keeps out of the repo; `new` runs no `git init` (see `export` / `import` /
-`backup` for moving and versioning one). In order:
+`backup` for moving and versioning one). From a bot session, `new`,
+`import` and `adopt` (not `adopt --dry-run`) create nothing: the request
+waits in the requesting bot's own approval queue (op `new|import|adopt`,
+path = the new bot's name; a token given on stdin is never queued), and
+`botcorp approve <requester> <id>` runs it. The requesting bot may then
+`archive` that bot as long as it was never started
+(`state/<bot>.origin.json`); every other archive is the operator's. In order:
 
 1. **the feature catalogue.** On a terminal (stdin is a TTY and `--yes` is
    absent) it shows one numbered checklist, defaults pre-marked: modules

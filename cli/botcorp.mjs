@@ -1209,7 +1209,9 @@ async function notifyRequester(entry, decision, { source, notes = [], reason = '
   const what = `${entryText(entry)}${entry.reason ? ` (${entry.reason})` : ''}`;
   const decider = admin ? `an admin bot (${admin})` : 'the operator';
   const text = decision === 'approved'
-    ? `BotCorp: ${decider} approved your request ${entry.id}: ${what}. Applied to bot.yaml and synced${notes.length ? `; ${notes.join('; ')}` : ''}. It takes effect at the next session roll. Nothing to do.`
+    ? BOT_VERBS.has(entry.op)
+      ? `BotCorp: ${decider} approved your request ${entry.id}: ${what}. bots/${entry.path} exists now${notes.length ? `; ${notes.join('; ')}` : ''}. Nothing to do.`
+      : `BotCorp: ${decider} approved your request ${entry.id}: ${what}. Applied to bot.yaml and synced${notes.length ? `; ${notes.join('; ')}` : ''}. It takes effect at the next session roll. Nothing to do.`
     : `BotCorp: ${decider} declined your request ${entry.id}: ${what}. Nothing was applied.${reason ? ` Reason: ${reason}.` : ''} Do not queue it again unless you are asked to.`;
   try {
     const ib = await inboxLib();
@@ -1248,7 +1250,7 @@ async function cmdApprove({ pos, flags }) {
   if (!pick.length) { if (flags.all) { out(`approvals: ${bot} queue empty`); return 0; } fail(`approve: no pending entry ${id} for ${bot}`); }
   if (who.admin) pick = adminDecidable(who.admin, bot, pick, 'approve', !flags.all);
   for (const e of pick) {
-    const notes = applyApproved(bot, e);
+    const notes = BOT_VERBS.has(e.op) ? await applyBotVerb(e) : applyApproved(bot, e);
     // out of the queue as soon as it is applied: a later entry that fails
     // cannot strand this one as pending (re-read: a bot may queue meanwhile)
     writeApprovals(bot, readApprovals(bot).filter((x) => x.id !== e.id));
@@ -1288,6 +1290,7 @@ async function cmdReject({ pos, flags }) {
 function short(v) { const s = JSON.stringify(v === undefined ? null : v); return s.length > 80 ? s.slice(0, 77) + '...' : s; }
 function approvalDiff(cfg, e) {
   const op = e.op || 'set';
+  if (BOT_VERBS.has(op)) return `${op} bot ${e.path}`;
   if (op === 'remove') return `${e.path}: - ${e.value}`;
   if (op === 'append') {
     const items = [].concat(e.value);
@@ -2111,7 +2114,7 @@ function printCatalogue(name) {
   out(`                board: ${cfg.harness.modules.board ? 'on' : 'off'}  hub: ${cfg.harness.modules.hub ? 'on' : 'off'}  backup: ${cfg.backup.git_remote ? 'on (' + cfg.backup.git_remote + ')' : 'off'}  access: machine-wide (${fs.existsSync(path.join(BOTCORP_HOME, 'access.json')) ? 'cockpit exposed' : 'loopback-only'})`);
 }
 
-async function cmdNew({ flags }) {
+async function cmdNew({ flags, approved = false }) {
   const name = flags.name ? String(flags.name) : firstFreeName();
   if (!NAME_RE.test(name)) usage(`bad bot name '${name}' (lowercase, digits, hyphens; max 32)`);
   if (fs.existsSync(botHome(name))) fail(`new: bots/${name} already exists`);
@@ -2121,6 +2124,7 @@ async function cmdNew({ flags }) {
   // --service manual = a chat: the cockpit or the CLI starts it, the daemon never cold-starts it
   const service = flags.service === undefined ? DEFAULTS.harness.service : String(flags.service);
   if (!['daemon', 'manual'].includes(service)) usage(`new: --service daemon | manual (got '${service}')`);
+  if (!approved && !isOperatorContext()) return queueBotVerb('new', name, { flags: { ...flags, name } }, 'creates a new bot');
   // --account: the bot runs on a registered account's token from the start (no oauth
   // prompt). Choosing an account for a bot is the operator's (as `accounts use`).
   const account = flags.account === undefined ? '' : String(flags.account);
@@ -2210,13 +2214,72 @@ async function cmdNew({ flags }) {
   return rc;
 }
 
-// `archive <bot>` (operator only): a chat (harness.service: manual) leaves the
+// ---- new / import / adopt from a bot: queued like a widening config change ------------------
+// A bot session never creates a bot on its own. The request waits in the
+// requesting bot's own queue (state/<requester>.approvals.json, op new|import|adopt,
+// path = the new bot's name) until the operator, or an admin bot, approves it;
+// approving runs the verb then. The operator's terminal and the cockpit apply at
+// once. The flags are kept minus the stdin ones: a token never sits in the queue.
+const BOT_VERBS = new Set(['new', 'import', 'adopt']);
+const originPath = (bot) => path.join(STATE_DIR, `${bot}.origin.json`);
+
+function queueBotVerb(verb, name, { pos = [], flags }, reason) {
+  const requester = process.env.BOT_NAME || ancestorBotSession();
+  // no bot of this runtime to wait in the queue of: the operator's verb only
+  if (!requester || !HAND_NAME_RE.test(requester) || !fs.existsSync(botYamlPath(requester))) requireOperator(verb);
+  const kept = Object.fromEntries(Object.entries(flags).filter(([k]) => !['oauth-stdin', 'yes', 'json', 'requested-by'].includes(k)));
+  const q = readApprovals(requester);
+  const dup = q.find((e) => e.op === verb && e.path === name);
+  if (dup) {
+    out(`not applied: ${verb} ${name} ${reason}`);
+    out(`already queued for operator approval: botcorp approve ${requester} ${dup.id}`);
+    if (flags.json) outJson({ applied: false, queued: dup, duplicate: true });
+    return 0;
+  }
+  const entry = { id: crypto.randomBytes(3).toString('hex'), ts: new Date().toISOString(), op: verb, path: name, value: { pos, flags: kept }, requested_by: requestedBy(flags), reason: `${reason} (${name}; a bot may not create bots on its own)` };
+  q.push(entry);
+  writeApprovals(requester, q);
+  logApproval(requester, `QUEUED ${entry.id} ${entryText(entry)} by ${entry.requested_by} (${entry.reason})`);
+  out(`not applied: ${verb} ${name} ${reason}`);
+  out(`queued for operator approval: botcorp approve ${requester} ${entry.id}`);
+  if (flags.json) outJson({ applied: false, queued: entry });
+  return 0;
+}
+
+// Approving runs the verb as it was asked (never prompting for the checklist);
+// a bot that asked for it is recorded as the new bot's creator, which is what
+// lets it archive that bot later (cmdArchive).
+async function applyBotVerb(e) {
+  const v = isObj(e.value) ? e.value : {};
+  const args = { pos: [e.op, ...(Array.isArray(v.pos) ? v.pos : [])], flags: { ...(isObj(v.flags) ? v.flags : {}), yes: true }, approved: true };
+  const rc = await ({ new: cmdNew, import: cmdImport, adopt: cmdAdopt })[e.op](args);
+  if (!fs.existsSync(botYamlPath(e.path))) fail(`approve: ${e.op} ${e.path} did not create the bot (exit ${rc}); left in the queue`);
+  if (/^bot:/.test(String(e.requested_by || ''))) writeJsonAtomic(originPath(e.path), { created_by: e.requested_by, via: e.op, request: e.id, at: new Date().toISOString() });
+  return rc ? [`${e.op} exited ${rc} after creating ${e.path}; see above`] : [];
+}
+
+// A bot archives a bot only when it asked for that bot (state/<bot>.origin.json)
+// and the bot was never started (no launch record, no launches.log).
+function ownUnstartedBot(bot) {
+  const me = process.env.BOT_NAME || '';
+  if (!me || !HAND_NAME_RE.test(me)) return false;
+  const want = readLaunchId(me);
+  if (want && process.env.BOTCORP_LAUNCH_ID !== want) return false;
+  const origin = readJson(originPath(bot));
+  if (!origin || origin.created_by !== `bot:${me}`) return false;
+  const st = botState(bot);
+  if (st.launch || st.claude_pid || st.session_id || ptyLive(bot)) return false;
+  return !fs.existsSync(path.join(BOTCORP_HOME, 'logs', bot, 'launches.log'));
+}
+
+// `archive <bot>` (operator only, or the bot that asked for it while it was
+// never started): a chat (harness.service: manual) leaves the
 // bot list. It is stopped if it runs, then its whole folder (config home and
 // vault included) moves to <rt>/archive/<name>-<stamp>/; nothing is deleted.
 // A pinned bot (service: daemon) is refused, exit 2.
 async function cmdArchive({ pos }) {
-  requireOperator('archive');
   const bot = requireBot(pos[1]);
+  if (!isOperatorContext() && !ownUnstartedBot(bot)) requireOperator('archive');
   let cfg;
   try { cfg = loadBotYaml(botYamlPath(bot)); } catch (e) { fail(`archive: ${e.message}`); }
   if (cfg.harness.service !== 'manual') fail(`archive: ${bot} is kept running by the daemon (harness.service: ${cfg.harness.service}); only a chat (service: manual) is archived`, 2);
@@ -2233,6 +2296,7 @@ async function cmdArchive({ pos }) {
     fs.rmSync(botHome(bot), { recursive: true, force: true });
   }
   try { fs.unlinkSync(pausedPath(bot)); } catch {}
+  try { fs.unlinkSync(originPath(bot)); } catch {}
   out(`archived ${bot} -> ${dest}`);
   return 0;
 }
@@ -2291,7 +2355,7 @@ function cmdExport({ pos, flags }) {
   return 0;
 }
 
-function cmdImport({ pos, flags }) {
+function cmdImport({ pos, flags, approved = false }) {
   const zip = pos[1] ? path.resolve(pos[1]) : usage('import <zip> [--as <name>]');
   if (!fs.existsSync(zip)) fail(`import: ${zip} not found`);
   const { buf, entries } = zipList(zip);
@@ -2304,6 +2368,7 @@ function cmdImport({ pos, flags }) {
   const name = flags.as ? String(flags.as) : oldName;
   if (!NAME_RE.test(name)) usage(`bad bot name '${name}' (lowercase, digits, hyphens; max 32)`);
   if (fs.existsSync(botHome(name))) fail(`import: bots/${name} already exists (choose --as <other-name> or remove it first)`);
+  if (!approved && !isOperatorContext()) return queueBotVerb('import', name, { pos: [zip], flags: { ...flags, as: name } }, 'imports a bot from a zip');
   const written = zipExtract(zip, botHome(name), (rel) => {
     // never, even from a hand-made zip: the vault, a repo, any config home. The
     // file system is case-insensitive and drops trailing dots and spaces, so
@@ -2497,12 +2562,16 @@ function adoptReal(src, name, flags) {
   return 0;
 }
 
-function cmdAdopt({ pos, flags }) {
+function cmdAdopt({ pos, flags, approved = false }) {
   const src = pos[1] ? path.resolve(pos[1]) : usage('adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]');
   const name = flags.as ? String(flags.as) : usage('adopt: --as <name> required');
   if (!NAME_RE.test(name)) usage(`bad bot name '${name}'`);
   if (!fs.existsSync(src) || !fs.statSync(src).isDirectory()) fail(`adopt: ${src} is not a directory`);
   if (path.resolve(src) === path.resolve(botHome(name))) fail(`adopt: ${src} already is bots/${name}`);
+  if (!flags['dry-run'] && !approved && !isOperatorContext()) {
+    if (fs.existsSync(botHome(name))) fail(`adopt: bots/${name} already exists (choose --as <other-name> or remove it first)`);
+    return queueBotVerb('adopt', name, { pos: [src], flags }, 'adopts an existing bot folder');
+  }
   if (!flags['dry-run']) return adoptReal(src, name, flags);
   if (fs.existsSync(botHome(name))) out(`note: bots/${name} already exists; the real adopt would refuse`);
 
