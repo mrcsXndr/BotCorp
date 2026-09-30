@@ -30,6 +30,14 @@ Behaviour:
     SELF-RESUMED / STALE otherwise. May still read transcript mtime, purely
     to detect a session that already came back on its own.
   - `--probe-only`: report current state, no send, no stamp.
+  - `warn`: a pre-warning BEFORE the block. When the 5h or 7d window in the
+    statusline's <config_home>/botcorp/status.json is at WARN_PCT (98%) or
+    more, send ONE `tg_send.py --alert` per window (keyed on that window's
+    reset instant, with limit_window's tolerance), so alert triage decides
+    what the operator sees. Prints WARN <window> <pct> or OK. Meant for the
+    daemon tick; not wired yet (tick.ps1 changes wait for the next release):
+    `python <harness>/tools/v2/usage_monitor.py warn`, once per tick, next to
+    `--resume-check` in Invoke-UsageResume.
 
 STRICTLY FAIL-OPEN: any exception -> log to stderr + exit 0. Never breaks the tick.
 """
@@ -54,6 +62,12 @@ TRANSCRIPT_DIR = os.environ.get(
 )
 STATE = str(runtime_root() / "state" / bot_name() / "usage_limit_state.json")
 TG_SEND = str(harness_root() / "tools" / "tg" / "tg_send.py")
+# The statusline's copy of Claude Code's rate_limits (statusline.js writes it
+# every render); older than STATUS_MAX_AGE_S is not trusted, as in status_footer.
+STATUS_JSON = str(config_home() / "botcorp" / "status.json")
+STATUS_MAX_AGE_S = 30 * 60
+WARN_PCT = 98.0  # the hard budget gate in rules/models.md
+WINDOWS = (("five_hour", "5h"), ("seven_day", "7d"))
 
 # The reset phrase out of a StopFailure error message, e.g.
 # "...resets 7:10pm (Europe/Stockholm)".
@@ -483,10 +497,112 @@ def cmd_record_notification(dry_run: bool) -> int:
     return 0
 
 
+def _reset_epoch(value) -> float | None:
+    """A rate-limit resets_at (unix seconds, or an ISO string) as unix seconds."""
+    try:
+        if isinstance(value, (int, float)):
+            return float(value)
+        s = str(value).strip()
+        if s.replace(".", "", 1).isdigit():
+            return float(s)
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def read_rate_limits() -> tuple[dict, float | None]:
+    """({window: (used_pct, reset_epoch|None)}, status.json age in seconds).
+    ({}, age) when status.json is missing, stale or has no rate_limits."""
+    try:
+        s = json.load(open(STATUS_JSON, encoding="utf-8"))
+        age = datetime.now(timezone.utc).timestamp() - float(s.get("ts") or 0)
+    except Exception:
+        return {}, None
+    if age > STATUS_MAX_AGE_S:
+        return {}, age
+    out = {}
+    for key, _label in WINDOWS:
+        w = (s.get("rate_limits") or {}).get(key) or {}
+        try:
+            out[key] = (float(w["used_percentage"]), _reset_epoch(w.get("resets_at")))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out, age
+
+
+def _local_hhmm(epoch: float | None) -> str:
+    return datetime.fromtimestamp(epoch).astimezone().strftime("%a %H:%M") if epoch else "?"
+
+
+def cmd_warn(dry_run: bool) -> int:
+    """At WARN_PCT or more of a window: one --alert per window, then quiet."""
+    limits, _age = read_rate_limits()
+    state = load_state()
+    warned = state.get("warned") if isinstance(state.get("warned"), dict) else {}
+    hits = []
+    for key, label in WINDOWS:
+        if key not in limits:
+            continue
+        pct, reset = limits[key]
+        if pct < WARN_PCT:
+            continue
+        hits.append(f"{label} {pct:.0f}%")
+        if reset is None:
+            _log(f"{label} at {pct:.0f}% but no resets_at: cannot tell the window apart, not warning")
+            continue
+        prev = warned.get(key)
+        if isinstance(prev, (int, float)) and abs(prev - reset) <= limit_window.TOLERANCE_MIN * 60:
+            continue  # this window was already warned about
+        text = (f"Claude usage at {pct:.0f}% of the {label} window (resets {_local_hhmm(reset)}). "
+                f"The account blocks at 100%: finish the work in flight and start nothing large "
+                f"(rules/models.md budget gates).")
+        if dry_run:
+            print("[DRY-RUN] would alert: " + text)
+            continue
+        try:
+            r = subprocess.run([sys.executable, TG_SEND, "--alert", text], capture_output=True, text=True,
+                               timeout=30, env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+            if r.returncode != 0:
+                _log(f"tg_send --alert failed rc={r.returncode} {r.stderr[:200]}")
+                continue
+        except Exception as e:
+            _log(f"tg_send --alert exception: {e}")
+            continue
+        warned[key] = reset
+        state["warned"] = warned
+        try:
+            save_state(state)
+        except Exception as e:
+            _log(f"state save failed: {e}")
+    print("WARN " + ", ".join(hits) if hits else "OK")
+    return 0
+
+
+def usage_summary() -> str:
+    """The /usage reply: both windows, the block state, how fresh the reading is."""
+    limits, age = read_rate_limits()
+    lines = ["**Claude usage**"]
+    if not limits:
+        why = "no status.json yet" if age is None else (
+            f"status.json is {age / 60:.0f} min old (stale)" if age > STATUS_MAX_AGE_S else "no rate_limits in status.json")
+        lines.append(f"no current reading: {why}")
+    for key, label in WINDOWS:
+        if key in limits:
+            pct, reset = limits[key]
+            flag = " (at the warn line)" if pct >= WARN_PCT else ""
+            lines.append(f"{label}: {pct:.0f}%, resets {_local_hhmm(reset)}{flag}")
+    if limits and age is not None:
+        lines.append(f"read {age / 60:.0f} min ago")
+    st = load_state()
+    if st.get("blocked_until") and not st.get("resumed_for"):
+        lines.append(f"blocked until {st['blocked_until']} (auto-resume armed)")
+    return "\n".join(lines)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("cmd", nargs="?", default=None,
-                    choices=["record-block", "record-notification"],
+                    choices=["record-block", "record-notification", "warn"],
                     help="hook-fed subcommand; omit for --probe-only/--resume-check")
     ap.add_argument("--stdin", action="store_true",
                     help="read the hook payload JSON from stdin (record-block/record-notification; the default)")
@@ -502,6 +618,8 @@ def main() -> int:
         return cmd_record_block(args.dry_run)
     if args.cmd == "record-notification":
         return cmd_record_notification(args.dry_run)
+    if args.cmd == "warn":
+        return cmd_warn(args.dry_run)
 
     state = load_state()
 
@@ -521,7 +639,7 @@ def main() -> int:
             _log(f"banner scan failed (fail-open): {e}")
         return resume_check(state, args.dry_run)
 
-    print("usage_monitor: nothing to do — pass record-block, record-notification, "
+    print("usage_monitor: nothing to do — pass record-block, record-notification, warn, "
           "--probe-only, or --resume-check", file=sys.stderr)
     return 0
 

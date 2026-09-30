@@ -5,7 +5,7 @@
 #   1. Parse the Claude Code UserPromptSubmit JSON payload from stdin.
 #   2. TG SLASH-COMMAND INTERCEPT — a local "/cmd" prompt, or a Telegram
 #      message whose body is a read-only command (/status /journal /timeline
-#      /board /costs /help), is handled by tools/v2/tg_commands.py and blocked
+#      /board /costs /usage /help), is handled by tools/v2/tg_commands.py and blocked
 #      from the main thread (exit 2). The reply goes straight back to Telegram.
 #   3. INBOUND SIZE GUARD — stash huge pastes and redirect the bot's attention
 #      instead of polluting context inline.
@@ -133,7 +133,7 @@ elif [ "${TG_BODY:0:1}" = "/" ] && [[ "${TG_BODY//$'\r'/}" != *$'\n'* ]]; then
   # so "/board" + newline + "move x Done" would pass as a read-only /board
   read -r TG_CMD TG_ARG1 _ <<< "$TG_BODY"
   case "${TG_CMD,,}" in
-    /status|/journal|/timeline|/costs|/help) CMD_TEXT="$TG_BODY" ;;
+    /status|/journal|/timeline|/costs|/usage|/help) CMD_TEXT="$TG_BODY" ;;
     /board) case "${TG_ARG1,,}" in ""|show|render|list|help) CMD_TEXT="$TG_BODY" ;; esac ;;
   esac
 fi

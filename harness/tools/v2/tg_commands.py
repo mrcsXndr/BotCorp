@@ -17,7 +17,8 @@ Supported commands:
   /compact           — distill journal → timeline + checkpoint marker
   /board             — the task board, live
   /costs [Nd]        — per-session cost rollup
-  /update            — update Claude Code; self-restart the bot if a new version landed
+  /usage             — Claude usage: 5h / 7d windows, resets, block state
+  /update           — update Claude Code; self-restart the bot if a new version landed
   /help              — list commands
 
 Bot-level commands: <BOT_HOME>/tools/tg_commands_local.py exporting a
@@ -46,7 +47,7 @@ HARNESS_ROOT = harness_root()
 PY_EXE = sys.executable or "python"
 
 KNOWN = {"/status", "/journal", "/timeline", "/compact", "/board",
-         "/costs", "/update", "/help"}
+         "/costs", "/usage", "/update", "/help"}
 
 
 def _send_tg(text: str, reply_to: str | None = None) -> int:
@@ -208,6 +209,17 @@ def cmd_costs(args: list[str], reply_to: str | None) -> int:
     return _send_tg(body, reply_to)
 
 
+def cmd_usage(args: list[str], reply_to: str | None) -> int:
+    """Read-only: the statusline's rate-limit reading and the recorded block state."""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        from usage_monitor import usage_summary
+        body = usage_summary()
+    except Exception as e:
+        body = f"usage: failed ({e})"
+    return _send_tg(body, reply_to)
+
+
 _BOARD_MUTATORS = {"move", "set", "sync"}
 
 
@@ -291,6 +303,7 @@ def cmd_help(args: list[str], reply_to: str | None) -> int:
         "• `/compact` — distill journal → timeline + checkpoint\n"
         "• `/board` — the GitHub Projects task board, live (edit with `/board help`)\n"
         "• `/costs [Nd]` — per-session cost rollup (optional last-N-days filter)\n"
+        "• `/usage` — Claude usage: 5h / 7d windows and when they reset\n"
         "• `/update` — update Claude Code; self-restart the bot if a new version landed\n"
         "  (`/update dry-run` and `/update check` are safe, no restart)\n"
         "• `/help` — this list\n"
@@ -326,6 +339,7 @@ HANDLERS = {
     "/compact": cmd_compact,
     "/board": cmd_board,
     "/costs": cmd_costs,
+    "/usage": cmd_usage,
     "/update": cmd_update,
     "/help": cmd_help,
 }

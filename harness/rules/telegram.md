@@ -72,13 +72,13 @@ fix it and report once).
 ## Slash commands (auto-intercepted)
 A prompt starting with `/` goes to `tools/v2/tg_commands.py` via the
 user-prompt-submit hook first. A name in its HANDLERS dict (`/status`,
-`/journal`, `/timeline`, `/compact`, `/board`, `/costs`, `/update`, `/help`,
+`/journal`, `/timeline`, `/compact`, `/board`, `/costs`, `/usage`, `/update`, `/help`,
 plus the bot's own `tools/tg_commands_local.py` HANDLERS) is answered there
 and never reaches the main thread; any other `/name` exits 1 and passes
 through to the main thread unchanged. A Telegram message arrives wrapped in
 its `<channel>` tag, so the hook reads the tag's body instead, and from
 Telegram intercepts only the read-only commands (`/status`, `/journal`,
-`/timeline`, `/costs`, `/help`, and `/board` bare or with `show|render|list|help`).
+`/timeline`, `/costs`, `/usage`, `/help`, and `/board` bare or with `show|render|list|help`).
 Everything else from Telegram (`/compact`, `/update`, `/board move|set|sync|poll`,
 bot-local commands) and any prompt batching several messages reaches the
 main thread as is. See `.claude/rules/memory-loop.md` for
