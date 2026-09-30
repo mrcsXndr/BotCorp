@@ -140,7 +140,7 @@ rollback on failure.
 ## Requirements
 
 - Windows 11
-- Claude Code >= 2.1.280 (needed for `--plugin-dir` / `CLAUDE_CODE_PLUGIN_DIRS`)
+- Claude Code >= 2.1.283 (needed for `--plugin-dir` / `CLAUDE_CODE_PLUGIN_DIRS` and exec-form hooks, `command` + `args`)
 - Node.js 20+
 - Python 3.11+
 - PowerShell 7+ (`pwsh`)

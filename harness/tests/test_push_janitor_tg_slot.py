@@ -144,16 +144,20 @@ def test_no_backup_module_means_commit_only_never_push(pushable, modules):
 
 
 @needs_bash
-def test_the_hook_returns_before_a_slow_push_ends(pushable):
+def test_the_hook_returns_before_a_slow_push_ends(pushable, tmp_path):
+    # What is proved is ORDER, not speed: the hook has returned while the push it
+    # started is still inside the remote's pre-receive. (A wall-clock bound on the
+    # hook measured Git Bash start-up on a slow box, 5-33 s, not waiting.)
     home, remote, rt = pushable
+    done = tmp_path / "pre-receive.done"
     hook = remote / "hooks" / "pre-receive"
-    hook.write_text("#!/bin/sh\nsleep 8\nexit 0\n", encoding="utf-8")
+    hook.write_text(f"#!/bin/sh\nsleep 20\ntouch '{done.as_posix()}'\nexit 0\n", encoding="utf-8")
     hook.chmod(0o755)
     r, took = _run_hook(home, rt, "auto_commit,backup")
     assert r.returncode == 0, r.stderr
-    assert took < 5, f"the Stop hook waited {took:.1f}s for the push"
-    assert _remote_head(remote) == ""                          # still in flight
-    assert _wait_remote(remote, _git(home, "rev-parse", "HEAD"), secs=60)
+    assert not done.exists() and _remote_head(remote) == "", f"the Stop hook returned after its push ended ({took:.1f}s)"
+    assert _wait_remote(remote, _git(home, "rev-parse", "HEAD"), secs=90)
+    assert done.exists()                                       # positive control: that push did go through pre-receive
 
 
 @needs_bash

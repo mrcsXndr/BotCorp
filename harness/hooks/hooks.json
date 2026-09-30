@@ -1,29 +1,11 @@
 {
-  "description": "BotCorp harness hooks. Every script sources hooks/_guard.sh first, so a bot turns any of them off with bot.yaml harness.hooks_disable (-> BOT_DISABLED_HOOKS) and module-gated ones follow harness.modules (-> BOT_MODULES). No SubagentStop envelope writer (measured as pure cost); SubagentStart/Stop here only append one line each to the activity log.",
+  "description": "BotCorp harness hooks, all in Claude Code's exec form (no shell). The tool guards are one node process, guard.mjs (pre / post). Every other hook starts through run.mjs, which applies bot.yaml harness.hooks_disable (-> BOT_DISABLED_HOOKS) and harness.modules (-> BOT_MODULES) BEFORE spawning bash, so a switched-off hook costs no bash start; the script's own _guard.sh applies the same gates again. No SubagentStop envelope writer (measured as pure cost); SubagentStart/Stop here only append one line each to the activity log.",
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "AskUserQuestion|ExitPlanMode",
+        "matcher": "AskUserQuestion|ExitPlanMode|Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/block-dialogs.sh\"", "timeout": 5 }
-        ]
-      },
-      {
-        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/config-guard.sh\"", "timeout": 5 }
-        ]
-      },
-      {
-        "matcher": "Read|Glob|Grep|Bash|PowerShell|Edit|Write|MultiEdit|NotebookEdit",
-        "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/vault-guard.sh\"", "timeout": 5 }
-        ]
-      },
-      {
-        "matcher": "Bash|PowerShell",
-        "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/operator-guard.sh\"", "timeout": 5 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs", "pre"], "timeout": 15 }
         ]
       }
     ],
@@ -31,13 +13,7 @@
       {
         "matcher": "Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/core-guard.sh\"", "timeout": 5 }
-        ]
-      },
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/tools-nudge.sh\"", "timeout": 10 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/guard.mjs", "post"], "timeout": 15 }
         ]
       }
     ],
@@ -45,8 +21,8 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh\"", "timeout": 30 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-env.sh\"", "timeout": 10 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-start", "-", "session-start.sh"], "timeout": 30 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-env", "-", "session-env.sh"], "timeout": 15 }
         ]
       }
     ],
@@ -54,7 +30,7 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end.sh\"", "timeout": 10 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-end", "-", "session-end.sh"], "timeout": 15 }
         ]
       }
     ],
@@ -62,7 +38,7 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-submit.sh\"", "timeout": 25, "statusMessage": "harness: inbound guard" }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "user-prompt-submit", "-", "user-prompt-submit.sh"], "timeout": 25, "statusMessage": "harness: inbound guard" }
         ]
       }
     ],
@@ -70,8 +46,8 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" precompact-extract - v2/precompact_extract.py --stdin", "timeout": 15 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" precompact-timeline - v2/precompact_timeline.py --stdin", "timeout": 15 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "precompact-extract", "-", "py.sh", "precompact-extract", "-", "v2/precompact_extract.py", "--stdin"], "timeout": 15 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "precompact-timeline", "-", "py.sh", "precompact-timeline", "-", "v2/precompact_timeline.py", "--stdin"], "timeout": 15 }
         ]
       }
     ],
@@ -79,12 +55,12 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/memory-sync.sh\"", "timeout": 15, "statusMessage": "harness: memory sync" },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/play-sound.sh\"", "timeout": 5 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/session-debrief.sh\"", "timeout": 30 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" session-summarize - infra/session_summarize.py --quiet", "timeout": 10 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/py.sh\" cost-meter cost_meter v2/cost_meter.py --stdin", "timeout": 20 },
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/auto-commit.sh\"", "timeout": 30 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "memory-sync", "memory_sync", "memory-sync.sh"], "timeout": 15, "statusMessage": "harness: memory sync" },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "play-sound", "sound", "play-sound.sh"], "timeout": 15 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-debrief", "debrief", "session-debrief.sh"], "timeout": 30 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-summarize", "-", "py.sh", "session-summarize", "-", "infra/session_summarize.py", "--quiet"], "timeout": 15 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "cost-meter", "cost_meter", "py.sh", "cost-meter", "cost_meter", "v2/cost_meter.py", "--stdin"], "timeout": 20 },
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "auto-commit", "auto_commit", "auto-commit.sh"], "timeout": 30 }
         ]
       }
     ],
@@ -92,7 +68,7 @@
       {
         "matcher": "rate_limit",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-failure.sh\"", "timeout": 10 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "stop-failure", "-", "stop-failure.sh"], "timeout": 15 }
         ]
       }
     ],
@@ -100,7 +76,7 @@
       {
         "matcher": "quota_auto_resume_fired|quota_auto_resume_stale|quota_auto_resume_disabled",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/notification.sh\"", "timeout": 10 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "notification", "-", "notification.sh"], "timeout": 15 }
         ]
       }
     ],
@@ -108,7 +84,7 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent.sh\" start", "timeout": 5 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "subagent", "-", "subagent.sh", "start"], "timeout": 15 }
         ]
       }
     ],
@@ -116,7 +92,7 @@
       {
         "matcher": "",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/subagent.sh\" stop", "timeout": 5 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "subagent", "-", "subagent.sh", "stop"], "timeout": 15 }
         ]
       }
     ]

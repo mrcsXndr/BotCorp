@@ -15,6 +15,7 @@ Fake-stdin runs (the test_hooks_fake_stdin.py pattern):
 from __future__ import annotations
 
 import json
+import subprocess
 
 import pytest
 
@@ -140,11 +141,23 @@ def test_vault_guard_passes_the_pairing_module_source(tmp_path, bot_home):
     assert proc.returncode == 0, proc.stderr
 
 
-def test_hooks_json_registers_both_for_powershell():
+def test_hooks_json_registers_both_for_powershell(tmp_path, bot_home):
+    # v0.8.6: one `guard.mjs pre` entry carries every PreToolUse guard; it routes by tool_name
     hooks = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PreToolUse"]
+    matchers = [set(g["matcher"].split("|")) for g in hooks if any(h.get("args", [""])[-1:] == ["pre"] and "guard.mjs" in h["args"][0] for h in g["hooks"])]
+    assert len(matchers) == 1 and {"Read", "Grep", "Bash", "PowerShell"} <= matchers[0]
+    env = base_env(tmp_path, bot_home)
 
-    def matchers(script):
-        return [set(g["matcher"].split("|")) for g in hooks if any(script in h["command"] for h in g["hooks"])]
+    def pre(tool, ti):
+        return subprocess.run(["node", str(HOOKS / "guard.mjs"), "pre"], input=json.dumps({"tool_name": tool, "tool_input": ti}),
+                              capture_output=True, text=True, env=env, timeout=30)
 
-    assert any({"Bash", "PowerShell"} <= m for m in matchers("operator-guard.sh"))
-    assert any({"Read", "Grep", "Bash", "PowerShell"} <= m for m in matchers("vault-guard.sh"))
+    for tool in ("Bash", "PowerShell"):
+        p = pre(tool, {"command": "botcorp reject beta ab12cd"})
+        assert p.returncode == 2 and "operator-only" in p.stderr, (tool, p.stderr)
+    for tool in ("Read", "Grep", "Bash", "PowerShell"):
+        ti = {"command": "cat C:/x/bots/demo/.vault/secrets.json"} if tool in ("Bash", "PowerShell") else {"file_path": "C:/x/bots/demo/.vault/secrets.json", "pattern": "C:/x/bots/demo/.vault/"}
+        p = pre(tool, ti)
+        assert p.returncode == 2 and ".vault" in p.stderr, (tool, p.stderr)
+    # the operator verbs are judged on Bash|PowerShell only, as the old matcher had it
+    assert pre("Grep", {"pattern": "botcorp reject beta ab12cd"}).returncode == 0

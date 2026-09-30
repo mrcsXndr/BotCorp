@@ -14,62 +14,9 @@
 #
 # FAIL-CLOSED for the verbs it names (exit 2 blocks the tool call and feeds
 # the message back to the model); everything else is a silent exit 0.
+#
+# The decision lives in guard.mjs (v0.8.6: one node process for every guard;
+# hooks.json runs `node guard.mjs pre`). This wrapper runs the same code for
+# the tests.
 
-set -uo pipefail
-. "$(dirname "$0")/_guard.sh" operator-guard
-
-PAYLOAD=""
-if ! [ -t 0 ]; then
-  PAYLOAD=$(cat || true)
-fi
-[ -n "$PAYLOAD" ] || exit 0
-
-CMD=$("$PY" -c "
-import json, sys
-try:
-    d = json.loads(sys.stdin.read() or '{}')
-    print(str((d.get('tool_input') or {}).get('command') or ''))
-except Exception:
-    pass
-" <<<"$PAYLOAD" 2>/dev/null) || exit 0
-[ -n "$CMD" ] || exit 0
-
-CMD_N=$(printf '%s\n' "$CMD" | tr '[:upper:]' '[:lower:]')
-BC="botcorp(\.mjs)?[\"']?[[:space:]]+"
-
-# Never from a session, admin bot or not.
-if printf '%s\n' "$CMD_N" | grep -qE "${BC}cockpit[[:space:]]+(expose|unexpose|pair|unpair)([^a-z0-9_-]|$)"; then
-  echo "BLOCKED: botcorp cockpit expose / unexpose / pair / unpair are the operator's alone (an admin bot cannot run them either)." >&2
-  exit 2
-fi
-if printf '%s\n' "$CMD_N" | grep -qE "${BC}accounts[[:space:]]+(rename([^a-z0-9_-]|$)|seed[[:space:]][^;&|]*--link([^a-z0-9_-]|$))"; then
-  echo "BLOCKED: botcorp accounts rename / accounts seed --link are the operator's alone (an admin bot cannot run them either): the cockpit Accounts page or the operator's terminal." >&2
-  exit 2
-fi
-
-# The operator-only verbs an admin bot (bot.yaml role: admin) may run, and
-# start/stop/restart of a bot other than this session's own.
-NEED=""
-if printf '%s\n' "$CMD_N" | grep -qE "${BC}(approve|reject|accounts[[:space:]]+(use|add|remove|seed|backups)|secrets[[:space:]]+(set|delete)|pair[[:space:]]+[a-z0-9_-]+[[:space:]]+[0-9]+|update[[:space:]].*--(apply|skip|rollback|cancel))([^a-z0-9_-]|$)"; then
-  NEED="operator-only verb"
-else
-  OTHER=$(printf '%s\n' "$CMD_N" | grep -oE "${BC}(start|stop|restart)[[:space:]]+_?[a-z0-9][a-z0-9-]*" | awk '{print $NF}' | grep -vxF -- "${BOT_NAME:-}" | head -n 1)
-  [ -n "$OTHER" ] && NEED="start/stop/restart of another bot ($OTHER)"
-fi
-[ -n "$NEED" ] || exit 0
-
-# An admin bot passes: `botcorp whoami` judges THIS session's own env (its
-# BOT_NAME and launch id), never what the command sets inline. Anything that
-# fails to answer is a no.
-WHO=$(node "$HARNESS/../cli/botcorp.mjs" whoami --json 2>/dev/null) || WHO=""
-ADMIN=$("$PY" -c "
-import json, sys
-try:
-    print('yes' if json.loads(sys.stdin.read()).get('admin') is True else 'no')
-except Exception:
-    print('no')
-" <<<"$WHO" 2>/dev/null)
-[ "$ADMIN" = "yes" ] && exit 0
-
-echo "BLOCKED: $NEED: operator-only (or an admin bot: bot.yaml role: admin). botcorp approve / reject, accounts add|remove|seed|use|backups, secrets set|delete, pair <id>, update --apply|--skip|--rollback|--cancel and start/stop/restart of another bot are the operator's. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal. To read the queue: botcorp approvals." >&2
-exit 2
+exec "${BOT_NODE:-node}" "$(dirname "$0")/guard.mjs" operator-guard

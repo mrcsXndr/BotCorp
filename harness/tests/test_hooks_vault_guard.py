@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from test_hooks_fake_stdin import HARNESS, HOOKS, base_env, bot_home, run_hook  # noqa: F401
 
 
@@ -89,12 +91,42 @@ def test_unparseable_payload_fails_closed(tmp_path, bot_home):
         assert "could not parse" in proc.stderr
 
 
-# (j) v0.7.3: no working interpreter is a parse failure too
-def test_broken_python_fails_closed(tmp_path, bot_home):
-    env = base_env(tmp_path, bot_home, {"BOT_PYTHON": str(tmp_path / "no-such-python")})
+# (j) v0.7.3: no working interpreter is a parse failure too (v0.8.6: the
+# interpreter is node, guard.mjs; python is no longer involved)
+def test_broken_interpreter_fails_closed(tmp_path, bot_home):
+    env = base_env(tmp_path, bot_home, {"BOT_NODE": str(tmp_path / "no-such-node")})
     proc = _run(env, {"file_path": str(bot_home / "memory" / "TDL.md")})
     assert proc.returncode == 2
     assert "could not parse" in proc.stderr
+    # positive control: the same payload with a working node passes
+    assert _run(base_env(tmp_path, bot_home, {"BOT_PYTHON": str(tmp_path / "no-such-python")}),
+                {"file_path": str(bot_home / "memory" / "TDL.md")}).returncode == 0
+
+
+# (m) v0.8.6: `.vault` after a shell word boundary. The bash guard anchored it on
+# `/` or a line start only, so a relative path in a command passed.
+@pytest.mark.parametrize("ti", [
+    {"command": "ls .vault"},
+    {"command": "cat .vault/secrets.json"},
+    {"command": 'type ".vault\\secrets.json"'},
+    {"command": "Get-Content -Path .vault\\secrets.json"},
+    {"command": "cd bots/demo && ls -la .vault;"},
+    {"file_path": ".vault/secrets.json"},
+])
+def test_blocks_a_relative_vault_in_a_command(tmp_path, bot_home, ti):
+    proc = _run(base_env(tmp_path, bot_home), ti)
+    assert proc.returncode == 2 and ".vault" in proc.stderr, (ti, proc.stderr)
+
+
+@pytest.mark.parametrize("ti", [
+    {"command": "cat notes/.vaultish.md"},
+    {"command": "cat my.vault/x"},
+    {"file_path": "C:/x/bots/demo/memory/.vault-notes.md"},
+    {"pattern": "vault"},
+])
+def test_allows_names_that_only_contain_vault(tmp_path, bot_home, ti):
+    proc = _run(base_env(tmp_path, bot_home), ti)
+    assert proc.returncode == 0, (ti, proc.stderr)
 
 
 # (l) v0.7.3: the cockpit's owner-only token file is the operator's, not a bot's

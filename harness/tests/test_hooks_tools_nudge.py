@@ -79,10 +79,26 @@ def test_registry_off_when_tools_absent(tmp_path, bot_home):
     assert proc.stdout == ""
 
 
-def test_hooks_json_registers_it_post_tool_use():
+@needs_node
+def test_hooks_json_registers_it_post_tool_use(tmp_path, bot_home):
+    # v0.8.6: `guard.mjs post` carries core-guard and tools-nudge; the nudge still answers Write|Edit only
     hooks = json.loads((HOOKS / "hooks.json").read_text(encoding="utf-8"))["hooks"]["PostToolUse"]
-    matchers = [set(g["matcher"].split("|")) for g in hooks if any("tools-nudge.sh" in h["command"] for h in g["hooks"])]
-    assert matchers == [{"Write", "Edit"}]
+    matchers = [set(g["matcher"].split("|")) for g in hooks if any(h.get("args", [""])[-1:] == ["post"] and "guard.mjs" in h["args"][0] for h in g["hooks"])]
+    assert len(matchers) == 1 and {"Write", "Edit"} <= matchers[0]
+    home = _bot(bot_home)
+    target = home / "tools" / "new_thing.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("print('hi')\n", encoding="utf-8")
+
+    def post(tool):
+        return subprocess.run(["node", str(HOOKS / "guard.mjs"), "post"], input=json.dumps({"tool_name": tool, "tool_input": {"file_path": str(target)}}),
+                              capture_output=True, text=True, env=base_env(tmp_path, home), timeout=60)
+
+    for tool in ("Write", "Edit"):
+        assert post(tool).stdout.startswith("unregistered tool tools/new_thing.py:"), tool
+    for tool in ("MultiEdit", "NotebookEdit"):
+        p = post(tool)
+        assert p.returncode == 0 and p.stdout == "", (tool, p.stdout)
 
 
 def test_bash_parses():

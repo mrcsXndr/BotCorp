@@ -9,7 +9,7 @@
 #                     "0 tests collected" reads green to the eye and is a suite error)
 #   bash-n            bash -n every harness/hooks/*.sh
 #   node-check        node --check on statusline.js, pty-host.mjs, cockpit/server.mjs,
-#                     daemon/sync.mjs, daemon/botyaml.mjs
+#                     daemon/sync.mjs, daemon/botyaml.mjs, hooks/guard.mjs, hooks/run.mjs
 #   cockpit-dist      cockpit/web/dist/index.html exists and every /assets/ file it
 #                     names exists (the SPA ships prebuilt: -Apply runs no npm step)
 #   hook-session-start / hook-session-end
@@ -90,7 +90,8 @@ Step 'bash-n' {
 
 Step 'node-check' {
     if (-not $node) { return @{ ok = $false; detail = 'node not found' } }
-    $files = @((Join-Path $Harness 'tools\infra\statusline.js'), (Join-Path $PSScriptRoot 'pty-host.mjs'), (Join-Path $BotCorp 'cockpit\server.mjs'), (Join-Path $PSScriptRoot 'sync.mjs'), (Join-Path $PSScriptRoot 'botyaml.mjs'))
+    $files = @((Join-Path $Harness 'tools\infra\statusline.js'), (Join-Path $PSScriptRoot 'pty-host.mjs'), (Join-Path $BotCorp 'cockpit\server.mjs'), (Join-Path $PSScriptRoot 'sync.mjs'), (Join-Path $PSScriptRoot 'botyaml.mjs'),
+        (Join-Path $Harness 'hooks\guard.mjs'), (Join-Path $Harness 'hooks\run.mjs'))
     $bad = @()
     foreach ($f in $files) {
         if (-not (Test-Path $f)) { $bad += "$([System.IO.Path]::GetFileName($f)): missing"; continue }

@@ -411,6 +411,12 @@ if (Test-Path $py) { $childEnv['BOT_PYTHON'] = $py }
 # Python's folder (+ Scripts) first on the session's PATH: a bare `python` from
 # the session's PowerShell otherwise reaches the Store stub (exit 49).
 $sessionPath = $env:PATH
+# harness/hooks/hooks.json starts every hook as a bare `node` (exec form, no
+# shell), so node's folder is on the session's PATH too (behind python's).
+if ([IO.Path]::IsPathRooted($node) -and (Test-Path $node)) {
+    $sessionPath = Add-PathDir -PathEnv $sessionPath -Dir (Split-Path $node -Parent)
+    $childEnv['PATH'] = $sessionPath
+}
 if ([IO.Path]::IsPathRooted($py) -and (Test-Path $py)) {
     $pyDir = Split-Path $py -Parent
     $sessionPath = Add-PathDir -PathEnv (Add-PathDir -PathEnv $sessionPath -Dir (Join-Path $pyDir 'Scripts')) -Dir $pyDir

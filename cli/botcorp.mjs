@@ -48,7 +48,7 @@ const {
   CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
-  resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
+  resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
   isObj, loadRawYaml, parseYaml, dumpYaml, writeRawYaml, harnessVersion, humanAge, spawnDetached,
@@ -260,27 +260,19 @@ function vaultLockState(bot) {
   return { mode: 'operator', version: 2, locked: true, detail: `operator lock (state unreadable: ${(r.err || r.out).trim().split(/\r?\n/)[0].slice(0, 120)})` };
 }
 
-// Git for Windows bash for the hook probes (System32\bash.exe is WSL, not it).
-function resolveBash() {
-  if (process.platform !== 'win32') return findOnPath(['bash']) || 'bash';
-  const pf = process.env.ProgramFiles || 'C:\\Program Files';
-  for (const c of [path.join(pf, 'Git', 'bin', 'bash.exe'), path.join(pf, 'Git', 'usr', 'bin', 'bash.exe')]) if (fs.existsSync(c)) return c;
-  return findOnPath(['bash.exe'], { skip: /\\system32/i });
-}
-
-// Feed the vault-guard hook a synthetic Read of a SIBLING bot's vault and
-// expect it to block (exit 2). This is the isolation a bot session actually
-// gets: every bot runs as one Windows user, so no ACL can keep one bot's
-// process out of another's vault - the tool guard is the boundary.
+// Feed the PreToolUse guard (harness/hooks/guard.mjs, vault-guard inside it) a
+// synthetic Read of a SIBLING bot's vault and expect it to block (exit 2).
+// This is the isolation a bot session actually gets: every bot runs as one
+// Windows user, so no ACL can keep one bot's process out of another's vault -
+// the tool guard is the boundary.
 function vaultIsolationCheck(bot) {
   const hooks = readJson(path.join(ROOT, 'harness', 'hooks', 'hooks.json'));
-  const registered = !!(hooks && (hooks.hooks?.PreToolUse || []).some((g) => /\bRead\b/.test(g.matcher || '') && /\bBash\b/.test(g.matcher || '') && (g.hooks || []).some((h) => /vault-guard\.sh/.test(h.command || ''))));
-  if (!registered) return { level: 'FAIL', detail: 'harness/hooks/hooks.json does not register hooks/vault-guard.sh for Read|...|Bash' };
-  const bash = resolveBash();
-  if (!bash) return { level: 'WARN', detail: 'no bash to probe the hook (Git for Windows expected)' };
+  const isPre = (h) => Array.isArray(h.args) && /\/hooks\/guard\.mjs$/.test(h.args[0] || '') && h.args[1] === 'pre';
+  const registered = !!(hooks && (hooks.hooks?.PreToolUse || []).some((g) => /\bRead\b/.test(g.matcher || '') && /\bBash\b/.test(g.matcher || '') && (g.hooks || []).some(isPre)));
+  if (!registered) return { level: 'FAIL', detail: 'harness/hooks/hooks.json does not register hooks/guard.mjs pre for Read|...|Bash' };
   const sibling = path.join(botHome(bot === 'other-bot' ? 'another-bot' : 'other-bot'), '.vault', 'secrets.json');
   const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: sibling } });
-  const r = run(bash, [path.join(ROOT, 'harness', 'hooks', 'vault-guard.sh')], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness') } });
+  const r = run(process.execPath, [path.join(ROOT, 'harness', 'hooks', 'guard.mjs'), 'pre'], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness') } });
   if (r.code === 2 && /BLOCKED/.test(r.err)) return { level: 'PASS', detail: 'vault-guard blocks a Read of a sibling .vault (exit 2)' };
   return { level: 'FAIL', detail: `vault-guard did NOT block a sibling .vault read (exit ${r.code}${r.timedOut ? ', timed out' : ''}): ${(r.err || r.out).trim().split(/\r?\n/)[0].slice(0, 120)}` };
 }
