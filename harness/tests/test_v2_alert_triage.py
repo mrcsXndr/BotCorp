@@ -49,6 +49,7 @@ def paths(tmp_path, monkeypatch):
         "RUNS_DIR": tmp_path / "triage_runs",
         "LOCK_FILE": tmp_path / ".triage.lock",
         "PROMPT_FILE": tmp_path / ".triage_prompt.txt",
+        "NOISE_LOG": tmp_path / "alerts_noise.log",
     }
     for k, v in p.items():
         monkeypatch.setattr(at, k, v)

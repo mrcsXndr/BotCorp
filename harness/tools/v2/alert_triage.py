@@ -12,7 +12,9 @@ This is that tick. The supervisor runs `scan` every BOT_TRIAGE_EVERY_MIN
 (idle-gated, see the supervisor's own triage invocation):
 
   1. read alerts.log from a byte-offset cursor (state dir's alerts_triage.json)
-  2. NOISE (info-only status digests, ...) -> cursor advanced, nothing else
+  2. NOISE (info-only status digests, ...) -> cursor advanced, the line kept in
+     memory/metrics/alerts_noise.log, which /standup folds into its board
+     (`digest`) and then clears (`digest --clear <bytes>`)
   3. ACTIONABLE (FAIL / CRITICAL / exited N / (warn) / backup ...) -> fingerprinted;
      a fingerprint triaged within BOT_TRIAGE_COOLDOWN_H is a repeat and is skipped
   4. a non-empty batch spawns ONE headless `claude --print` run (detached waiter,
@@ -28,6 +30,8 @@ Commands:
   scan [--dry-run] [-v]   default; --dry-run prints the batch, writes nothing
   scan --seed             cursor -> EOF, no triage (first deployment on an old log)
   list                    cursor + fingerprint state + lock
+  digest [--clear BYTES]  the kept NOISE, grouped, ending `DIGEST_BYTES <n>`;
+                          --clear drops those first n bytes (what was folded in)
   run --prompt-file F --run-file OUT   the detached waiter (spawned by scan)
 
 STRICTLY FAIL-OPEN: any exception -> one stderr line, exit 0.
@@ -51,6 +55,7 @@ from _paths import instance_root, harness_root, runtime_root, bot_name  # noqa: 
 ROOT = instance_root()
 ALERTS_LOG = ROOT / "memory" / "metrics" / "alerts.log"
 TRIAGE_LOG = ROOT / "memory" / "metrics" / "alerts_triage.log"
+NOISE_LOG = ROOT / "memory" / "metrics" / "alerts_noise.log"   # NOISE kept for the standup digest
 STATE_DIR = runtime_root() / "state" / bot_name()
 STATE_FILE = STATE_DIR / "alerts_triage.json"       # cursor + fingerprints
 LOCK_FILE = STATE_DIR / "triage.lock"
@@ -244,6 +249,42 @@ def _triage_log(now: datetime, *fields: str) -> None:
         fh.write(_now_iso(now) + "\t" + "\t".join(f.replace("\t", " ").replace("\n", " ") for f in fields) + "\n")
 
 
+def _keep_noise(alerts: list[Alert]) -> None:
+    """NOISE is not dropped: its verbatim lines go to NOISE_LOG for the standup digest."""
+    if not alerts:
+        return
+    NOISE_LOG.parent.mkdir(parents=True, exist_ok=True)
+    with NOISE_LOG.open("a", encoding="utf-8") as fh:
+        for a in alerts:
+            fh.write("\n".join(a.raw) + "\n")
+
+
+def digest(clear: int | None = None) -> int:
+    """Print the kept NOISE grouped by fingerprint (count, last stamp, sample),
+    then `DIGEST_BYTES <n>`. With `clear`, drop the first `clear` bytes: the
+    part a standup already folded in; anything appended since stays."""
+    data = NOISE_LOG.read_bytes() if NOISE_LOG.exists() else b""
+    if clear is not None:
+        rest = data[clear:] if 0 <= clear <= len(data) else b""
+        tmp = NOISE_LOG.with_suffix(".log.tmp")
+        tmp.write_bytes(rest)
+        os.replace(tmp, NOISE_LOG)
+        print(f"digest: cleared {min(max(clear, 0), len(data))} byte(s), {len(rest)} kept")
+        return 0
+    alerts, _orphans = parse_alerts(data.decode("utf-8", errors="replace"))
+    groups: dict[str, list] = {}
+    for a in alerts:
+        g = groups.setdefault(fingerprint(a.head), [0, a.stamp, a.head])
+        g[0] += 1
+        g[1], g[2] = a.stamp, a.head
+    if not groups:
+        print("digest: no kept noise")
+    for count, last, head in sorted(groups.values(), key=lambda g: (-g[0], g[1])):
+        print(f"x{count:<3} last {last[:19]}  {head[:200]}")
+    print(f"DIGEST_BYTES {len(data)}")
+    return 0
+
+
 def build_prompt(batch: list[tuple[str, Alert, int]], live_session: bool = False) -> str:
     blocks = []
     for i, (fp, alert, count) in enumerate(batch, 1):
@@ -296,11 +337,13 @@ def scan(now: datetime | None = None, dry_run: bool = False, verbose: bool = Fal
     batch: list[tuple[str, Alert, int]] = []
     seen_in_batch: dict[str, int] = {}
     noise = repeats = 0
+    kept: list[Alert] = []   # NOISE, written to NOISE_LOG only when the cursor moves past it
 
     for a in alerts:
         m = classify(a.text)
         if m is None:
             noise += 1
+            kept.append(a)
             if verbose:
                 print(f"  NOISE       {a.head[:100]}")
             continue
@@ -348,6 +391,7 @@ def scan(now: datetime | None = None, dry_run: bool = False, verbose: bool = Fal
     if not batch:
         st["offset"] = new_offset
         _save_state(st, now)
+        _keep_noise(kept)
         print(f"scan: {len(alerts)} alert(s), {noise} noise, {repeats} repeat(s), nothing to triage")
         return summary
 
@@ -404,6 +448,7 @@ def scan(now: datetime | None = None, dry_run: bool = False, verbose: bool = Fal
     st["runs"].append(_now_iso(now))
     st["offset"] = new_offset
     _save_state(st, now)
+    _keep_noise(kept)
 
     pid = spawn(PROMPT_FILE, run_file)
     if pid:
@@ -551,16 +596,20 @@ def main(argv: list[str] | None = None) -> int:
                    help="the live session is mid-work: defer unless the oldest alert has waited "
                         "BOT_TRIAGE_MAX_WAIT_H (6)")
     sub.add_parser("list", help="show cursor/fingerprint/lock state")
+    d = sub.add_parser("digest", help="the kept NOISE, grouped, for the standup board")
+    d.add_argument("--clear", type=int, metavar="BYTES", help="drop the first BYTES (the DIGEST_BYTES a standup folded in)")
     r = sub.add_parser("run", help="(internal) the detached waiter spawned by scan")
     r.add_argument("--prompt-file", required=True)
     r.add_argument("--run-file", required=True)
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in ("scan", "list", "run", "-h", "--help"):
+    if not argv or argv[0] not in ("scan", "list", "digest", "run", "-h", "--help"):
         argv.insert(0, "scan")   # `scan` is the default subcommand
     args = ap.parse_args(argv)
     try:
         if args.cmd == "list":
             list_state()
+        elif args.cmd == "digest":
+            return digest(args.clear)
         elif args.cmd == "run":
             return run(Path(args.prompt_file), Path(args.run_file))
         elif getattr(args, "seed", False):
