@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { depsVerdict, CLI_DEPS, worktreeLinksVerdict } from './_deps.mjs';
 import { zipWrite, zipList, zipExtract, zipEntryData } from './_zip.mjs';
@@ -55,7 +56,7 @@ const {
 const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak, toolInventory } = await import('./tools.mjs');
 const operatorPair = await import('../cockpit/operator-pair.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'service', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -310,7 +311,7 @@ function echoPs(r) {
 
 async function cmdAccounts({ pos, flags }) {
   const [, action, id] = pos;
-  if (!action) usage('accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed | use <bot> <id|none> [--by <who>] | backups <bot> <id[,id...]|none> [--by <who>] | failover <bot> [--json]');
+  if (!action) usage('accounts add <id> [--label <text>] | list [--json] | remove <id> | rename <id> --label <text> | seed [--link [--dry-run]] [--json] | use <bot> <id|none> [--by <who>] | backups <bot> <id[,id...]|none> [--by <who>] | failover <bot> [--json]');
   if (action === 'use') return accountsUse(id, pos[3], flags);
   if (action === 'backups') return accountsBackups(id, pos[3], flags);
   if (action === 'failover') return accountsFailover(id, flags);
@@ -318,18 +319,28 @@ async function cmdAccounts({ pos, flags }) {
     if (!flags.json) return echoPs(accountsPs(['-Action', 'list']));
     const r = accountsListJson();
     if (!r.ok) fail(r.err);
-    outJson(r.rows);
+    const cache = readJson(path.join(STATE_DIR, 'account-checks.json')) || {};
+    outJson(r.rows.map((row) => ({ ...row, ...planOf(row, cache) })));
     return 0;
   }
+  // rename and seed --link are the operator's alone: an admin bot cannot run them either
+  if (action === 'rename') return accountsRename(id, flags);
+  if (action === 'seed' && flags.link) return accountsSeedLink(flags);
   const who = action === 'add' || action === 'remove' || action === 'seed' ? requireOperator(`accounts ${action}`, { admin: true, target: id || null }) : null;
   if (action === 'seed') return echoPs(accountsPs(['-Action', 'seed', ...(flags.json ? ['-Json'] : [])]));
   if (!id || !NAME_RE.test(id)) usage(`accounts ${action}: <id> required (lowercase, digits, hyphens; max 32)`);
   if (action === 'add') {
     const value = await readSecretValue(`Setup token for account ${id} (from \`claude setup-token\`; hidden): `);
     if (!value) fail('accounts add: empty token');
+    // --plan: a hidden override of the detected plan (plan_source: operator)
     const extra = [...(flags.label ? ['-Label', String(flags.label)] : []), ...(flags.plan ? ['-Plan', String(flags.plan)] : [])];
     const code = echoPs(accountsPs(['-Action', 'add', '-Id', id, '-FromStdin', ...extra], { stdin: value + '\n' }));
-    if (code === 0) { logAccountsRegistry({ action: 'add', id, by: decidedBy(flags, who) }); clearAccountFailed(id); }
+    if (code === 0) {
+      logAccountsRegistry({ action: 'add', id, by: decidedBy(flags, who) });
+      clearAccountFailed(id);
+      const row = (accountsListJson().rows || []).find((r) => r.id === id);
+      if (row) await detectPlan(row);
+    }
     return code;
   }
   if (action === 'remove') {
@@ -352,6 +363,153 @@ function logAccountsRegistry(rec) {
     fs.mkdirSync(path.dirname(f), { recursive: true });
     fs.appendFileSync(f, JSON.stringify({ at: new Date().toISOString(), ...rec }) + '\n');
   } catch {}
+}
+
+// ---- account plans: detected, never typed (docs/cli.md accounts) --------------------------
+// An account's token in this process only (the Haiku check, the plan probe). Not
+// run(): its scrub() turns an sk-ant token into "****".
+function accountTokenPlain(id) {
+  const r = spawnSync(resolvePwsh(), ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', ACCOUNTS_PS1, '-Action', 'get', '-Id', id, '-IAmTheLauncher', '-BotCorpRoot', ROOT],
+    { encoding: 'utf-8', windowsHide: true, timeout: 60_000 });
+  return r.status === 0 && typeof r.stdout === 'string' ? r.stdout.trim() : '';
+}
+
+// subscriptionType / organization_type + rate-limit tier -> "Max 20×", "Pro"; null when unreadable.
+function planName(sub, tier) {
+  const s = String(sub || '').toLowerCase().replace(/^claude_/, '');
+  if (!/^[a-z][a-z_]{1,19}$/.test(s)) return null;
+  const base = s.split('_').filter(Boolean).map((w) => w[0].toUpperCase() + w.slice(1)).join(' ');
+  const m = /(\d{1,3})x$/i.exec(String(tier || ''));
+  return m ? `${base} ${m[1]}×` : base;
+}
+
+// The label seed --link gives an account: "<Plan> ····<last4>", "Account ····<last4>" without a plan.
+function seedLabel(plan, masked) {
+  return `${plan || 'Account'} ${'·'.repeat(4)}${String(masked || '').slice(-4)}`;
+}
+
+// plan + plan_source of an `accounts list` row: the operator's `accounts add
+// --plan` override, else the detected plan cached under the token fingerprint.
+function planOf(row, cache) {
+  if (row.plan) return { plan: String(row.plan), plan_source: 'operator' };
+  const c = row.fp && cache[row.fp];
+  return c && c.plan ? { plan: String(c.plan), plan_source: c.plan_source || null } : { plan: null, plan_source: null };
+}
+
+// Best effort, in order: 1. the account config dir's .credentials.json (a
+// /login there) claudeAiOauth.subscriptionType + rateLimitTier; 2. GET
+// /api/oauth/profile with the account's token (the operator only, as in
+// checkAccountToken; a setup token lacks user:profile, so a 403 is expected);
+// 3. null. Cached in state/account-checks.json under the fingerprint as plan +
+// plan_source (+ plan_at). Reads nothing but those fields; the token is never
+// printed, logged or cached. BOTCORP_OAUTH_PROFILE_URL: `off`, or a loopback
+// stand-in (tests); any other value is ignored.
+const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile';
+async function detectPlan(row) {
+  let plan = null, source = null;
+  const creds = readJson(path.join(BOTCORP_HOME, 'accounts', row.id, 'claude', '.credentials.json'));
+  const o = creds && isObj(creds.claudeAiOauth) ? creds.claudeAiOauth : null;
+  if (o && o.subscriptionType) { plan = planName(o.subscriptionType, o.rateLimitTier); if (plan) source = 'credentials'; }
+  const override = process.env.BOTCORP_OAUTH_PROFILE_URL || '';
+  const url = /^http:\/\/127\.0\.0\.1:\d+\//.test(override) ? override : override === 'off' ? '' : PROFILE_URL;
+  if (!plan && url && !process.env.BOT_NAME && row.masked) {
+    let tok = accountTokenPlain(row.id);
+    if (tok) {
+      try {
+        const res = await fetch(url, { headers: { Authorization: `Bearer ${tok}`, 'anthropic-beta': 'oauth-2025-04-20' }, signal: AbortSignal.timeout(10_000) });
+        if (res.ok) {
+          const j = await res.json();
+          const org = j && isObj(j.organization) ? j.organization : {};
+          const acc = j && isObj(j.account) ? j.account : {};
+          plan = planName(org.organization_type || (acc.has_claude_max ? 'max' : acc.has_claude_pro ? 'pro' : ''), org.rate_limit_tier);
+          if (plan) source = 'profile';
+        }
+      } catch {}
+    }
+    tok = null;
+  }
+  // a bot session cannot probe, so its "no plan" is not cached over the operator's answer
+  if (row.fp && (plan || !process.env.BOT_NAME)) {
+    const file = path.join(STATE_DIR, 'account-checks.json');
+    const cache = readJson(file) || {};
+    cache[row.fp] = { ...cache[row.fp], plan, plan_source: source, plan_at: new Date().toISOString() };
+    try { writeJsonAtomic(file, cache); } catch {}
+  }
+  return { plan, plan_source: source };
+}
+
+function renameAccount(id, label) {
+  // -Label:<value> binds even a label that starts with '-'
+  return accountsPs(['-Action', 'rename', '-Id', id, `-Label:${label}`]);
+}
+
+// `accounts rename <id> --label <text>`: the label only (operator; not an admin bot).
+function accountsRename(id, flags) {
+  const who = requireOperator('accounts rename', { target: id || null });
+  if (!id || !NAME_RE.test(id)) usage('accounts rename <id> --label <text>');
+  const label = typeof flags.label === 'string' ? flags.label.trim() : '';
+  if (!label || label.length > 64 || /[\r\n\0]/.test(label)) usage('accounts rename: --label <text> (one line, at most 64 characters)');
+  const code = echoPs(renameAccount(id, label));
+  if (code === 0) logAccountsRegistry({ action: 'rename', id, label, by: decidedBy(flags, who) });
+  return code;
+}
+
+// `accounts seed --link [--dry-run] [--json]` (operator; not an admin bot): every
+// chain entry becomes an Account. 1. each bot's own vault token not registered
+// yet becomes one (matched by fingerprint, so a shared token is one account;
+// id acct-<last4>); 2. a bot with no `account:` is set to the account holding
+// its own token (the same token, so only the launch provenance changes); 3. a
+// label still "bot <name>" (the old seed) is relabeled. Idempotent: a second
+// run prints three empty lists. --dry-run reads fingerprints only and writes
+// nothing (the cockpit's account_unlinked item).
+async function accountsSeedLink(flags) {
+  const dry = !!flags['dry-run'];
+  const who = dry ? null : requireOperator('accounts seed --link');
+  const r = accountsPs(['-Action', 'seed', '-Json', '-Link', ...(dry ? ['-DryRun'] : [])]);
+  if (r.code !== 0) fail(`accounts seed --link: ${(r.err || r.out).trim()}`);
+  let res;
+  try { res = JSON.parse(r.out.trim()); } catch { fail('accounts seed --link: unparsable output from accounts.ps1'); }
+  const map = [].concat(res.bots || []).filter((m) => m && m.bot && m.id);
+  const seeded = [...new Set(map.filter((m) => m.new).map((m) => String(m.id)))];
+  const by = dry ? null : decidedBy(flags, who);
+  const linked = [];
+  for (const m of map) {
+    let raw;
+    try { raw = loadRawYaml(m.bot); } catch { continue; }
+    if (raw.account) continue;
+    linked.push(m.bot);
+    if (dry) continue;
+    raw.account = m.id;
+    // its own token was also listed as a backup: the chain [own, that account] is that account alone
+    if (Array.isArray(raw.backup_accounts) && raw.backup_accounts.includes(m.id)) {
+      raw.backup_accounts = raw.backup_accounts.filter((x) => x !== m.id);
+      if (!raw.backup_accounts.length) delete raw.backup_accounts;
+    }
+    writeValidated(m.bot, raw, 'accounts seed --link');
+    logBotAccounts(m.bot, { by, from: null, to: m.id, via: 'seed --link' });
+    clearAccountActive(m.bot);
+  }
+  const list = accountsListJson();
+  if (!list.ok) fail(list.err);
+  const relabeled = [];
+  for (const row of list.rows) {
+    const isNew = seeded.includes(row.id);
+    if (!isNew && !/^bot /.test(row.label || '')) continue;
+    if (!isNew) relabeled.push(row.id);
+    if (dry) continue;
+    const plan = row.plan || (await detectPlan(row)).plan;
+    const label = seedLabel(plan, row.masked);
+    if (label !== row.label) {
+      const rr = renameAccount(row.id, label);
+      if (rr.code !== 0) fail(`accounts seed --link: rename ${row.id} failed: ${(rr.err || rr.out).trim()}`);
+    }
+  }
+  if (!dry && (seeded.length || linked.length || relabeled.length)) logAccountsRegistry({ action: 'seed --link', seeded, linked, relabeled, by });
+  if (flags.json) { outJson({ seeded, linked, relabeled }); return 0; }
+  const list3 = (a) => (a.length ? a.join(', ') : 'none');
+  out(`accounts seed --link${dry ? ' (dry-run)' : ''}: seeded ${list3(seeded)}; linked ${list3(linked)}; relabeled ${list3(relabeled)}`);
+  if (linked.length && !dry) out('each linked bot moves onto its account (the same token) at its next idle turn boundary');
+  return 0;
 }
 
 // `accounts use <bot> <id|none>`: bot.yaml `account` only. The tick rolls the
@@ -1939,6 +2097,21 @@ async function cmdNew({ flags }) {
   const persona = flags.persona ? String(flags.persona) : DEFAULTS.persona;
   const interactive = !!process.stdin.isTTY && !flags.yes;
   let rc = 0;
+  // --service manual = a chat: the cockpit or the CLI starts it, the daemon never cold-starts it
+  const service = flags.service === undefined ? DEFAULTS.harness.service : String(flags.service);
+  if (!['daemon', 'manual'].includes(service)) usage(`new: --service daemon | manual (got '${service}')`);
+  // --account: the bot runs on a registered account's token from the start (no oauth
+  // prompt). Choosing an account for a bot is the operator's (as `accounts use`).
+  const account = flags.account === undefined ? '' : String(flags.account);
+  if (flags.account !== undefined) {
+    const who = requireOperator('new --account', { admin: true, target: `${name} ${account}` });
+    if (!NAME_RE.test(account)) usage(`new: --account <id> (a registered account; botcorp accounts list)`);
+    const list = accountsListJson();
+    if (!list.ok) fail(list.err);
+    const row = list.rows.find((r) => r.id === account);
+    if (!row || !row.masked) fail(`new: no account '${account}' with a token (botcorp accounts list)`, 2);
+    tokenCheckOrFail(row, who, 'new --account');
+  }
 
   // 0. the catalogue: checklist on a terminal, flags otherwise
   const lists = catalogueLists();
@@ -1961,7 +2134,10 @@ async function cmdNew({ flags }) {
   // 1. minimal bot.yaml: everything else comes from DEFAULTS at load time.
   fs.mkdirSync(botHome(name), { recursive: true });
   const header = '# bot.yaml - the only harness file this bot edits (via `botcorp config set`).\n# Every key and its default: templates/bot/bot.yaml. Tokens never go here (botcorp secrets).\n';
-  writeTextAtomic(botYamlPath(name), header + dumpYaml(yamlFromSelection(name, persona, sel, lists, owner, backupRemote)));
+  const doc = yamlFromSelection(name, persona, sel, lists, owner, backupRemote);
+  if (service !== DEFAULTS.harness.service) doc.harness.service = service;
+  if (account) doc.account = account;
+  writeTextAtomic(botYamlPath(name), header + dumpYaml(doc));
   out(`created ${botYamlPath(name)}`);
 
   // 2. generated + bot-owned files, config home (a plain folder: no git init)
@@ -1973,14 +2149,15 @@ async function cmdNew({ flags }) {
   } catch {}
   seedClaudeJson(name);
 
-  // 3. the ONE token a bot needs to start
+  // 3. the ONE token a bot needs to start (none with --account: the account's)
   let oauth = '';
-  if (flags['oauth-stdin']) oauth = readStdinAll().trim();
+  if (account) out(`oauth: runs on account ${account} (botcorp accounts use ${name} <id> to change it)`);
+  else if (flags['oauth-stdin']) oauth = readStdinAll().trim();
   else oauth = await promptHidden(`OAuth token for ${name} (from \`claude setup-token\`; hidden, blank to skip): `);
   if (oauth) {
     const c = secretsSet(name, 'oauth', oauth);
     if (c !== 0) { rc = c; out(`oauth: vault write failed (exit ${c}); re-enter with: botcorp secrets set ${name} oauth`); }
-  } else out(`oauth: none given; the bot refuses to launch until: botcorp secrets set ${name} oauth (or a /login in its config home)`);
+  } else if (!account) out(`oauth: none given; the bot refuses to launch until: botcorp secrets set ${name} oauth (or a /login in its config home)`);
 
   // 4. optional Telegram
   if (telegram) {
@@ -2010,6 +2187,33 @@ async function cmdNew({ flags }) {
   out(`  config:    botcorp config set ${name} <path> <value>   (widening changes wait in: botcorp approve ${name} --list)`);
   out(`  move it:   botcorp export ${name}   ->   botcorp import <zip> on the other machine (tokens re-entered there)`);
   return rc;
+}
+
+// `archive <bot>` (operator only): a chat (harness.service: manual) leaves the
+// bot list. It is stopped if it runs, then its whole folder (config home and
+// vault included) moves to <rt>/archive/<name>-<stamp>/; nothing is deleted.
+// A pinned bot (service: daemon) is refused, exit 2.
+async function cmdArchive({ pos }) {
+  requireOperator('archive');
+  const bot = requireBot(pos[1]);
+  let cfg;
+  try { cfg = loadBotYaml(botYamlPath(bot)); } catch (e) { fail(`archive: ${e.message}`); }
+  if (cfg.harness.service !== 'manual') fail(`archive: ${bot} is kept running by the daemon (harness.service: ${cfg.harness.service}); only a chat (service: manual) is archived`, 2);
+  const st = botState(bot);
+  const running = sessionKind(bot) === 'bg' ? !!(st.bg_id && pidAlive(Number(st.claude_pid))) : !!ptyLive(bot);
+  if (running) stopBot(bot);
+  let dest = path.join(BOTCORP_HOME, 'archive', `${bot}-${stamp()}`);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(BOTCORP_HOME, 'archive', `${bot}-${stamp()}-${n}`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  try { fs.renameSync(botHome(bot), dest); }
+  catch (e) {
+    if (e.code !== 'EXDEV') fail(`archive: could not move ${botHome(bot)}: ${e.message}`);
+    fs.cpSync(botHome(bot), dest, { recursive: true });
+    fs.rmSync(botHome(bot), { recursive: true, force: true });
+  }
+  try { fs.unlinkSync(pausedPath(bot)); } catch {}
+  out(`archived ${bot} -> ${dest}`);
+  return 0;
 }
 
 // ---- export / import (a bot folder is a plain folder; the zip is how it moves) --------------
@@ -2861,25 +3065,29 @@ function checkAccountToken(a) {
   // check there fails with a 401 and would cache that FAIL, which then blocks
   // `accounts use` for 24 h. Leave it to the operator.
   if (process.env.BOT_NAME) return { level: 'WARN', ok: false, detail: 'not checked from a bot session (run botcorp doctor as the operator)' };
-  const tok = accountsPs(['-Action', 'get', '-Id', a.id, '-IAmTheLauncher']);
-  if (tok.code !== 0 || !tok.out) return { level: 'FAIL', ok: false, detail: 'vault unreadable (re-enter with botcorp accounts add)' };
-  const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok.out, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
+  const tok = accountTokenPlain(a.id);
+  if (!tok) return { level: 'FAIL', ok: false, detail: 'vault unreadable (re-enter with botcorp accounts add)' };
+  const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
   try { fs.mkdirSync(a.config_dir, { recursive: true }); } catch {}
   const r = runClaude(['-p', 'Reply with the single word ok.', '--model', 'claude-haiku-4-5-20251001', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
   let ok = false, detail = '';
   try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}${j && j.api_error_status ? ` (HTTP ${j.api_error_status})` : ''}`; }
   catch { detail = r.timedOut ? 'timed out after 90 s' : `exit ${r.code}: ${scrub((r.err || r.out).trim()).split(/\r?\n/)[0].slice(0, 120)}`; }
-  if (a.fp) { cache[a.fp] = { ok, at: new Date().toISOString(), detail }; try { writeJsonAtomic(cacheFile, cache); } catch {} }
+  // the plan fields (detectPlan) share the entry
+  if (a.fp) { cache[a.fp] = { ...cache[a.fp], ok, at: new Date().toISOString(), detail }; try { writeJsonAtomic(cacheFile, cache); } catch {} }
   return { level: ok ? 'PASS' : 'FAIL', ok, detail };
 }
 
-function accountTokenChecks(add) {
+// The token check, plus the plan detection when its cached answer is older than 24 h.
+async function accountTokenChecks(add) {
   const list = accountsListJson();
   if (!list.ok) { add('WARN', 'accounts', `accounts list failed: ${list.err.slice(0, 160)}`, 'accounts'); return; }
   if (!list.rows.length) { add('INFO', 'accounts', 'none (botcorp accounts add <id> | seed)', 'accounts'); return; }
   for (const a of list.rows) {
     const c = checkAccountToken(a);
     add(c.level, `account ${a.id}: token`, c.detail, 'accounts');
+    const e = a.fp && (readJson(path.join(STATE_DIR, 'account-checks.json')) || {})[a.fp];
+    if (!e || !e.plan_at || Date.now() - Date.parse(e.plan_at) >= ACCOUNT_CHECK_TTL_MS) await detectPlan(a);
   }
 }
 
@@ -3168,7 +3376,7 @@ async function cmdDoctor({ flags }) {
     }
 
     // accounts (chat logins): does each token still log in? --no-accounts skips the live call
-    if (!flags['no-accounts']) accountTokenChecks(add);
+    if (!flags['no-accounts']) await accountTokenChecks(add);
 
     // cockpit
     const health = await httpOk(`http://127.0.0.1:${COCKPIT_PORT}/healthz`);
@@ -3204,10 +3412,13 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
 
   new [--name <slug>] [--persona "..."] [--telegram] [--telegram-owner <id>] [--modules a,b] [--no-modules c]
       [--yes] [--oauth-stdin] [--no-launch] [--no-plugin-install]      (a terminal without --yes shows the catalogue checklist)
+      [--service daemon|manual] [--account <id>]                      (manual = a chat the daemon never starts; --account: operator, no oauth prompt)
+  archive <bot>                                                         (operator: a chat's folder moves to <BOTCORP_HOME>/archive; a daemon bot exits 2)
   export <bot> [--out <zip>] [--list] [--include-state] | import <zip> [--as <name>]
   backup <bot> [--dry-run]                                              (needs backup.git_remote in bot.yaml)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
-  accounts add <id> [--label <text>] [--plan <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt)
+  accounts add <id> [--label <text>] | list [--json] | remove <id> | seed   (chat logins; token on stdin or hidden prompt; the plan is detected)
+  accounts rename <id> --label <text> | seed --link [--dry-run] [--json]   (operator only, never a bot: link each bot's own token as an account)
   accounts use <bot> <id|none> [--by <who>]   (operator: run a bot on an account's login; applied at its next idle turn)
   accounts backups <bot> <id[,id...]|none> [--by <who>]   (operator: up to 5 accounts the daemon fails over to, in order)
   accounts failover <bot> [--json]            (read-only: the account chain, the live usage limit and what the daemon would do)
@@ -3261,7 +3472,7 @@ exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token / operator-only v
 env: BOTCORP_HOME (runtime root, default ~/.botcorp), COCKPIT_PORT (default 4477), CLOUDFLARE_API_TOKEN (doctor, integrations.cloudflare)`;
 
 const COMMANDS = {
-  new: cmdNew, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
+  new: cmdNew, archive: cmdArchive, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals, tools: cmdTools,

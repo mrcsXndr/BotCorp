@@ -7,7 +7,13 @@
 #   accounts.ps1 -Action add    -Id <id> [-Label <text>] [-Plan <text>] [-FromStdin]   # token on stdin, else hidden prompt
 #   accounts.ps1 -Action list   [-Json]                                                  # masked ****last4 only
 #   accounts.ps1 -Action remove -Id <id>
-#   accounts.ps1 -Action seed   [-Json]        # one account per bot that holds an oauth_token (id = bot name); existing ids kept
+#   accounts.ps1 -Action rename -Id <id> -Label <text>                                   # the label only; id, plan and token kept
+#   accounts.ps1 -Action seed   [-Json] [-Link] [-DryRun]
+#       one account per bot oauth_token not registered yet (matched by the vault
+#       fingerprint, so a shared token is one account). id = bot name, or with
+#       -Link acct-<last4>; label "Account ····<last4>". -Json adds `bots`, each
+#       bot's {bot, id, new} for `botcorp accounts seed --link` to link. -DryRun
+#       reads fingerprints only: no decrypt, no write.
 #   accounts.ps1 -Action get    -Id <id> -IAmTheLauncher                                # plaintext to stdout: chat.ps1/tests only
 #
 # Layout (machine runtime, never in the checkout):
@@ -20,17 +26,21 @@
 # this one process. Exit codes: 0 ok, 1 error, 2 no such account / no token.
 
 param(
-    [Parameter(Mandatory)][ValidateSet('add', 'list', 'remove', 'seed', 'get')][string]$Action,
+    [Parameter(Mandatory)][ValidateSet('add', 'list', 'remove', 'rename', 'seed', 'get')][string]$Action,
     [string]$Id,
     [string]$Label,
     [string]$Plan,
     [switch]$FromStdin,
     [switch]$Json,
+    [switch]$Link,
+    [switch]$DryRun,
     [switch]$IAmTheLauncher,
     [string]$BotCorpRoot
 )
 
 $ErrorActionPreference = 'Stop'
+# Labels carry non-ASCII ("····PgAA"); the CLI reads this output as UTF-8.
+if ([Console]::IsOutputRedirected) { try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch {} }
 . (Join-Path $PSScriptRoot 'vault.ps1')
 . (Join-Path $PSScriptRoot '_paths.ps1')
 
@@ -87,6 +97,20 @@ function Get-AccountRows {
     return $rows
 }
 
+# "Account ····PgAA": a setup token has no email to name it by. The CLI renames
+# it "<Plan> ····PgAA" once it detects a plan (cli/botcorp.mjs detectPlan).
+function Get-SeedLabel { param([string]$Last4) return ('Account ' + ([string][char]0x00B7) * 4 + $Last4) }
+
+# acct-<last4>, lowercased into the id shape; -2, -3, ... when that id is taken.
+function New-SeedAccountId {
+    param([string]$Last4, [hashtable]$Taken)
+    $base = 'acct-' + (($Last4.ToLowerInvariant() -replace '[^a-z0-9]', '-').Trim('-'))
+    if ($base -eq 'acct-') { $base = 'acct' }
+    $cand = $base
+    for ($n = 2; (Read-Account $cand) -or $Taken.ContainsKey($cand); $n++) { $cand = "$base-$n" }
+    return $cand
+}
+
 try {
     switch ($Action) {
         'add' {
@@ -121,21 +145,53 @@ try {
             Remove-Item -Force (Join-Path $acctHome 'account.json')
             Write-Output "accounts: removed $Id (its claude/ config dir under $acctHome is kept; delete it by hand if wanted)"
         }
+        'rename' {
+            if (-not $Id -or $Id -notmatch $ID_RE) { Write-Error 'accounts rename: -Id <id> required'; exit 1 }
+            $newLabel = "$Label".Trim()
+            if (-not $newLabel -or $newLabel.Length -gt 64 -or $newLabel -match '[\r\n\x00]') { Write-Error 'accounts rename: -Label <text> required (one line, at most 64 characters)'; exit 1 }
+            if (-not (Read-Account $Id)) { Write-Output "accounts: no such account $Id"; exit 2 }
+            $rec = Write-Account -AccountId $Id -AccountLabel $newLabel -AccountPlan ''
+            Write-Output "accounts: $Id label -> $($rec.label)"
+        }
         'seed' {
             $botsDir = Get-BotsDir -Root $root
-            $done = @(); $skipped = @()
+            $done = @(); $skipped = @(); $map = @()
+            # fingerprint -> account id: the registry's, then each account this run adds
+            $byFp = @{}; $taken = @{}
+            foreach ($r in @(Get-AccountRows)) { if ($r.fp -and -not $byFp.ContainsKey($r.fp)) { $byFp[$r.fp] = $r.id } }
             foreach ($d in (Get-ChildItem -Path $botsDir -Directory -ErrorAction SilentlyContinue | Sort-Object Name)) {
                 if ($d.Name.StartsWith('_') -or -not (Test-Path (Join-Path $d.FullName 'bot.yaml'))) { continue }
-                if (Read-Account $d.Name) { $skipped += "$($d.Name) (exists)"; continue }
+                $rec = $null
+                try { $rec = (Read-VaultStore $d.FullName)['oauth_token'] } catch { $rec = $null }
+                if (-not $rec) { $skipped += "$($d.Name) (no oauth_token)"; continue }
+                $fp = "$($rec.fp)"; $last4 = "$($rec.last4)"
+                if ($fp -and $byFp.ContainsKey($fp)) {
+                    $map += [ordered]@{ bot = $d.Name; id = $byFp[$fp]; new = $false }
+                    continue
+                }
+                if (-not $Link -and (Read-Account $d.Name)) { $skipped += "$($d.Name) (exists)"; continue }
+                if ($DryRun) {
+                    $newId = if ($Link) { New-SeedAccountId -Last4 $(if ($last4) { $last4 } else { $fp.Substring(0, [Math]::Min(4, $fp.Length)) }) -Taken $taken } else { $d.Name }
+                    $taken[$newId] = $true; if ($fp) { $byFp[$fp] = $newId }
+                    $done += $newId
+                    $map += [ordered]@{ bot = $d.Name; id = $newId; new = $true }
+                    continue
+                }
                 $tok = $null
                 try { $tok = Get-VaultSecret -BotHome $d.FullName -Bot $d.Name -Key 'oauth_token' } catch { $tok = $null }
-                if (-not $tok) { $skipped += "$($d.Name) (no oauth_token)"; continue }
-                [void](Write-Account -AccountId $d.Name -AccountLabel "bot $($d.Name)" -AccountPlan '')
-                $masked = Set-VaultSecret -BotHome (Get-AccountHome $d.Name) -Bot (Get-AccountEntropy $d.Name) -Key 'oauth_token' -Value $tok
+                if (-not $tok) { $skipped += "$($d.Name) (oauth_token unreadable)"; continue }
+                $tok = $tok.Trim()
+                if (-not $fp) { $fp = Get-VaultFingerprint $tok }
+                if (-not $last4) { $last4 = $tok.Substring([Math]::Max(0, $tok.Length - 4)) }
+                $newId = if ($Link) { New-SeedAccountId -Last4 $last4 -Taken $taken } else { $d.Name }
+                [void](Write-Account -AccountId $newId -AccountLabel (Get-SeedLabel $last4) -AccountPlan '')
+                $masked = Set-VaultSecret -BotHome (Get-AccountHome $newId) -Bot (Get-AccountEntropy $newId) -Key 'oauth_token' -Value $tok
                 $tok = $null
-                $done += "$($d.Name) $masked"
+                $taken[$newId] = $true; $byFp[$fp] = $newId
+                $done += "$newId $masked"
+                $map += [ordered]@{ bot = $d.Name; id = $newId; new = $true }
             }
-            if ($Json) { Write-Output (ConvertTo-Json -InputObject ([ordered]@{ seeded = $done; skipped = $skipped }) -Compress) }
+            if ($Json) { Write-Output (ConvertTo-Json -InputObject ([ordered]@{ seeded = $done; skipped = $skipped; bots = $map }) -Depth 4 -Compress) }
             else {
                 Write-Output "accounts seed: $($done.Count) added$(if ($done.Count) { ' - ' + ($done -join ', ') })"
                 if ($skipped.Count) { Write-Output "accounts seed: skipped $($skipped -join ', ')" }

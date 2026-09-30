@@ -17,6 +17,9 @@
 //                       launch, but the session runs another token (a
 //                       fallback or a shared daemon); a switch not yet
 //                       attempted is the Usage sheet's "at next idle" line
+//   account_unlinked    `accounts seed --link --dry-run --json`: a bot runs on
+//                       its own token that is not an Account yet, or a label
+//                       is still "bot <name>" (Link = POST /api/accounts/link)
 // Each item: {bot, kind, severity: warn|bad, text, action}. The action names
 // what the page offers inline; every write still goes through the CLI.
 
@@ -46,7 +49,7 @@ const SCAN_CACHE_MS = 60_000;
 const SEVERITY = { bad: 0, warn: 1 };
 
 // Pure: the inputs gathered below -> the sorted item list (bad first, then as found).
-export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {}, accounts = [] } = {}) {
+export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {}, accounts = [], unlinked = null } = {}) {
   const items = [];
   const push = (bot, kind, severity, text, action) => items.push({ bot, kind, severity, text, action });
   for (const a of approvals) push(a.bot, 'approval', 'warn', `${a.bot} asks: ${CARDS.approvalView(a).title}`, { type: 'approve', bot: a.bot, id: a.id });
@@ -85,6 +88,10 @@ export function attentionItems({ bots: list = [], approvals = [], pairing = {}, 
   const newer = releases.filter((r) => r.status === 'pending' && !isOlder(r.tag, installed)).sort((a, b) => cmpVersion(b.tag, a.tag));
   if (newer.length) push(null, 'release', 'warn', `Release ${newer[0].tag} is ready to apply${newer.length > 1 ? ` (${newer.length} newer releases)` : ''}`, { type: 'release', tag: newer[0].tag });
   if (cc && cc.candidate && cc.candidate.status === 'rejected') push(null, 'cc_rejected', 'warn', `Claude Code ${cc.candidate.version} failed its canary and was not rolled out`, { type: 'release' });
+  if (unlinked && ((unlinked.linked || []).length || (unlinked.relabeled || []).length)) {
+    const bots = unlinked.linked || [];
+    push(null, 'account_unlinked', 'warn', bots.length ? `${bots.join(', ')}: own token not linked as an account` : 'Accounts still named after bots', { type: 'link', bots });
+  }
   return items.map((it, i) => [it, i]).sort((a, b) => SEVERITY[a[0].severity] - SEVERITY[b[0].severity] || a[1] - b[1]).map(([it]) => it);
 }
 
@@ -114,10 +121,13 @@ async function gather() {
   ]);
   let cc = null;
   try { cc = ccStatus(); } catch {}
+  // read-only (fingerprints, no decrypt); only when a bot has no account or a label is still "bot <name>"
+  const unlinked = list.some((b) => !b.account && !b.name.startsWith('_')) || (Array.isArray(accounts) && accounts.some((a) => /^bot /.test(String(a.label || ''))))
+    ? await cliJson(['accounts', 'seed', '--link', '--dry-run', '--json'], null) : null;
   const items = attentionItems({
     bots: list, approvals, status: Array.isArray(status) ? status : [status], releases: updates.releases, installed: updates.installed, cc,
     pairing: Object.fromEntries(pairs), autoState: Object.fromEntries(autos),
-    registry: Object.fromEntries(regs.filter(([, r]) => r)), usage: Object.fromEntries(usage), accounts: Array.isArray(accounts) ? accounts : [],
+    registry: Object.fromEntries(regs.filter(([, r]) => r)), usage: Object.fromEntries(usage), accounts: Array.isArray(accounts) ? accounts : [], unlinked,
   });
   return { at: new Date().toISOString(), count: items.length, items };
 }
@@ -191,14 +201,19 @@ export async function accountsOverview() {
       .map((r) => ({ bot: r.bot, running: r.running, fiveHour: r.fiveHour, sevenDay: r.sevenDay, wanted: r.account_wanted, pending: r.account_pending }));
     const e = known[id] && typeof known[id] === 'object' ? known[id] : null;
     const until = e && e.blocked_until ? Date.parse(e.blocked_until) : NaN;
-    const c = a.fp && checks && checks[a.fp] ? checks[a.fp] : null;
+    // an entry with only the plan fields (detectPlan) is not a token check
+    const c = a.fp && checks && checks[a.fp] && typeof checks[a.fp].ok === 'boolean' ? checks[a.fp] : null;
     const check = c ? { ok: !!c.ok, at: c.at || null, detail: String(c.detail || '') } : null;
     const failed = (e && e.failed) || (check && !check.ok ? { why: check.detail } : null);
     const state = !a.masked ? 'no-token' : failed ? 'failed' : Number.isFinite(until) && until > now ? 'limited' : 'ok';
     const pick = (k) => onIt.map((r) => r[k]).find((w) => w && !w.na) || (onIt[0] ? onIt[0][k] : null);
+    // used_by: every bot whose chain names it; order is 1 for the primary, 1..5 for the backups
+    const usedBy = usage.bots.flatMap((r) => (r.account_wanted === id ? [{ bot: r.bot, role: 'primary', order: 1 }]
+      : (r.backups || []).includes(id) ? [{ bot: r.bot, role: 'backup', order: r.backups.indexOf(id) + 1 }] : []));
     return {
-      id, label: String(a.label || id), plan: String(a.plan || ''), masked: a.masked ? String(a.masked) : null,
+      id, label: String(a.label || id), plan: String(a.plan || ''), plan_source: a.plan_source || null, masked: a.masked ? String(a.masked) : null,
       state, blocked_until: Number.isFinite(until) ? new Date(until).toISOString() : null, window: (e && e.window) || null, failed, check,
+      used_by: usedBy,
       wanted_by: usage.bots.filter((r) => r.account_wanted === id).map((r) => r.bot),
       bots: onIt, fiveHour: pick('fiveHour'), sevenDay: pick('sevenDay'),
     };

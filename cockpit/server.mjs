@@ -48,6 +48,7 @@ import { runCli, cliJson } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
 import * as attach from '../core/attach.mjs';
 import { ccStatus } from '../core/cc.mjs';
+import { MODEL_TIERS } from '../daemon/botyaml.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
 
@@ -170,6 +171,9 @@ app.get('/api/access/selftest', (req, res) => res.json({ verified: true, email: 
 app.get('/api/engine/version', wrap(async (_req, res) => res.json({ ...(await engine.engineVersion()), exposure: ACCESS ? 'access' : 'loopback' })));
 
 app.get('/api/bots', wrap(async (_req, res) => res.json(await bots.listBots())));
+// The model tiers a bot's Settings offers by name (harness/models.json); opt-in tiers are left out.
+app.get('/api/models', (_req, res) => res.json(Object.entries(MODEL_TIERS).filter(([, t]) => t && !t.opt_in)
+  .map(([tier, t]) => ({ tier, id: t.id, name: t.name, effort: t.effort ?? null }))));
 app.get('/api/bots/:name', withBot(async (_req, res, bot) => res.json(bot)));
 
 // Lifecycle goes through the CLI. The response is the CLI's outcome, scrubbed.
@@ -180,6 +184,49 @@ async function lifecycle(res, args) {
 app.post('/api/bots/:name/start', withBot((req, res, bot) => lifecycle(res, ['start', bot.name, ...(req.body?.fresh ? ['--fresh'] : [])])));
 app.post('/api/bots/:name/stop', withBot((_req, res, bot) => lifecycle(res, ['stop', bot.name])));
 app.post('/api/bots/:name/restart', withBot((req, res, bot) => lifecycle(res, ['restart', bot.name, ...(req.body?.fresh ? ['--fresh'] : [])])));
+
+// New bot / New chat (`botcorp new --yes --no-launch`): always on a registered
+// account, never with a typed token. A chat is service: manual, named
+// chat-MMDD-HHMM when unnamed. A Telegram token follows through PUT
+// /secrets/telegram, then POST /start: creating never launches.
+const PERSONA_RE = /^[^\r\n\0]{1,300}$/;
+function chatName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `chat-${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+app.post('/api/bots', wrap(async (req, res) => {
+  const { name, persona, account, telegram, service } = req.body || {};
+  if (!['daemon', 'manual'].includes(service)) return res.status(400).json({ error: 'service: daemon (keep running) or manual (a chat)' });
+  if (typeof account !== 'string' || !bots.NAME_RE.test(account)) return res.status(400).json({ error: 'account: a registered account id' });
+  if (!(name === undefined || name === null || name === '' || (typeof name === 'string' && bots.NAME_RE.test(name)))) return res.status(400).json({ error: 'name: lowercase letters, digits and hyphens, at most 32' });
+  if (!(persona === undefined || persona === null || persona === '' || (typeof persona === 'string' && PERSONA_RE.test(persona)))) return res.status(400).json({ error: 'persona: one line, at most 300 characters' });
+  if (!(telegram === undefined || typeof telegram === 'boolean')) return res.status(400).json({ error: 'telegram: true or false' });
+  if (!operatorGate(req, res)) return;
+  let bot = name || (service === 'manual' ? chatName() : '');
+  if (bot && !name) {
+    const taken = new Set((await bots.listBots()).map((b) => b.name));
+    for (let n = 2; taken.has(bot); n++) bot = `${chatName()}-${n}`;
+  }
+  const args = ['new', '--yes', '--no-launch', '--service', service, '--account', account];
+  if (bot) args.push('--name', bot);
+  if (persona) args.push('--persona', persona);
+  if (telegram) args.push('--telegram');
+  res.locals.audit = { action: 'new', account, service, ...(bot ? { new_bot: bot } : {}) };
+  const r = await runCli(args, { timeoutMs: 600_000 });
+  attention.invalidate();
+  const made = /^created .*[\\/]([a-z0-9][a-z0-9-]{0,31})[\\/]bot\.yaml$/m.exec(r.out);
+  // exit 2: the account is unknown, has no token or failed its token check
+  res.status(r.code === 0 ? 200 : r.code === 2 ? 409 : 502).json({ ok: r.code === 0, name: made ? made[1] : bot || null, code: r.code, out: r.out, err: r.err });
+}));
+// Archive a chat (`botcorp archive`): its folder moves to <rt>/archive; a pinned bot is refused (409).
+app.post('/api/bots/:name/archive', withBot(async (req, res, bot) => {
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { action: 'archive' };
+  const r = await runCli(['archive', bot.name], { timeoutMs: 120_000 });
+  attention.invalidate();
+  res.status(r.code === 0 ? 200 : r.code === 2 ? 409 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
 
 app.get('/api/bots/:name/sessions', withBot(async (_req, res, bot) => res.json(await history.listSessions(bot.configDir, bot.home))));
 app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
@@ -476,15 +523,15 @@ app.get('/api/accounts', wrap(async (_req, res) => res.json(await attention.acco
 // `accounts add` on stdin: never argv, never a log (auditOnClose records the
 // path, the method and the id only; the CLI's reply carries the last 4).
 const ACCOUNT_TEXT_RE = /^[^\r\n\0]{0,64}$/;
+// `plan` in the body is ignored: the CLI detects the plan (accounts add --plan stays a CLI-only override).
 app.post('/api/accounts', wrap(async (req, res) => {
-  const { id, label, plan, token } = req.body || {};
+  const { id, label, token } = req.body || {};
   if (!bots.NAME_RE.test(id || '')) return res.status(400).json({ error: 'id: lowercase letters, digits and hyphens, at most 32' });
-  if (![label, plan].every((v) => v === undefined || v === null || (typeof v === 'string' && ACCOUNT_TEXT_RE.test(v)))) return res.status(400).json({ error: 'label and plan: one line, at most 64 characters' });
+  if (!(label === undefined || label === null || (typeof label === 'string' && ACCOUNT_TEXT_RE.test(label)))) return res.status(400).json({ error: 'label: one line, at most 64 characters' });
   if (typeof token !== 'string' || token.length < 20 || token.length > 400 || /\s/.test(token)) return res.status(400).json({ error: 'token: the whole string `claude setup-token` printed (20 to 400 characters, no spaces)' });
   if (!operatorGate(req, res)) return;
   const args = ['accounts', 'add', id, '--by', req.identity];
   if (label) args.push('--label', label);
-  if (plan) args.push('--plan', plan);
   res.locals.audit = { account: id, action: 'add' };
   const r = await runCli(args, { stdin: token + '\n' });
   attention.invalidate();
@@ -500,6 +547,30 @@ app.delete('/api/accounts/:id', wrap(async (req, res) => {
   // exit 2 = a bot's bot.yaml still names it (the CLI's message says which)
   if (r.code === 2) return res.status(409).json({ ok: false, code: r.code, error: (r.err || r.out).trim() });
   res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+// Rename an account: the label only (`accounts rename`).
+app.patch('/api/accounts/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  const label = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
+  if (!bots.NAME_RE.test(id)) return res.status(400).json({ error: 'bad account id' });
+  if (!label || !ACCOUNT_TEXT_RE.test(label)) return res.status(400).json({ error: 'label: one line, 1 to 64 characters' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { account: id, action: 'rename' };
+  const r = await runCli(['accounts', 'rename', id, '--label', label, '--by', req.identity]);
+  attention.invalidate();
+  if (r.code === 2) return res.status(404).json({ ok: false, code: r.code, error: 'no such account' });
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+// The account_unlinked item's Link: every bot's own token becomes an account and the bot is set to it (`accounts seed --link`).
+app.post('/api/accounts/link', wrap(async (req, res) => {
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { action: 'link' };
+  const r = await runCli(['accounts', 'seed', '--link', '--json', '--by', req.identity], { timeoutMs: 180_000 });
+  attention.invalidate();
+  let result = null;
+  try { result = JSON.parse(r.out); } catch {}
+  if (r.code !== 0 || !result) return res.status(502).json({ ok: false, code: r.code, err: r.err || r.out });
+  res.json({ ok: true, ...result });
 }));
 app.get('/api/chat/recent', wrap(async (_req, res) => res.json(await chatLaunch.listRecent())));
 app.post('/api/chat/launch', wrap((req, res) => {

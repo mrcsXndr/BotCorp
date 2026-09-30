@@ -1225,7 +1225,7 @@ function openBot(name, drawer, capsTab) {
 const KIND_LABEL = {
   approval: 'approval', pairing: 'pairing request', vault_locked: 'vault locked', blocked: 'waiting on you', down: 'down',
   automation_failing: 'automation failing', registry: 'tools registry', usage_blocked: 'usage limit', release: 'release', cc_rejected: 'Claude Code canary',
-  account: 'account switch',
+  account: 'account switch', account_unlinked: 'account',
 };
 let attnSnap = '';
 async function refreshAttention() {
@@ -1259,6 +1259,7 @@ function attnActs(a) {
     case 'tools': return b('Review tools', 'tools');
     case 'usage': return b('Usage', 'usage');
     case 'release': return b('Releases', 'release');
+    case 'link': return b('Link', 'link');
     default: return '';
   }
 }
@@ -1267,6 +1268,7 @@ function attnDo(a, k) {
   if (k === 'approve' || k === 'reject') return operatorAct('POST', `/api/bots/${bot}/approvals/${encodeURIComponent(a.id)}/${k}`, null, `${k === 'approve' ? 'approved' : 'rejected'} ${a.id}`);
   if (k === 'pair' || k === 'deny') return operatorAct('POST', `/api/bots/${bot}/pair${k === 'deny' ? '/deny' : ''}`, { senderId: a.senderId }, `${k === 'pair' ? 'paired' : 'denied'} ${a.senderId}`);
   if (k === 'run') return operatorAct('POST', `/api/bots/${bot}/automations/${encodeURIComponent(a.automation)}/run`, null, `${a.automation} queued`);
+  if (k === 'link') return operatorAct('POST', '/api/accounts/link', {}, 'linked');
   closeSheet('attnBg');
   if (k === 'vault') return openBot(a.bot, 'vault');
   if (k === 'open') return openBot(a.bot);

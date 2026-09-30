@@ -9,6 +9,8 @@ Fake-stdin runs (the test_hooks_fake_stdin.py pattern):
 - (v0.8.3) `botcorp cockpit pair|unpair` is blocked for every bot, an admin bot
   included, by the hook and by the CLI (exit 3, no code minted); vault-guard
   blocks the pairing key and the pairing file.
+- (v0.8.5) `botcorp accounts rename` and `accounts seed --link` are blocked for
+  every bot, an admin bot included.
 """
 from __future__ import annotations
 
@@ -77,6 +79,33 @@ def test_blocks_cockpit_pair_even_for_an_admin_bot(abox, tool, command):
     assert "BLOCKED" in proc.stderr and "pair" in proc.stderr
     # positive control: the same session passes a verb an admin may run
     assert _run(boss, "operator-guard.sh", tool, {"command": "botcorp approve peon 9e0001"}).returncode == 0
+
+
+@needs_node
+@pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
+@pytest.mark.parametrize("command", [
+    "botcorp accounts rename acc1 --label mine",
+    'node "C:\\x\\BotCorp\\cli\\botcorp.mjs" accounts rename acc1',
+    "node cli/botcorp.mjs accounts seed --link",
+    "botcorp accounts seed --json --link --dry-run",
+])
+def test_blocks_account_rename_and_link_even_for_an_admin_bot(abox, tmp_path, bot_home, tool, command):
+    """(v0.8.5) accounts rename / seed --link are the operator's alone."""
+    rt, bots, op, as_bot = abox
+    boss = {**as_bot("boss", ID_BOSS), "CLAUDE_PLUGIN_ROOT": str(HARNESS)}
+    for env in (boss, base_env(tmp_path, bot_home)):
+        proc = _run(env, "operator-guard.sh", tool, {"command": command})
+        assert proc.returncode == 2, proc.stdout + proc.stderr
+        assert "BLOCKED" in proc.stderr and "accounts rename" in proc.stderr
+
+
+@needs_node
+def test_an_admin_bot_still_passes_the_plain_seed(abox):
+    """Positive control for the test above: the same admin session may run `accounts seed` without --link."""
+    rt, bots, op, as_bot = abox
+    boss = {**as_bot("boss", ID_BOSS), "CLAUDE_PLUGIN_ROOT": str(HARNESS)}
+    proc = _run(boss, "operator-guard.sh", "Bash", {"command": "botcorp accounts seed --json"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr
 
 
 @needs_node

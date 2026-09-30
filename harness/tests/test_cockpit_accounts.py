@@ -61,7 +61,8 @@ def test_add_needs_the_token_then_adds_without_leaking_the_secret(ccockpit):
     assert code == 200 and r["ok"], r
     assert "****Z9y8" in r["out"] and FAKE not in r["out"] and FAKE not in r["err"], r
     rows = json.loads(cli(env, "accounts", "list", "--json").stdout)
-    assert [(a["id"], a["label"], a["plan"]) for a in rows] == [("acc1", "Spare seat", "max")]
+    # v0.8.5: the body's plan is ignored (the CLI detects it; no override from the cockpit)
+    assert [(a["id"], a["label"], a["plan"], a["plan_source"]) for a in rows] == [("acc1", "Spare seat", None, None)]
     assert rows[0]["masked"].endswith("Z9y8")
 
     audit = [a for a in _audit(rt, 5) if a["path"] == "/api/accounts"]
