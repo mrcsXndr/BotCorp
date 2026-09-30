@@ -11,12 +11,19 @@
 //   held       the session is blocked (observe's hard block: a login, a usage
 //              limit); it stays at the head of the queue and goes out once
 //              that clears (back to `queued`, then typed)
-//   delivered  typed (bracketed paste, then Enter) and its user turn reached
-//              the transcript within CONFIRM_MS
+//   delivered  typed (bracketed paste, then Enter) and, within CONFIRM_MS, its
+//              user turn reached the transcript, or Claude Code logged it as
+//              queued mid-turn (`queue-operation` enqueue / a `queued_command`
+//              attachment: the shape a busy session gives typed input)
 //   expired    its ttl ran out while it waited
-//   failed     the session is stopped, the transport did not come up, or the
-//              typed turn never reached the transcript. Never retyped: a retry
-//              could land twice.
+//   failed     the session is stopped, the command is unknown, or MAX_ATTEMPTS
+//              attempts went unconfirmed.
+// An attempt that is not confirmed (the transport did not come up, or nothing
+// of the typed text reached the transcript) is recorded `queued` with its
+// `attempt` number and retried once the session is IDLE, never mid-turn, up to
+// MAX_ATTEMPTS; before retyping, the transcript since the first attempt is read
+// again, so a turn that landed late is marked delivered instead of typed twice.
+// One result line per attempt.
 //
 // Both files are bounded. inbox.jsonl is trimmed to the newest KEEP_ITEMS once
 // it passes KEEP_ITEMS + 100, never dropping an item that still waits; every
@@ -54,6 +61,8 @@ export const HOST_UP_MS = 15_000;   // a started attach host publishes its endpo
 const SETTLE_MS = 1_500;            // output quiet this long = the TUI has drawn
 const READY_MS = 20_000;            // ... or give up waiting for quiet and type anyway
 export const CONFIRM_MS = 30_000;   // the user turn must reach the transcript by then
+export const MAX_ATTEMPTS = 2;      // the first typing, then one retry once the session is idle
+const confirmMs = () => Number(process.env.BOTCORP_INBOX_CONFIRM_MS) || CONFIRM_MS;
 // Claude Code reads a pasted image path in the background: an Enter before it
 // has drawn "[Image #n]" submits nothing (reference host 2026-09-28). So after
 // an image paste, Enter waits for IMAGE_MIN_MS, then for IMAGE_QUIET_MS of
@@ -126,19 +135,28 @@ export function enqueue(bot, { text, source = 'cli', ttlS = DEFAULT_TTL_S }) {
 }
 
 // Every item, oldest first, with its status: the newest result line, else queued.
+// `attempt` / `file` / `offset`: from the newest line that carries an attempt
+// (a later held/queued line does not reset them).
 export function readInbox(bot) {
   const last = new Map();
-  for (const r of readLines(resultsFile(bot))) if (r && r.id) last.set(r.id, r);
+  const tried = new Map();
+  for (const r of readLines(resultsFile(bot))) {
+    if (!r || !r.id) continue;
+    last.set(r.id, r);
+    if (r.attempt) tried.set(r.id, r);
+  }
   return readLines(inboxFile(bot)).filter((i) => i && i.id).map((i) => {
     const r = last.get(i.id);
-    return { ...i, status: r ? r.status : 'queued', detail: r ? r.detail || '' : '', status_at: r ? r.at : i.at };
+    const a = tried.get(i.id);
+    return { ...i, status: r ? r.status : 'queued', detail: r ? r.detail || '' : '', status_at: r ? r.at : i.at,
+      attempt: a ? a.attempt : 0, file: a ? a.file || null : null, offset: a ? a.offset || 0 : 0 };
   });
 }
 
 export function itemOf(bot, id) { return readInbox(bot).find((i) => i.id === id) || null; }
 const waiting = (bot) => readInbox(bot).filter((i) => !TERMINAL.has(i.status));
-function record(bot, id, status, detail = '') {
-  append(resultsFile(bot), { id, status, at: new Date().toISOString(), detail });
+function record(bot, id, status, detail = '', extra = {}) {
+  append(resultsFile(bot), { id, status, at: new Date().toISOString(), detail, ...extra });
   const rows = readLines(resultsFile(bot));
   if (rows.length <= 2 * KEEP_ITEMS) return;
   // a result dropped for an item inbox.jsonl still holds would read `queued` and be retyped
@@ -199,9 +217,24 @@ export async function drain(bot) {
         // yet. Alive (idle, working, unknown): type now; Claude Code queues
         // input that arrives mid-turn itself, as it does a Telegram message.
         if (o.phase === 'down' || o.phase === 'starting') { await sleep(pollMs()); continue; }
+        if (item.attempt) {
+          // an earlier attempt went unconfirmed: it may still land (read the
+          // transcript again), else it is retyped only into an idle session
+          if (item.file && await landed({ configDir: configDir(bot), home: botHome(bot) }, { file: item.file, offset: item.offset }, item.text)) {
+            record(bot, item.id, 'delivered', `attempt ${item.attempt} landed late (confirmed in the transcript)`);
+            delivered++;
+            continue;
+          }
+          if (o.phase !== 'idle') { await sleep(pollMs()); continue; }
+        }
+        const n = (item.attempt || 0) + 1;
         const r = await deliver(bot, o.kind, item.text);
-        record(bot, item.id, r.ok ? 'delivered' : 'failed', r.detail);
-        if (r.ok) delivered++;
+        if (r.ok) { record(bot, item.id, 'delivered', n > 1 ? `attempt ${n}/${MAX_ATTEMPTS} ${r.detail}` : r.detail); delivered++; }
+        else if (r.retry && n < MAX_ATTEMPTS) {
+          // the first typed attempt's transcript position is the one a late turn is looked for from
+          const at = item.file ? { file: item.file, offset: item.offset } : { file: r.file || null, offset: r.offset || 0 };
+          record(bot, item.id, 'queued', `attempt ${n}/${MAX_ATTEMPTS}: ${r.detail}; retried once the session is idle`, { attempt: n, ...at });
+        } else record(bot, item.id, 'failed', n > 1 ? `attempt ${n}/${MAX_ATTEMPTS}: ${r.detail}` : r.detail);
       }
     } finally { dropLock(bot); }
   }
@@ -219,23 +252,26 @@ export async function attachHost(bot, kind) {
   return ep ? { ep, started: true } : { err: `the attach host did not come up within ${HOST_UP_MS / 1000}s` };
 }
 
+// -> {ok, detail}; a failure that may be retried (nothing typed, or typed but
+// nothing of it reached the transcript) also carries retry: true and the
+// transcript position the attempt started from.
 async function deliver(bot, kind, text) {
   const { ep, started, err: hostErr } = await attachHost(bot, kind);
-  if (hostErr) return { ok: false, detail: hostErr };
+  if (hostErr) return { ok: false, detail: hostErr, retry: true };
   const t = { configDir: configDir(bot), home: botHome(bot) };
   const file = await currentTranscript(t);
   let offset = 0;
   if (file) try { offset = fs.statSync(file).size; } catch {}
   const { ws, err } = await typeInto(ep, text, imagePastes(text, botHome(bot)));
   try {
-    if (err) return { ok: false, detail: err };
+    if (err) return { ok: false, detail: err, retry: true, file, offset };
     const c = await confirm(t, { file, offset }, text);
-    if (c === true) {
+    if (c === TURN || c === QUEUED) {
       const via = ep.mode === 'attach' ? `${started ? 'a new' : 'the running'} attach host` : `the running pty-host (${ep.mode})`;
-      return { ok: true, detail: `via ${via}; user turn confirmed in the transcript` };
+      return { ok: true, detail: `via ${via}; ${c === TURN ? 'user turn' : 'queued by Claude Code mid-turn,'} confirmed in the transcript` };
     }
     if (c) return { ok: false, detail: c };
-    return { ok: false, detail: `typed, but no matching user turn reached the transcript within ${CONFIRM_MS / 1000}s` };
+    return { ok: false, detail: `typed, but no matching user turn reached the transcript within ${confirmMs() / 1000}s`, retry: true, file, offset };
   } finally { try { ws.close(); } catch {} }
 }
 
@@ -300,31 +336,70 @@ function unknownCommand(line, name) {
   return o?.type === 'system' && typeof o.content === 'string' && o.content.trim() === `Unknown command: /${name}`;
 }
 
+// Input typed into a BUSY session is no user entry: Claude Code logs
+// `{type: 'queue-operation', operation: 'enqueue', content}` at once and, when
+// the running turn absorbs it, a `queued_command` attachment carrying the text
+// as `prompt` (reference host 2026-09-29: both "failed" approval notices had
+// reached the bot this way). The text of such a line, else null.
+function queuedText(line) {
+  let o;
+  try { o = JSON.parse(line); } catch { return null; }
+  if (o?.type === 'queue-operation' && o.operation === 'enqueue' && typeof o.content === 'string') return o.content;
+  if (o?.type === 'attachment' && o.attachment?.type === 'queued_command' && typeof o.attachment.prompt === 'string') return o.attachment.prompt;
+  return null;
+}
+
+const TURN = 'turn', QUEUED = 'queued';
+
 // Raw lines, not chat.mjs's turns: a typed `/name` is recorded as a
 // <command-name> wrapper that the chat view filters out as meta. A plugin
 // skill is recorded under its namespaced name: typed `/standup` lands as
 // `<command-name>/botcorp:standup</command-name>` (reference host 2026-09-26).
 // A plugin COMMAND is not: bare `/critic` is "Unknown command: /critic", and
-// only `/botcorp:critic` runs it. true = confirmed, a string = why it failed.
-async function confirm(t, start, text) {
+// only `/botcorp:critic` runs it. -> TURN | QUEUED | {failed: why} | null.
+function matcher(text) {
   const head = norm(text).slice(0, 60);
   const cmd = /^\/([\w:.-]+)/.exec(text.trim());
   const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const needle = cmd ? new RegExp(`<command-name>/${cmd[1].includes(':') ? '' : '(?:[\\w.-]+:)?'}${esc(cmd[1])}</command-name>`) : null;
+  return (line) => {
+    const u = userText(line);
+    if (u !== null && ((needle && needle.test(u)) || norm(u).includes(head))) return TURN;
+    const q = queuedText(line);
+    if (q !== null && norm(q).includes(head)) return QUEUED;
+    if (cmd && unknownCommand(line, cmd[1])) {
+      return { failed: `typed, but Claude Code has no /${cmd[1]}${cmd[1].includes(':') ? '' : ' (a plugin command needs its prefix, such as /botcorp:<name>)'}` };
+    }
+    return null;
+  };
+}
+
+// TURN / QUEUED = confirmed, a string = why it failed, false = nothing within the window.
+async function confirm(t, start, text) {
+  const match = matcher(text);
   let { file, offset } = start;
-  for (const end = Date.now() + CONFIRM_MS; Date.now() < end; await sleep(500)) {
+  for (const end = Date.now() + confirmMs(); Date.now() < end; await sleep(500)) {
     const cur = await currentTranscript(t);
     if (cur !== file) { file = cur; offset = 0; }
     if (!file) continue;
     let chunk = '';
     try { chunk = await readFrom(file, offset); } catch { continue; }
     for (const line of chunk.split('\n')) {
-      const u = userText(line);
-      if (u !== null && ((needle && needle.test(u)) || norm(u).includes(head))) return true;
-      if (cmd && unknownCommand(line, cmd[1])) {
-        return `typed, but Claude Code has no /${cmd[1]}${cmd[1].includes(':') ? '' : ' (a plugin command needs its prefix, such as /botcorp:<name>)'}`;
-      }
+      const m = match(line);
+      if (m === TURN || m === QUEUED) return m;
+      if (m) return m.failed;
     }
   }
   return false;
+}
+
+// Did an earlier, unconfirmed attempt land after all? One read of the transcript
+// from where that attempt started (the whole current one when it has rotated).
+async function landed(t, start, text) {
+  const match = matcher(text);
+  const cur = await currentTranscript(t);
+  if (!cur) return false;
+  let chunk = '';
+  try { chunk = await readFrom(cur, cur === start.file ? start.offset : 0); } catch { return false; }
+  return chunk.split('\n').some((line) => { const m = match(line); return m === TURN || m === QUEUED; });
 }

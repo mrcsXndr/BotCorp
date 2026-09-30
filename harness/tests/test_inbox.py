@@ -67,15 +67,32 @@ process.stdin.on('data', (b) => {
       process.stdout.write('\r\nstub session> ');
       continue;
     }
+    // v0.8.6 R17 shapes: BUSYQ = what a busy session writes for typed input (reference
+    // host 2026-09-29); DROPONCE / DROPALL = a typing that never reaches the transcript
+    // (the first time / every time); LATE = a user turn written only after 4 s
+    if (/BUSYQ/.test(text)) {
+      const now = new Date().toISOString();
+      fs.appendFileSync(out, JSON.stringify({ type: 'queue-operation', operation: 'enqueue', timestamp: now, sessionId, content: text }) + '\n');
+      fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, attachment: { type: 'queued_command', prompt: text, commandMode: 'prompt',
+        origin: { kind: 'human' }, timestamp: now, humanTurn: true }, type: 'attachment', uuid: crypto.randomUUID(), timestamp: now, sessionId }) + '\n');
+      process.stdout.write('\r\nqueued\r\nstub session> ');
+      continue;
+    }
+    if (/DROPALL/.test(text) || (/DROPONCE/.test(text) && !dropped.has(text))) { dropped.add(text); process.stdout.write('\r\nstub session> '); continue; }
     const content = m ? `<command-message>botcorp:${m[1]}</command-message>\n<command-name>/botcorp:${m[1]}</command-name>\n<command-args>${m[2]}</command-args>` : text;
-    const uuid = crypto.randomUUID();
-    fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, promptId: crypto.randomUUID(), type: 'user',
-      message: { role: 'user', content }, uuid, timestamp: new Date().toISOString(), userType: 'external', entrypoint: 'cli',
-      cwd, sessionId, version: '2.1.282', gitBranch: '' }) + '\n');
-    parent = uuid;
+    if (/LATE/.test(text)) { setTimeout(() => turn(content), 4000); process.stdout.write('\r\nstub session> '); continue; }
+    turn(content);
     process.stdout.write('\r\nok\r\nstub session> ');
   }
 });
+const dropped = new Set();
+function turn(content) {
+  const uuid = crypto.randomUUID();
+  fs.appendFileSync(out, JSON.stringify({ parentUuid: parent, isSidechain: false, promptId: crypto.randomUUID(), type: 'user',
+    message: { role: 'user', content }, uuid, timestamp: new Date().toISOString(), userType: 'external', entrypoint: 'cli',
+    cwd, sessionId, version: '2.1.282', gitBranch: '' }) + '\n');
+  parent = uuid;
+}
 setTimeout(() => process.exit(0), 180000);
 """
 LOGIN_BLOCK = {"state": "blocked", "tempo": "blocked", "needs": "login required - run /login"}
@@ -380,6 +397,70 @@ def test_a_timestampless_row_does_not_read_as_a_turn(box, fake_claude_exe):
         f.write(json.dumps({"type": "assistant", "timestamp": now}) + "\n")
     o = json.loads(_cli(box, "observe", box["name"], "--json").stdout)
     assert o["phase"] == "working", o
+
+
+# --- v0.8.6 R17: queued mid-turn is delivered; an unconfirmed attempt is retried once idle ---
+def _results(b) -> list[dict]:
+    f = b["rt"] / "state" / b["name"] / "inbox.results.jsonl"
+    return [json.loads(ln) for ln in f.read_text(encoding="utf-8").splitlines()] if f.exists() else []
+
+
+def _count(b, needle: str) -> int:
+    return b["transcript"].read_text(encoding="utf-8").count(needle)
+
+
+def test_input_queued_by_a_busy_session_is_delivered(box, fake_claude_exe):
+    # the 2026-09-29 "failed" approval notices: Claude Code queued them mid-turn and the
+    # turn absorbed them, but no user entry was ever written, so they read as lost
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    nonce = f"BUSYQ {secrets.token_hex(4)}"
+    r = _cli(box, "send", box["name"], "--wait", "--json", f"approval notice {nonce}")
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["status"] == "delivered" and "queued by Claude Code mid-turn" in out["detail"], out
+    assert _count(box, nonce) == 2, "typed once: one enqueue line and its queued_command attachment"
+    assert [x["status"] for x in _results(box)] == ["delivered"]
+
+
+def test_an_unconfirmed_attempt_is_retried_once_the_session_is_idle(box, fake_claude_exe):
+    box["env"]["BOTCORP_INBOX_CONFIRM_MS"] = "3000"
+    _bg_session(box, fake_claude_exe)
+    os.utime(box["transcript"], None)                                  # a turn in flight: no retry yet
+    nonce = f"DROPONCE {secrets.token_hex(4)}"
+    r = _cli(box, "send", box["name"], "--ttl", "5m", nonce)
+    assert r.returncode == 0, r.stdout + r.stderr
+    first = _wait_for(lambda: next((x for x in _results(box) if x.get("attempt") == 1), None), 60)
+    assert first["status"] == "queued" and "attempt 1/2" in first["detail"] and "retried once the session is idle" in first["detail"], first
+    time.sleep(2)
+    assert [x["status"] for x in _results(box)] == ["queued"], "never retyped mid-turn"
+    _idle(box)
+    _wait_for(lambda: _items(box)[0]["status"] == "delivered", 60)
+    last = _results(box)[-1]
+    assert last["detail"].startswith("attempt 2/2 via the running attach host; user turn confirmed"), last
+    assert _count(box, nonce) == 1, "the retry landed exactly once"
+
+
+def test_a_late_turn_is_not_retyped(box, fake_claude_exe):
+    # a busy session: the retry waits for idle, and the turn lands meanwhile
+    box["env"]["BOTCORP_INBOX_CONFIRM_MS"] = "2000"
+    _bg_session(box, fake_claude_exe)
+    os.utime(box["transcript"], None)
+    nonce = f"LATE {secrets.token_hex(4)}"
+    r = _cli(box, "send", box["name"], "--wait", "--json", "--ttl", "2m", nonce)
+    out = json.loads(r.stdout)
+    assert r.returncode == 0 and out["status"] == "delivered" and "attempt 1 landed late" in out["detail"], out
+    time.sleep(1)
+    assert _count(box, nonce) == 1, "a turn that landed after the confirm window is never typed again"
+
+
+def test_retries_are_bounded(box, fake_claude_exe):
+    box["env"]["BOTCORP_INBOX_CONFIRM_MS"] = "2000"
+    _bg_session(box, fake_claude_exe)
+    _idle(box)
+    r = _cli(box, "send", box["name"], "--wait", "--json", "--ttl", "5m", f"DROPALL {secrets.token_hex(4)}")
+    out = json.loads(r.stdout)
+    assert r.returncode == 1 and out["status"] == "failed" and out["detail"].startswith("attempt 2/2: typed, but no matching user turn"), out
+    assert [(x["status"], x.get("attempt")) for x in _results(box)] == [("queued", 1), ("failed", None)]
 
 
 def test_expires_while_the_session_is_down(box):
