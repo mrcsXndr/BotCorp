@@ -80,6 +80,10 @@ const CSP = [
 // Append-only audit of mutating API calls: who, what, which bot, the outcome.
 const AUDIT_LOG = path.join(bots.BOTCORP_HOME, 'state', 'cockpit-audit.jsonl');
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+// The only writes that do not need the operator (operatorGate), each with why:
+//   POST /api/pair/claim - how a browser becomes the operator's; it has its own
+//                          one-time code and lockout (operator-pair.mjs)
+const OPEN_MUTATIONS = new Set(['POST /api/pair/claim']);
 function audit(row) {
   const line = JSON.stringify({ ts: new Date().toISOString(), ...row });
   fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true })
@@ -145,6 +149,8 @@ app.use(async (req, res, next) => {
   const hasCookie = cookie.check(req, identity);
   if (req.path.startsWith('/api')) {
     if (!hasCookie) return res.status(403).json({ error: 'forbidden (no session: load the cockpit first)' });
+    // Gate by default: every write needs the operator unless listed as open.
+    if (MUTATING.has(req.method) && !OPEN_MUTATIONS.has(`${req.method} ${req.path}`) && !operatorGate(req, res)) return;
   } else if (!hasCookie) {
     // Page-level loads from a verified identity mint (or re-bind) the cookie.
     res.setHeader('Set-Cookie', cookie.header(identity));
@@ -500,7 +506,21 @@ app.put('/api/bots/:name/secrets/:key', withBot(async (req, res, bot) => {
 // to `secrets unlock` on stdin. Only here (behind Access when exposed) or in
 // the terminal - never from a chat message.
 app.get('/api/bots/:name/secrets/lock', withBot(async (_req, res, bot) => res.json(await vault.lockState(bot.name))));
-app.post('/api/bots/:name/unlock', withBot(async (req, res, bot) => res.json(await vault.unlock(bot.name, req.body?.passphrase))));
+// Wrong passphrases lock unlocking (every bot, this boot) for UNLOCK_LOCK_MS
+// after UNLOCK_MAX_FAILS, like pairing codes; the terminal path is unaffected.
+const UNLOCK_MAX_FAILS = 5;
+const UNLOCK_LOCK_MS = 10 * 60_000;
+const unlockGuard = { fails: 0, until: 0 };
+app.post('/api/bots/:name/unlock', withBot(async (req, res, bot) => {
+  if (unlockGuard.until > Date.now()) return res.status(429).json({ error: `unlock is locked after ${UNLOCK_MAX_FAILS} wrong passphrases until ${new Date(unlockGuard.until).toISOString()}; \`botcorp secrets unlock ${bot.name}\` in your terminal still works` });
+  let r;
+  try { r = await vault.unlock(bot.name, req.body?.passphrase); } catch (e) {
+    if (++unlockGuard.fails >= UNLOCK_MAX_FAILS) { unlockGuard.fails = 0; unlockGuard.until = Date.now() + UNLOCK_LOCK_MS; }
+    throw e;
+  }
+  unlockGuard.fails = 0;
+  res.json(r);
+}));
 
 app.get('/api/secrets/audit', wrap(async (req, res) => {
   const bot = typeof req.query.bot === 'string' ? req.query.bot : '';

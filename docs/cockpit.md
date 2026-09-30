@@ -136,6 +136,9 @@ drawer shows a passphrase field; submitting it posts `POST
 unlock <bot>` on stdin — never logged, and surfaced only here or in the
 terminal, never from a chat message. A successful unlock caches the vault
 key until the next reboot; the drawer re-reads the lock state afterwards.
+The route is operator-gated like every write, and five wrong passphrases in a
+row lock it for 10 minutes (429, for every bot, until the cockpit restarts;
+`botcorp secrets unlock` in the terminal is unaffected).
 Behind Cloudflare Access whenever the cockpit is exposed, like every other
 route. Full lock-mode mechanism: `docs/secrets.md`.
 
@@ -223,11 +226,17 @@ never spawns a session itself, attached or not.
 CLI results come back as `{ok, code, out, err}`; `out`/`err` are truncated to
 4 KB and scrubbed of token shapes before they reach the browser.
 
-Operator-gated routes: approve / reject, automation resume / enable, tools
-register, the account switch and chain, account add / remove, a Settings
-save, pair approve, vault set and release Apply / Skip. Behind Cloudflare Access the verified identity is the check; on
-loopback they also need the per-boot approval token (`X-Approve-Token`), or
-they answer 403 `{need: "approve-token"}` and the page asks for it once. The
+Operator-gated routes (v0.9.3: gated by default): every `POST`, `PUT`,
+`PATCH` and `DELETE` under `/api`, checked once in the auth middleware before
+the route runs, plus the `/term/<bot>` socket and the upload thumbnails. The
+only open write is `POST /api/pair/claim` (`OPEN_MUTATIONS` in `server.mjs`):
+it is how a browser becomes the operator's and has its own one-time code and
+lockout. So start / stop / restart (and `--fresh`), chat send, New chat
+launch, unlock, pair deny, tools retire and automations run / pause / disable
+now need the operator too. Behind Cloudflare Access the verified identity is
+the check; on loopback they also need the per-boot approval token
+(`X-Approve-Token`) or a paired browser, or they answer 403 `{need:
+"approve-token"}` before any validation and the page asks for it once. The
 cockpit prints the token at start and also writes it to
 `<BOTCORP_HOME>/state/cockpit-approve-token`, readable by the operator's
 account only, so a cockpit the daemon started (no terminal) is usable too.

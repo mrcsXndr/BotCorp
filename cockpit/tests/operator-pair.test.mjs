@@ -137,7 +137,9 @@ test('DELETE /api/pair/devices/:id revokes with the operator cookie', async () =
   const d = await call('DELETE', `/api/pair/devices/${device.id}`, { cookie });
   assert.equal(d.status, 200);
   assert.equal((await approve('ccc333', { cookie })).status, 403);
-  assert.equal((await call('DELETE', '/api/pair/devices/not-an-id')).status, 400);
+  assert.equal((await call('DELETE', '/api/pair/devices/not-an-id')).status, 403, 'a write needs the operator before anything else');
+  const token = fs.readFileSync(path.join(STATE, 'cockpit-approve-token'), 'utf-8').trim();
+  assert.equal((await call('DELETE', '/api/pair/devices/not-an-id', { headers: { 'X-Approve-Token': token } })).status, 400);
 });
 
 test('the files: the key is 32 bytes hex, the pairing file never holds a code', () => {

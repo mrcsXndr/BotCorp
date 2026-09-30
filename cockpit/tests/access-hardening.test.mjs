@@ -112,7 +112,8 @@ test('loopback: strict CSP on the page; one audit line per mutating call, no bod
 
   // reads are not audited
   assert.equal((await fetch(`${base}/api/bots`, { headers: { cookie } })).status, 200);
-  const stop = await fetch(`${base}/api/bots/zz-nope/stop`, { method: 'POST', headers: { cookie } });
+  const token = fs.readFileSync(path.join(rt, 'state', 'cockpit-approve-token'), 'utf-8').trim();
+  const stop = await fetch(`${base}/api/bots/zz-nope/stop`, { method: 'POST', headers: { cookie, 'x-approve-token': token } });
   assert.equal(stop.status, 404);
   let lines = await auditLines(rt, 1);
   assert.equal(lines.length, 1, 'exactly one line for one mutating POST');
@@ -121,7 +122,7 @@ test('loopback: strict CSP on the page; one audit line per mutating call, no bod
   assert.deepEqual({ ...row, ts: undefined }, { ts: undefined, identity: 'local', method: 'POST', path: '/api/bots/zz-nope/stop', bot: 'zz-nope', result: 404 });
 
   const put = await fetch(`${base}/api/bots/zz-nope/secrets/oauth_token?x=1`, {
-    method: 'PUT', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify({ value: 'value-for-tests-secret-Q7' }),
+    method: 'PUT', headers: { cookie, 'x-approve-token': token, 'content-type': 'application/json' }, body: JSON.stringify({ value: 'value-for-tests-secret-Q7' }),
   });
   assert.equal(put.status, 404);
   lines = await auditLines(rt, 2);

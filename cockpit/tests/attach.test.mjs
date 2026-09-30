@@ -230,7 +230,7 @@ test('the upload route: gated, allow-listed, capped, contained; /send names the 
 
   // /send: a bad id is refused; a good one lands as a line after the text
   const send = async (body) => {
-    const r = await fetch(`${base}/api/bots/demo/send`, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) });
+    const r = await fetch(`${base}/api/bots/demo/send`, { method: 'POST', headers: { cookie, 'x-approve-token': token, 'content-type': 'application/json' }, body: JSON.stringify(body) });
     return { status: r.status, json: await r.json() };
   };
   assert.equal((await send({ text: 'hi', attachments: ['../bot.yaml'] })).status, 400);

@@ -79,10 +79,10 @@ test('without the operator: 403 need approve-token, no folder', async () => {
   assert.deepEqual(botDirs(), []);
 });
 
-test('bad bodies are 400 before the gate', async () => {
+test('bad bodies are 400 (the gate comes first: a write needs the operator before anything else)', async () => {
   for (const body of [{ account: 'acc1' }, { account: 'acc1', service: 'cron' }, { service: 'manual' }, { account: 'Bad!', service: 'manual' },
     { account: 'acc1', service: 'manual', name: 'Bad Name' }, { account: 'acc1', service: 'manual', persona: 'a\nb' }, { account: 'acc1', service: 'manual', telegram: 'yes' }]) {
-    assert.equal((await call('POST', '/api/bots', { body })).status, 400, JSON.stringify(body));
+    assert.equal((await call('POST', '/api/bots', { body, operator: true })).status, 400, JSON.stringify(body));
   }
 });
 
