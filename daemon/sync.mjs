@@ -19,7 +19,9 @@
 //                                                     USER settings are honoured for it);
 //                                                     autoCompactWindow from harness.context_window.
 //   bots/<name>/.claude-<name>/.claude.json          MERGED: projects[<bot home>].hasTrustDialogAccepted
-//                                                     (a --bg launch refuses an untrusted workspace).
+//                                                     (a --bg launch refuses an untrusted workspace)
+//                                                     and hasClaudeMdExternalIncludesApproved (the
+//                                                     harness rule imports load only when approved).
 //   bots/<name>/.claude-<name>/channels/telegram/access.json
 //                                                     dmPolicy + allowFrom from bot.yaml,
 //                                                     MERGED: never drops a pending entry
@@ -176,11 +178,16 @@ export function mergeConfigHomeSettings(existing, cfg) {
 // bot's own folder is trusted by definition - BotCorp made it - so the
 // project record gets hasTrustDialogAccepted, keyed the way Claude Code keys
 // it (absolute path, forward slashes); everything else in the file is kept.
+// It also gets the external-include approval: CLAUDE.md imports the harness
+// rules from outside the bot folder (@../../harness/rules/*.md), and Claude
+// Code loads such an import only once that is approved - a background session
+// never shows the prompt, so without the flag every import is silently skipped.
 export function mergeConfigHomeClaudeJson(existing, botHome) {
   const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
   const projects = cur.projects && typeof cur.projects === 'object' ? { ...cur.projects } : {};
   const key = fwd(path.resolve(botHome));
-  projects[key] = { ...(projects[key] && typeof projects[key] === 'object' ? projects[key] : {}), hasTrustDialogAccepted: true };
+  projects[key] = { ...(projects[key] && typeof projects[key] === 'object' ? projects[key] : {}), hasTrustDialogAccepted: true,
+    hasClaudeMdExternalIncludesApproved: true, hasClaudeMdExternalIncludesWarningShown: true };
   cur.projects = projects;
   return cur;
 }
@@ -362,7 +369,12 @@ export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.e
   const userSettingsPath = path.join(configDir, 'settings.json');
   report['.claude-<name>/settings.json'] = writeIfChanged(userSettingsPath, JSON.stringify(mergeConfigHomeSettings(readJson(userSettingsPath), cfg), null, 2) + '\n', dryRun);
   const claudeJsonPath = path.join(configDir, '.claude.json');
-  report['.claude-<name>/.claude.json'] = writeIfChanged(claudeJsonPath, JSON.stringify(mergeConfigHomeClaudeJson(readJson(claudeJsonPath), botHome), null, 2) + '\n', dryRun);
+  // Claude Code's own state (account, every project record) lives in this file:
+  // one it cannot parse is left alone rather than replaced by just our keys.
+  const claudeJson = readJson(claudeJsonPath);
+  report['.claude-<name>/.claude.json'] = claudeJson === null && fs.existsSync(claudeJsonPath)
+    ? 'skipped (not valid JSON; left as it is)'
+    : writeIfChanged(claudeJsonPath, JSON.stringify(mergeConfigHomeClaudeJson(claudeJson, botHome), null, 2) + '\n', dryRun);
 
   // 2. access.json (merge)
   if (cfg.harness.modules.telegram) {

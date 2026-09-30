@@ -16,6 +16,14 @@ versions follow SemVer.
   to Read. On a resume or compaction, the session's own timeline is no
   longer injected a second time as "Last session". Sections are joined with
   real newlines instead of a literal `\n`.
+- **Fixed: the harness rule imports load in a background session.** A bot's
+  CLAUDE.md imports `@../../harness/rules/*.md` from outside its folder, and
+  Claude Code loads such an import only once it is approved, a prompt a
+  background session never shows, so every import was silently skipped. sync
+  now sets `hasClaudeMdExternalIncludesApproved` (and `…WarningShown`) on the
+  bot's project record in the config home's `.claude.json`, merged into the
+  record like `hasTrustDialogAccepted`. A `.claude.json` that does not parse
+  is left as it is instead of being replaced by just those keys.
 
 ## v0.8.4
 

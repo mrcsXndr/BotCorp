@@ -161,6 +161,39 @@ def test_sync_writes_bypass_disclaimer_and_workspace_trust_into_the_config_home(
     assert "skipDangerousModePermissionPrompt" not in proj
 
 
+def test_sync_approves_the_harness_rule_imports_and_keeps_every_other_key(tmp_path):
+    """v0.8.5: CLAUDE.md imports @../../harness/rules/*.md from outside the bot
+    folder; Claude Code loads those only with hasClaudeMdExternalIncludesApproved
+    on the project record, and a background session never shows the prompt."""
+    root = _root_with_bot(tmp_path, "eta", "name: eta\n")
+    cfg_home = root / "bots" / "eta" / ".claude-eta"
+    cfg_home.mkdir(parents=True)
+    key = str(root / "bots" / "eta").replace("\\", "/")
+    before = {"userID": "u1", "oauthAccount": {"emailAddress": "a@b.c"},
+              "projects": {key: {"allowedTools": ["Bash(ls)"], "lastCost": 1.5}, "C:/elsewhere": {"hasTrustDialogAccepted": False}}}
+    (cfg_home / ".claude.json").write_text(json.dumps(before), encoding="utf-8")
+    r = _node(str(SYNC), "eta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    cj = json.loads((cfg_home / ".claude.json").read_text(encoding="utf-8"))
+    rec = cj["projects"][key]
+    assert rec["hasClaudeMdExternalIncludesApproved"] is True and rec["hasClaudeMdExternalIncludesWarningShown"] is True
+    assert rec["hasTrustDialogAccepted"] is True
+    assert rec["allowedTools"] == ["Bash(ls)"] and rec["lastCost"] == 1.5          # the record is merged
+    assert cj["userID"] == "u1" and cj["oauthAccount"] == before["oauthAccount"]
+    assert cj["projects"]["C:/elsewhere"] == {"hasTrustDialogAccepted": False}     # other projects untouched
+    assert not (cfg_home / ".claude.json.tmp").exists()                              # written via tmp + rename
+    # idempotent: a second sync leaves the file byte-identical
+    text = (cfg_home / ".claude.json").read_text(encoding="utf-8")
+    assert _node(str(SYNC), "eta", "--botcorp", str(root)).returncode == 0
+    assert (cfg_home / ".claude.json").read_text(encoding="utf-8") == text
+    # a file that does not parse is left alone, never replaced by just our keys
+    (cfg_home / ".claude.json").write_text('{"userID": "u1", "projects": {', encoding="utf-8")
+    r = _node(str(SYNC), "eta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    assert "skipped (not valid JSON" in r.stdout
+    assert (cfg_home / ".claude.json").read_text(encoding="utf-8") == '{"userID": "u1", "projects": {'
+
+
 def test_sync_does_not_add_the_disclaimer_key_for_a_default_permissions_bot(tmp_path):
     root = _root_with_bot(tmp_path, "zeta", "name: zeta\npermissions: default\n")
     r = _node(str(SYNC), "zeta", "--botcorp", str(root))
