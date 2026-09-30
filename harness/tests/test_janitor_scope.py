@@ -112,6 +112,7 @@ def test_ab_sh_gives_a_bot_its_own_browser_dir(tmp_path):
     shim = tmp_path / "bin"
     shim.mkdir()
     (shim / "npm").write_text(f'#!/usr/bin/env bash\necho "{npm_root.as_posix()}"\n', encoding="utf-8")
+    (shim / "npm").chmod(0o755)  # Linux runs it from PATH only when executable
     home = tmp_path / "home"
     home.mkdir()
     base = {k: v for k, v in os.environ.items() if not k.startswith(("BOT_", "AGENT_BROWSER"))}
