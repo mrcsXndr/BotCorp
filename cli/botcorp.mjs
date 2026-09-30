@@ -1793,18 +1793,22 @@ function cmdAutomations({ pos, flags }) {
   const [, bot, action = 'list', name] = pos;
   requireBot(bot);
   const cfg = loadBotYaml(botYamlPath(bot));
-  const list = Array.isArray(cfg.automations) ? cfg.automations : [];
+  const list = Array.isArray(cfg.automations) ? [...cfg.automations] : [];
+  // module built-ins the daemon schedules too (daemon/automations.ps1 Get-BuiltinAutomations)
+  const builtins = [];
+  if (cfg.harness.modules.timeline_summary === true) builtins.push({ name: 'timeline-summary', module: 'timeline_summary', trigger: { interval_min: 60 }, command: '(built-in) timeline.py summarize-stale' });
+  for (const b of builtins) if (!list.some((a) => a && a.name === b.name)) list.push(b);
   if (action === 'list') {
     const stateFile = path.join(STATE_DIR, bot, 'automations.json');
     const st = readJson(stateFile);
     const byName = (n) => (Array.isArray(st) ? st.find((x) => x && x.name === n) : isObj(st) ? st[n] : null) || null;
-    const rows = list.map((a) => ({ name: a.name, kind: a.kind === 'prompt' ? 'prompt' : 'command', enabled: a.enabled !== false, trigger: a.trigger || null, ...(a.kind === 'prompt' ? { prompt: a.prompt } : { command: a.command }), state: byName(a.name) }));
+    const rows = list.map((a) => ({ name: a.name, kind: a.kind === 'prompt' ? 'prompt' : 'command', enabled: a.enabled !== false, trigger: a.trigger || null, ...(a.kind === 'prompt' ? { prompt: a.prompt } : { command: a.command }), ...(a.module ? { module: a.module } : {}), state: byName(a.name) }));
     if (flags.json) { outJson({ bot, state_file: st ? stateFile : null, automations: rows }); return 0; }
     if (!rows.length) { out(`automations: ${bot} has none (bot.yaml automations: [])`); return 0; }
     out(`daemon state: ${st ? stateFile : 'absent (no daemon run yet)'}`);
     for (const r of rows) {
       const s = r.state ? Object.entries(r.state).filter(([k]) => ['last_run', 'last_status', 'next_due', 'failure_streak', 'runs_today', 'last_exit', 'last_result'].includes(k)).map(([k, v]) => `${k}=${v}`).join(' ') : '';
-      const what = r.kind === 'prompt' ? `prompt=${JSON.stringify(promptPreview(r.prompt))}` : `command=${r.command}`;
+      const what = (r.kind === 'prompt' ? `prompt=${JSON.stringify(promptPreview(r.prompt))}` : `command=${r.command}`) + (r.module ? `  module=${r.module}` : '');
       out(`${r.enabled ? 'on ' : 'off'}  ${r.name}  trigger=${JSON.stringify(r.trigger)}  ${what}${s ? '  ' + s : ''}`);
     }
     return 0;
@@ -1813,6 +1817,8 @@ function cmdAutomations({ pos, flags }) {
   if (!list.some((a) => a.name === name)) fail(`automations: no '${name}' in ${bot}'s bot.yaml`);
   // enable|disable = resume|pause: the operator's flip applies, a bot's enable queues
   if (['pause', 'resume', 'enable', 'disable'].includes(action)) {
+    const b = list.find((a) => a.name === name && a.module);
+    if (b) fail(`automations: '${name}' is built in; switch it with botcorp config set ${bot} harness.modules.${b.module} true|false`);
     return queueOrApply(bot, { segs: ['automations', name, 'enabled'], value: action === 'resume' || action === 'enable', flags, direct: true });
   }
   if (action === 'run') {
