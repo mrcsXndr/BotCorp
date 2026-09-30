@@ -111,10 +111,10 @@ def fit_timeline(text: str, allow: int) -> str:
     return "\n".join(head + list(reversed(keep)))
 
 
-def main() -> int:
-    bot_home, harness = sys.argv[1], sys.argv[2]
+def assemble(bot_home: str, harness: str, raw: list[str]) -> str:
+    """The hook's JSON line for these field values (FIELDS order)."""
     # CRLF files (a Windows-written timeline) would defeat the `$` anchors below
-    raw = sys.stdin.buffer.read().decode("utf-8", "replace").replace("\r\n", "\n").split("\0")
+    raw = [x.replace("\r\n", "\n") for x in raw]
     f = dict(zip(FIELDS, raw + [""] * (len(FIELDS) - len(raw))))
     mem = Path(bot_home) / "memory"
     tdl_path = str(mem / "TDL.md")
@@ -182,7 +182,12 @@ def main() -> int:
         while u16(ctx) > room:  # cutting the excess in code points removes at least that many code units
             ctx = ctx[:len(ctx) - (u16(ctx) - room)]
         ctx += note
-    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}}))
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": ctx}})
+
+
+def main() -> int:
+    raw = sys.stdin.buffer.read().decode("utf-8", "replace").split("\0")
+    print(assemble(sys.argv[1], sys.argv[2], raw))
     return 0
 
 

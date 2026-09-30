@@ -38,14 +38,29 @@ if (mod !== '-' && env.BOT_MODULES !== undefined) {
 }
 
 // Git for Windows' bash, as Claude Code finds it (System32\bash.exe is WSL).
+// Preferred: Git's real <Git>\usr\bin\bash.exe with --noprofile --norc and the
+// environment Git's bin\bash.exe launcher would set up (MSYSTEM, mingw64\bin and
+// usr\bin first on PATH, so the scripts still find git and the coreutils). That
+// skips the launcher process and any profile. Fallback: the launcher itself.
 function bash() {
-  if (process.platform !== 'win32') return 'bash';
+  if (process.platform !== 'win32') return ['bash', []];
   const pf = process.env.ProgramFiles || 'C:\\Program Files';
-  for (const c of [process.env.CLAUDE_CODE_GIT_BASH_PATH, path.join(pf, 'Git', 'bin', 'bash.exe'), path.join(pf, 'Git', 'usr', 'bin', 'bash.exe')]) {
-    if (c && fs.existsSync(c)) return c;
+  const override = process.env.CLAUDE_CODE_GIT_BASH_PATH;
+  const m = override && /^(.*?)[\\/](?:usr[\\/])?bin[\\/]bash\.exe$/i.exec(override);
+  const root = m ? m[1] : path.join(pf, 'Git');
+  const real = path.join(root, 'usr', 'bin', 'bash.exe');
+  if ((!override || m) && fs.existsSync(real)) {
+    const pk = Object.keys(env).find((k) => k.toUpperCase() === 'PATH') || 'PATH';
+    env[pk] = [path.join(root, 'mingw64', 'bin'), path.join(root, 'usr', 'bin'), env[pk]].filter(Boolean).join(';');
+    env.MSYSTEM = env.MSYSTEM || 'MINGW64';
+    return [real, ['--noprofile', '--norc']];
   }
-  return 'bash.exe';
+  for (const c of [override, path.join(pf, 'Git', 'bin', 'bash.exe')]) {
+    if (c && fs.existsSync(c)) return [c, []];
+  }
+  return ['bash.exe', []];
 }
 
-const r = spawnSync(bash(), [path.resolve(HOOKS_DIR, script), ...args], { stdio: 'inherit', env, windowsHide: true });
+const [exe, pre] = bash();
+const r = spawnSync(exe, [...pre, path.resolve(HOOKS_DIR, script), ...args], { stdio: 'inherit', env, windowsHide: true });
 process.exit(r.status ?? 1);

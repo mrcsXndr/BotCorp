@@ -13,41 +13,67 @@
 # Defensive: ANY error -> exit 0 (fail open — never silently drop a message).
 
 set -uo pipefail
-. "$(dirname "$0")/_guard.sh" user-prompt-submit
+case "$0" in */*|*\\*) _hooks="${0%[/\\]*}" ;; *) _hooks=. ;; esac  # dirname without a fork
+. "$_hooks/_guard.sh" user-prompt-submit
 
-PAYLOAD=""
-if ! [ -t 0 ]; then
-  PAYLOAD=$(cat || true)
-fi
-
-# Extract prompt + session id (+ inbound reply-to message id) from the payload.
+# ONE python call reads the payload from STDIN (NEVER as an argv arg: a prompt
+# over ~32K chars hits "Argument list too long" on Windows, and the size guard
+# fires at 50K) and hands back every field this hook needs, NUL-separated, so
+# no further fork is spent picking it apart (each costs 200 ms or more under
+# Git Bash). The prompt is kept RAW: no %b re-escaping, so Windows-path
+# backslashes and other literals survive intact. For a Telegram prompt it
+# also appends the message to the bot's own chat log and builds the reply-path
+# nudge (see the TG block below). Fields: session_id, reply_to msg id, the one
+# <channel> body, the nudge, the nudge as a JSON string, the prompt.
 PROMPT=""
 SESSION_ID=""
 REPLY_TO=""
-if [ -n "$PAYLOAD" ]; then
-  # ONE python call, reading the payload from STDIN — NEVER as an argv arg. A
-  # prompt >~32K chars passed as argv hits "Argument list too long" on Windows;
-  # the parse then silently fails and PROMPT="" so the inbound size guard could
-  # never fire (it fires at 50K > the argv limit). Reading stdin removes the cap.
-  # The prompt is kept RAW here — no %b re-escaping, so Windows-path backslashes
-  # and other literals survive intact. Output shape:
-  #   line1 = session_id, line2 = reply_to msg id, line3+ = raw prompt.
-  PARSED=$(printf '%s' "$PAYLOAD" | "$PY" -c '
-import json, re, sys
+TG_BODY=""
+REPLY_NUDGE=""
+NUDGE_JSON=""
+if ! [ -t 0 ]; then
+  { IFS= read -r -d '' SESSION_ID; IFS= read -r -d '' REPLY_TO; IFS= read -r -d '' TG_BODY
+    IFS= read -r -d '' REPLY_NUDGE; IFS= read -r -d '' NUDGE_JSON; IFS= read -r -d '' PROMPT; } < <("$PY" -c '
+import json, os, re, subprocess, sys
 try:
-    d = json.loads(sys.stdin.read() or "{}")
+    d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
 except Exception:
     d = {}
-p = d.get("prompt") or ""
-s = d.get("session_id") or ""
-m = re.search(r"message_id=\"(\d+)\"", p)
-sys.stdout.write((s or "") + "\n")
-sys.stdout.write((m.group(1) if m else "") + "\n")
-sys.stdout.write(p)
-' 2>/dev/null || true)
-  SESSION_ID=$(printf '%s' "$PARSED" | sed -n '1p')
-  REPLY_TO=$(printf '%s' "$PARSED" | sed -n '2p')
-  PROMPT=$(printf '%s' "$PARSED" | sed -n '3,$p')
+d = d if isinstance(d, dict) else {}
+raw = str(d.get("prompt") or "")
+p = raw.rstrip("\n")
+m = re.search(r"message_id=\"(\d+)\"", raw)
+tg = "<channel source=\"telegram\"" in p or "<channel source=\"plugin:telegram:telegram\"" in p
+body = nudge = nudge_json = ""
+if tg:
+    try:
+        subprocess.run([sys.executable, os.path.join(sys.argv[1], "tools", "tg", "tg_log.py"), "ingest"], input=p.encode("utf-8"),
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+    bodies = re.findall(r"<channel\s+source=\"(?:plugin:telegram:)?telegram\"[^>]*>(.*?)</channel>", p, re.DOTALL)
+    body = bodies[0].strip() if len(bodies) == 1 else ""
+    chats = re.findall(r"chat_id=\"([^\"\n]*)\"", p)
+    msgs = re.findall(r"message_id=\"([0-9]*)\"", p)
+    if chats and chats[-1]:
+        default = os.environ.get("TELEGRAM_CHAT_ID", "")
+        if not default:
+            try:
+                for ln in open(".env", encoding="utf-8", errors="replace"):
+                    if ln.startswith("TELEGRAM_CHAT_ID="):
+                        default = ln[len("TELEGRAM_CHAT_ID="):].replace("\r", "").replace(" ", "").rstrip("\n")
+                        break
+            except OSError:
+                pass
+        flag = "" if chats[-1] == default else "--chat-id " + chats[-1] + " "
+        msg = msgs[-1] if msgs and msgs[-1] else "<message_id>"
+        nudge = ("Reply path: python tools/tg/tg_send.py " + flag + "--reply-to " + msg + " \"<CommonMark text>\" (formatted + status "
+                 "footer; it is working). Use the plugin reply tool only for file attachments. Run python tools/tg/tg_send.py "
+                 "--answered first if this is a reply from the operator.")
+        nudge_json = json.dumps(nudge)
+out = [str(d.get("session_id") or ""), m.group(1) if m else "", body, nudge, nudge_json, p]
+sys.stdout.buffer.write("".join(x.replace("\0", "") + "\0" for x in out).encode("utf-8"))
+' "$HARNESS" 2>/dev/null)
 fi
 
 if [ -z "$PROMPT" ]; then
@@ -55,8 +81,9 @@ if [ -z "$PROMPT" ]; then
 fi
 
 # A new prompt ends a declared breakpoint (D7): the daemon reads a fresh
-# .botcorp_breakpoint as IDLE for 30 min, and this turn is live work.
-rm -f "$BOT_HOME/.claude/.botcorp_breakpoint" 2>/dev/null || true
+# .botcorp_breakpoint as IDLE for 30 min, and this turn is live work. (The
+# test is a builtin: no rm fork on the usual prompt, which has no marker.)
+[ -e "$BOT_HOME/.claude/.botcorp_breakpoint" ] && { rm -f "$BOT_HOME/.claude/.botcorp_breakpoint" 2>/dev/null || true; }
 
 if [ -z "$SESSION_ID" ] && [ -f "$BOT_HOME/.claude/.current_session_id" ]; then
   SESSION_ID=$(cat "$BOT_HOME/.claude/.current_session_id" 2>/dev/null || true)
@@ -79,36 +106,14 @@ PROMPT_REAL="$PROMPT"
 # (footer-less replies that outlived the bug). In-session learning has to be
 # countered on every prompt, so the hook states the working path each time.
 # Matches both channel-tag spellings the plugin has shipped.
-REPLY_NUDGE=""
-TG_BODY=""
-case "$PROMPT_REAL" in
-  *'<channel source="telegram"'*|*'<channel source="plugin:telegram:telegram"'*)
-    printf '%s' "$PROMPT_REAL" | "$PY" "$HARNESS/tools/tg/tg_log.py" ingest >/dev/null 2>&1 || true
-    # Body of the Telegram <channel> element, for the slash intercept below. Only
-    # when the prompt carries exactly one: the intercept blocks the whole prompt,
-    # which would drop every other message batched into it.
-    TG_BODY=$(printf '%s' "$PROMPT_REAL" | "$PY" -c '
-import re, sys
-m = re.findall(r"<channel\s+source=\"(?:plugin:telegram:)?telegram\"[^>]*>(.*?)</channel>", sys.stdin.read(), re.DOTALL)
-sys.stdout.write(m[0].strip() if len(m) == 1 else "")
-' 2>/dev/null || true)
-    # Last tag in the prompt = the message being answered (a batched prompt
-    # can carry several).
-    TG_CHAT_ID=$(printf '%s' "$PROMPT_REAL" | grep -o 'chat_id="[^"]*"' | tail -1 | sed 's/chat_id="\(.*\)"/\1/')
-    TG_MSG_ID=$(printf '%s' "$PROMPT_REAL" | grep -o 'message_id="[0-9]*"' | tail -1 | sed 's/message_id="\(.*\)"/\1/')
-    TG_DEFAULT_CHAT="${TELEGRAM_CHAT_ID:-}"
-    if [ -z "$TG_DEFAULT_CHAT" ] && [ -f "$BOT_HOME/.env" ]; then
-      TG_DEFAULT_CHAT=$(sed -n 's/^TELEGRAM_CHAT_ID=//p' "$BOT_HOME/.env" 2>/dev/null | head -1 | tr -d '\r ')
-    fi
-    if [ -n "$TG_CHAT_ID" ]; then
-      CHAT_FLAG=""
-      if [ "$TG_CHAT_ID" != "$TG_DEFAULT_CHAT" ]; then
-        CHAT_FLAG="--chat-id $TG_CHAT_ID "
-      fi
-      REPLY_NUDGE="Reply path: python tools/tg/tg_send.py ${CHAT_FLAG}--reply-to ${TG_MSG_ID:-<message_id>} \"<CommonMark text>\" (formatted + status footer; it is working). Use the plugin reply tool only for file attachments. Run python tools/tg/tg_send.py --answered first if this is a reply from the operator."
-    fi
-    ;;
-esac
+#
+# Both happen in the parse call at the top, for a Telegram prompt: tg_log.py ingest, then
+# TG_BODY = the body of the Telegram <channel> element for the slash intercept
+# below, only when the prompt carries exactly one (the intercept blocks the
+# whole prompt, which would drop every other message batched into it), and
+# REPLY_NUDGE naming the LAST tag's chat and message id (the message being
+# answered; a batched prompt can carry several), with --chat-id only when that
+# chat is not the default (TELEGRAM_CHAT_ID, else the bot's .env).
 
 # --- TG SLASH-COMMAND INTERCEPT ---
 # If the prompt is a TG-style slash command, handle it directly and block the
@@ -185,8 +190,7 @@ fi
 
 # --- TG REPLY-PATH NUDGE (see the inbound-log block) ---
 if [ -n "$REPLY_NUDGE" ]; then
-  ESCAPED=$(printf '%s' "$REPLY_NUDGE" | "$PY" -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '""')
-  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "$ESCAPED"
+  printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "${NUDGE_JSON:-\"\"}"
 fi
 
 # Default: pass through to main thread (exit 0).

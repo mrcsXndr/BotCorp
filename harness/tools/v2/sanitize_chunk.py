@@ -29,33 +29,31 @@ from _paths import harness_root
 sys.path.insert(0, str(harness_root() / "tools" / "infra"))
 
 
-def main(argv: list[str]) -> int:
-    source = argv[1] if len(argv) > 1 else "memory"
-    no_block = "--no-block" in argv[2:]
-    raw = sys.stdin.read()
-
+def clean(raw: str, source: str = "memory", no_block: bool = False) -> str:
+    """The chunk to inject: cleaned, a [BLOCKED ...] marker, or raw on failure."""
     if not raw.strip():
         # nothing to do; preserve emptiness so the hook omits the block
-        sys.stdout.write(raw)
-        return 0
+        return raw
 
     try:
         import sanitize  # tools/infra/sanitize.py
         findings = sanitize.scan(raw)
         risk = sanitize.get_risk_level(findings)
         if risk in ("HIGH", "CRITICAL") and not no_block:
-            sys.stdout.write(
-                f"[BLOCKED: high-risk content in {source} — risk={risk}, "
-                f"not injected. Review manually.]"
-            )
-            return 0
+            return (f"[BLOCKED: high-risk content in {source} — risk={risk}, "
+                    f"not injected. Review manually.]")
         cleaned, _f, _r = sanitize.full_sanitize(raw, source=source, frame=False)
-        sys.stdout.write(cleaned)
-        return 0
+        return cleaned
     except Exception as e:  # absolute fail-safe — inject raw, never break
         sys.stderr.write(f"[sanitize_chunk] fail-open ({source}): {e!r}\n")
-        sys.stdout.write(raw)
-        return 0
+        return raw
+
+
+def main(argv: list[str]) -> int:
+    source = argv[1] if len(argv) > 1 else "memory"
+    no_block = "--no-block" in argv[2:]
+    sys.stdout.write(clean(sys.stdin.read(), source, no_block))
+    return 0
 
 
 if __name__ == "__main__":
