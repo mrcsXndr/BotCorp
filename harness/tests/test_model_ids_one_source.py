@@ -88,6 +88,16 @@ def test_cost_meter_prices_each_family_from_models_json(tmp_path):
     assert abs(cost_meter._price_jsonl(f)["usd"] - (p["input"] + p["output"])) < 1e-9
 
 
+def test_unpriced_transcript_is_flagged_not_silent(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(cost_meter, "PRICING", {})
+    f = tmp_path / "t.jsonl"
+    f.write_text(json.dumps({"type": "assistant", "timestamp": "2026-09-30T10:00:00Z", "message": {
+        "model": "claude-opus-5-5", "usage": {"input_tokens": 1000, "output_tokens": 1000}}}) + "\n", encoding="utf-8")
+    t = cost_meter._price_jsonl(f)
+    assert t["usd"] == 0.0 and t.get("unpriced") is True
+    assert "no prices" in capsys.readouterr().err
+
+
 def test_models_md_prices_match_models_json():
     md = (ASSEMBLY / "harness" / "rules" / "models.md").read_text(encoding="utf-8")
     for key, t in MODELS["tiers"].items():

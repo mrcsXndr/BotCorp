@@ -281,6 +281,9 @@ def _price_jsonl(path: Path) -> dict:
             usage = msg.get("usage") or {}
             tier = _tier(msg.get("model"))
             price = PRICING.get(tier) or PRICING.get("sonnet") or _NO_PRICE
+            if price is _NO_PRICE and not totals.get("unpriced"):
+                totals["unpriced"] = True
+                print("cost_meter: no prices (harness/models.json unreadable?); usd_est is 0, not a real cost", file=sys.stderr)
 
             inp = int(usage.get("input_tokens") or 0)
             out = int(usage.get("output_tokens") or 0)
@@ -389,7 +392,7 @@ def meter(session_id: str) -> int:
                 print(f"cost_meter: no telemetry for session {session_id}", file=sys.stderr)
                 return 0
             totals = legacy
-            source_suffix = "|source=transcript"
+            source_suffix = "|source=transcript" + ("|unpriced" if totals.get("unpriced") else "")
         else:
             print(f"cost_meter: no telemetry for session {session_id}", file=sys.stderr)
             return 0
