@@ -321,9 +321,14 @@ function Invoke-TgProbe {
     # (secrets.ps1 -Action tg-probe in a child: the token never enters the
     # tick) and Get-TgSlotHealth reads the codes. Two bad probes in a row alert
     # (Send-TgSlotAlert); nothing is restarted from here.
+    # OPT-IN (unset = off): the probe interrupts the plugin's own long-poll
+    # (why doctor never probes an OWNED slot, cli/_lib.mjs tgSlotVerdict), and
+    # what Telegram answers it while a healthy poller holds the slot is not yet
+    # measured on a live bot. A wrong read would push a false CRITICAL.
     param([string]$Bot, $Cfg, [hashtable]$Paths, [switch]$AsDryRun)
+    if ($null -eq $env:BOT_TG_PROBE_EVERY_MIN -or "$env:BOT_TG_PROBE_EVERY_MIN" -eq '') { return }
     try {
-        $every = 15; try { if ($env:BOT_TG_PROBE_EVERY_MIN) { $every = [double]$env:BOT_TG_PROBE_EVERY_MIN } } catch {}
+        $every = 15; try { $every = [double]$env:BOT_TG_PROBE_EVERY_MIN } catch {}
         $st = Read-BotState -Bot $Bot
         $last = $null; try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_probe_at')) { $last = $st.tg_probe_at } } catch {}
         if ($last) { $t = [datetime]::MinValue; if ([datetime]::TryParse("$last", [ref]$t) -and (((Get-Date) - $t).TotalMinutes -lt $every)) { return } }

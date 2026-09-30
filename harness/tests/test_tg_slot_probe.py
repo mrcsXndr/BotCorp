@@ -180,3 +180,24 @@ def test_a_deaf_owned_poller_alerts_once_per_window(live_bot):
         assert (home / "memory" / "metrics" / "alerts.log").read_text(encoding="utf-8").count("CRITICAL") == 1
     finally:
         srv.shutdown()
+
+
+@needs_pwsh
+def test_the_probe_is_off_unless_the_interval_is_set(live_bot):
+    # it interrupts the plugin's own long-poll; opt-in until measured on a live bot
+    name, home, rt, env, claude_pid = live_bot
+    state = rt / "state" / f"{name}.json"
+    state.write_text(json.dumps({"bot": name, "claude_pid": claude_pid, "status": "running", "poller": "OWNED", "service": "bg", "bg_id": "",
+                                 "tg_probe_bad": 1}), encoding="utf-8")
+    _Tg.paths = []
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Tg)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    env = {k: v for k, v in env.items() if k != "BOT_TG_PROBE_EVERY_MIN"}
+    env["BOTCORP_TG_API_BASE"] = f"http://127.0.0.1:{srv.server_address[1]}"
+    try:
+        r = _tick(env)
+        assert r.returncode == 0, r.stderr
+        assert _Tg.paths == [], _Tg.paths
+        assert "tg probe:" not in (rt / "daemon.log").read_text(encoding="utf-8")
+    finally:
+        srv.shutdown()
