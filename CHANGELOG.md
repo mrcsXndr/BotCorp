@@ -3,6 +3,43 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.6
+
+QA pack B: bot-created bots need approval, automations check their own
+output, the daemon warns at 98% usage and can roll a session by itself, and
+the timeline summariser becomes a daemon job.
+
+- **Changed (CLI):** `botcorp new`, `import` and `adopt` run by a bot are
+  queued for the operator's approval, like a widening config change. Run by
+  the operator, they still apply at once. `archive` is symmetric: a bot may
+  archive a bot it created that has never started; any other archive is
+  operator-only.
+- **Fixed (hooks):** a hook or the cost meter running for a bot whose folder
+  is gone no longer creates its state file or log folder.
+- **Fixed (automations):** appends to `runs.jsonl` retry under a per-bot lock
+  and never drop a record. Before, 5 of 6 concurrent appends were lost.
+- **Added (automations):** `verify: {fresh: <path>, max_age_min: N}` on a
+  command job: exit 0 must also leave that file fresh, or one line goes to
+  alerts.log. A failure streak of 3 writes one alerts.log line per streak.
+  Runs get `BOT_TG_SCHEDULED=1`, so quiet hours apply to them.
+- **Added (daemon):** the tick runs `usage_monitor.py warn` for bots with
+  `usage_resume`. It reads status.json first and starts Python only at 98%.
+- **Added (triage):** NOISE alerts go to `memory/metrics/alerts_noise.log`.
+  The standup skill folds that digest into its board as one item, then
+  clears it.
+- **Added (memory):** module `timeline_summary` (default off, real spend)
+  runs `timeline.py summarize-stale` hourly as a built-in automation with
+  the vault token.
+- **Added (daemon):** module `auto_roll` (default off). At a declared
+  breakpoint, it rolls a fresh session, the same as `botcorp restart <bot>
+  --fresh`. It needs an idle session, no running subagents, a last-turn
+  context above `harness.roll_tokens` (default 500000) and a journal written
+  in the last 30 minutes.
+- **Changed (modules):** the session-summarize Stop hook runs only with
+  module `session_summarize` (default on). The cockpit has no
+  `remote_control` left. The Tools tab lists every hook in hooks.json,
+  including session-summarize, cost-meter and the precompact hooks.
+
 ## v0.9.5
 
 QA pack A: faster hooks, a Chrome lockout guard, usage and quiet-hours
