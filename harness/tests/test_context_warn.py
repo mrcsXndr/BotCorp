@@ -86,6 +86,28 @@ def test_unset_bot_modules_is_off(tmp_path):
 
 
 @needs_bash
+def test_unwritable_marker_is_quiet_not_spam(tmp_path):
+    home, cfg = _box(tmp_path)
+    shutil.rmtree(home / ".claude")                        # the marker cannot be written
+    assert _run(tmp_path, home, cfg) == []
+    assert _run(tmp_path, home, cfg) == []
+
+
+@needs_bash
+def test_marker_not_burned_when_the_line_is_not_emitted(tmp_path):
+    home, cfg = _box(tmp_path)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("BOT_")}
+    env.update({"CLAUDE_PLUGIN_ROOT": str(ASSEMBLY / "harness"), "BOT_HOME": str(home), "BOT_NAME": home.name,
+                "BOTCORP_HOME": str(tmp_path / "rt"), "CLAUDE_CONFIG_DIR": str(cfg), "BOT_TG_MUTE": "1",
+                "BOT_MODULES": "context_warn", "PYTHONIOENCODING": "utf-8"})
+    tg = '<channel source="telegram" chat_id="42" message_id="7" user="op">/help</channel>'
+    r = subprocess.run(["bash", str(HOOK)], input=json.dumps({"session_id": SID, "prompt": tg}),
+                       capture_output=True, text=True, env=env, timeout=60)
+    assert r.returncode == 2, r.stderr                     # intercepted: nothing emitted
+    assert _run(tmp_path, home, cfg) == [LINE]             # so the next prompt still warns
+
+
+@needs_bash
 def test_roll_tokens_moves_the_line(tmp_path):
     home, cfg = _box(tmp_path, ctx=300000)
     assert _run(tmp_path, home, cfg, roll="320000") == ["Context 300K of 320K: finish the current step, update journal + TDL, then declare a breakpoint."]

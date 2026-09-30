@@ -89,9 +89,9 @@ if sid and mods is not None and {"context_warn", "*"} & set(mods.split(",")):
         if str(s.get("session_id") or "") == sid and ctx > limit * 0.9:
             prev = open(mark, encoding="utf-8").read().split() if os.path.exists(mark) else []
             if not (len(prev) == 2 and prev[0] == sid and time.time() - float(prev[1]) < 1800):
+                open(mark, "a", encoding="utf-8").close()  # unwritable marker: raise before warn is set (quiet, not spam)
                 warn = ("Context " + str(round(ctx / 1000)) + "K of " + str(round(limit / 1000)) + "K: finish the current step, "
                         "update journal + TDL, then declare a breakpoint.")
-                open(mark, "w", encoding="utf-8").write(sid + " " + str(int(time.time())))
     except Exception:
         pass
 if warn:
@@ -100,6 +100,8 @@ out = [sid, m.group(1) if m else "", body, nudge, nudge_json, warn, p]
 sys.stdout.buffer.write("".join(x.replace("\0", "") + "\0" for x in out).encode("utf-8"))
 ' "$HARNESS" "$BOT_HOME" 2>/dev/null)
 fi
+CTX_MARK=""
+if [ -n "$CTX_WARN" ]; then CTX_MARK=1; fi
 
 if [ -z "$PROMPT" ]; then
   exit 0
@@ -227,6 +229,12 @@ fi
 # Built in the parse call at the top; NUDGE_JSON carries both lines.
 if [ -n "$REPLY_NUDGE" ] || [ -n "$CTX_WARN" ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "${NUDGE_JSON:-\"\"}"
+fi
+
+# The 30-min marker is written only now that the line has been emitted: an
+# earlier exit (TG intercept) must not burn the warning.
+if [ -n "$CTX_MARK" ]; then
+  printf '%s %s' "$SESSION_ID" "$(date +%s)" > "$BOT_HOME/.claude/.context_warn" 2>/dev/null || true
 fi
 
 # Default: pass through to main thread (exit 0).
