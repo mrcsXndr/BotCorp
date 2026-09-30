@@ -39,6 +39,12 @@
 //                                                     bot.yaml integrations.telegram.chat_id /
 //                                                     .quiet, read by tools/tg/* at send time
 //                                                     (no restart).
+//   bots/<name>/.claude-<name>/rules/botcorp-global-<slug>.md
+//                                                     GENERATED copy of each "All bots" knowledge doc
+//                                                     (<BOTCORP_HOME>/global/knowledge/<slug>.md, written
+//                                                     by `botcorp knowledge set --global`); Claude Code
+//                                                     loads the config home's rules/ as user rules. A
+//                                                     copy whose doc is gone is removed.
 //   bots/<name>/tools/<dir>/<tool>.{py,sh,ps1}        forwarding SHIM per harness tools/<dir>/ tool
 //                                                     (toolShimText): the rules, skills and CLAUDE.md
 //                                                     say `python tools/tg/tg_send.py`, `bash
@@ -380,6 +386,39 @@ function syncToolShims(botHome, botcorpRoot, dry, report) {
   if (unchanged) report[`tools/ shims (${unchanged})`] = 'unchanged';
 }
 
+// ---- "All bots" knowledge -------------------------------------------------------
+export const GLOBAL_RULE_PREFIX = 'botcorp-global-';
+export const KNOWLEDGE_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,47}$/;
+export function globalKnowledgeDir(env = process.env) {
+  return path.join(env.BOTCORP_HOME || path.join(os.homedir(), '.botcorp'), 'global', 'knowledge');
+}
+
+// The note goes after a leading `---` block, so a doc's frontmatter stays first.
+export function globalRuleText(slug, body) {
+  const note = `<!-- botcorp sync: a copy of the "All bots" doc ${slug}; edit it with \`botcorp knowledge set --global ${slug}\` or the cockpit. This file is regenerated. -->\n`;
+  const fm = /^---\r?\n[\s\S]*?\r?\n---\r?\n/.exec(body);
+  return fm ? fm[0] + note + body.slice(fm[0].length) : note + body;
+}
+
+function syncGlobalKnowledge(configDir, dry, report) {
+  const src = globalKnowledgeDir();
+  const dest = path.join(configDir, 'rules');
+  let slugs = [];
+  try { slugs = fs.readdirSync(src, { withFileTypes: true }).filter((d) => d.isFile() && d.name.endsWith('.md')).map((d) => d.name.slice(0, -3)).filter((s) => KNOWLEDGE_SLUG_RE.test(s)).sort(); } catch {}
+  for (const s of slugs) {
+    let body;
+    try { body = fs.readFileSync(path.join(src, `${s}.md`), 'utf-8'); } catch { continue; }
+    report[`.claude-<name>/rules/${GLOBAL_RULE_PREFIX}${s}.md`] = writeIfChanged(path.join(dest, `${GLOBAL_RULE_PREFIX}${s}.md`), globalRuleText(s, body), dry);
+  }
+  let present = [];
+  try { present = fs.readdirSync(dest).filter((n) => n.startsWith(GLOBAL_RULE_PREFIX) && n.endsWith('.md')); } catch {}
+  for (const n of present.sort()) {
+    if (slugs.includes(n.slice(GLOBAL_RULE_PREFIX.length, -3))) continue;
+    if (!dry) fs.rmSync(path.join(dest, n), { force: true });
+    report[`.claude-<name>/rules/${n}`] = dry ? 'would-remove' : 'removed (the doc is gone)';
+  }
+}
+
 export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.execPath } = {}) {
   const root = botcorpRoot || path.resolve(__dirname, '..');
   const botHome = botHomeOf(botName, root);
@@ -435,6 +474,9 @@ export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.e
 
   // 2c. tools/tg shims (the bot's own copies are kept)
   syncToolShims(botHome, root, dryRun, report);
+
+  // 2d. "All bots" knowledge -> the config home's user rules
+  syncGlobalKnowledge(configDir, dryRun, report);
 
   // 3. bot-owned files, only if absent
   report['CLAUDE.md'] = copyIfAbsent(path.join(templates, 'CLAUDE.md'), path.join(botHome, 'CLAUDE.md'), dryRun,

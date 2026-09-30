@@ -56,7 +56,7 @@ const {
 const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak, toolInventory } = await import('./tools.mjs');
 const operatorPair = await import('../cockpit/operator-pair.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'service', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'service', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days', 'if-match']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -1548,6 +1548,60 @@ function stopBot(bot) {
     else out(`stop: tg_owner.lock owner ${p} still alive (left in place)`);
   }
   return before;
+}
+
+// ---- knowledge: the docs a bot loads (cli/knowledge.mjs) ------------------------------
+// `--global` writes are the operator's alone: one doc reaches every bot's
+// instructions, so an admin bot is refused too. A bot writes only its own docs.
+async function cmdKnowledge({ pos, flags }) {
+  const [, action, ...rest] = pos;
+  const K = await import('./knowledge.mjs');
+  const USAGE = 'knowledge list|get|set|rm <bot>|--global [<doc>] [--json] [--if-match <sha256>] | knowledge describe <item-id> <text>';
+  const run = (fn) => { try { return fn(); } catch (e) { if (e instanceof K.KnowledgeError) fail(e.message, e.code); throw e; } };
+  if (action === 'describe') {
+    const [id, ...words] = rest;
+    if (!id) usage(USAGE);
+    requireOperator('knowledge describe');
+    const r = run(() => K.describeItem(id, words.join(' '), DESCRIPTION_MAX));
+    if (flags.json) outJson(r); else out(`knowledge: ${id} ${r.description === null ? 'uses its shipped text again' : 'described'} (every bot's Tools tab)`);
+    return 0;
+  }
+  if (!['list', 'get', 'set', 'rm'].includes(action)) usage(USAGE);
+  const global = !!flags.global;
+  const bot = global ? null : rest.shift();
+  const doc = rest[0];
+  if (!global) requireBot(bot);
+  const where = global ? { scope: 'global' } : { scope: 'bot', botHome: botHome(bot) };
+  if (action === 'list') {
+    const docs = run(() => K.listDocs(where));
+    if (flags.json) { outJson({ scope: where.scope, bot, docs }); return 0; }
+    if (!docs.length) { out(`knowledge: ${global ? 'no "All bots" docs' : `${bot} has no docs`}`); return 0; }
+    for (const d of docs) out(`${d.id.padEnd(24)} ~${d.tokens} tokens  ${d.updated_at}  ${d.file}`);
+    return 0;
+  }
+  if (!doc) usage(USAGE);
+  if (action === 'get') {
+    const d = run(() => K.getDoc(where, doc));
+    if (flags.json) outJson(d); else process.stdout.write(d.content);
+    return 0;
+  }
+  if (global) requireOperator(`knowledge ${action} --global`);
+  else if (process.env.BOT_NAME && process.env.BOT_NAME !== bot) fail(`knowledge ${action}: a bot writes only its own docs (this is ${process.env.BOT_NAME}, not ${bot})`, 3);
+  const ifMatch = flags['if-match'] && flags['if-match'] !== true ? String(flags['if-match']) : null;
+  if (action === 'set' && !stdinIsPiped()) usage('knowledge set: the text goes on stdin (echo ... | botcorp knowledge set ...)');
+  const r = action === 'set'
+    ? run(() => K.setDoc(where, doc, readStdinAll(), { ifMatch }))
+    : run(() => K.rmDoc(where, doc, { ifMatch }));
+  if (flags.json) outJson(r);
+  else out(`knowledge: ${global ? '"All bots"' : bot} ${doc} ${action === 'rm' ? 'removed' : r.created ? 'created' : 'saved'} (loads at the next session start)`);
+  if (global) {
+    // every bot's config home carries the copy: sync each, one bad bot.yaml does not stop the rest
+    for (const b of listBots()) {
+      try { const s = sync(b, { botcorpRoot: ROOT }); if (!flags.json) out(`sync: ${b} ok (${Object.keys(s.report).filter((k) => k.includes('/rules/')).length} "All bots" docs)`); }
+      catch (e) { process.stderr.write(`sync: ${b} failed: ${e.message}\n`); }
+    }
+  }
+  return 0;
 }
 
 // `whoami [--json]`: callerIdentity() of this process (read-only). The
@@ -3577,6 +3631,10 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
       (the capability registry, bot.yaml tools:; register from a bot queues an integration or secret-bearing entry)
   tools <bot> gate [--days 7] [--json]   clean consecutive days from the scan record; exit 0 once ready for enforce
   tools <bot> inventory [--json]   everything the bot can use: BotCorp harness, its own, third-party (the cockpit Tools tab)
+  knowledge list <bot>|--global [--json] | get <bot>|--global <doc> [--json] | set <bot>|--global <doc> [--if-match <sha256>] | rm <bot>|--global <doc>
+      (the docs a bot loads: its CLAUDE.md (doc CLAUDE) and .claude/rules/<doc>.md, or the "All bots" docs every bot loads;
+       set reads the text on stdin, 64 KB max; a bot writes only its own; --global is the operator's alone and syncs every bot)
+  knowledge describe <item-id> <text>   ("All bots" text over a harness item's own in the Tools tab, e.g. skill:weekly; '' clears; operator only)
   start <bot> [--fresh] [--debug] [--dry-run] | stop <bot> | restart <bot> [--fresh] [--debug]   (--debug: Claude Code debug log in <config>/debug/)
   status [<bot>] [--json]
   observe <bot>|--all [--json] [--roster]                               (read-only: alive, phase idle|working|blocked|unknown|starting|stopped|down, poller)
@@ -3602,6 +3660,7 @@ const COMMANDS = {
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals, tools: cmdTools,
+  knowledge: cmdKnowledge,
   start: cmdStart, stop: cmdStop, restart: cmdRestart, status: cmdStatus, observe: cmdObserve, automations: cmdAutomations,
   send: cmdSend, inbox: cmdInbox,
   update: cmdUpdate, cc: cmdCc, install: cmdInstall, cockpit: cmdCockpit, suggest: cmdSuggest, doctor: cmdDoctor,

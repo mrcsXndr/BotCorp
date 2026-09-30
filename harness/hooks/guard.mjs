@@ -129,6 +129,12 @@ function configGuard(p) {
     const why = settingsSwitch(str(file), ti);
     return why ? `BLOCKED: this edit of ${str(file)} ${why}. A settings env (BOT_DISABLED_HOOKS, PATH, NODE_OPTIONS, ...) or disableAllHooks can switch the hook guards off for the session. The session env comes from bot.yaml (botcorp config set <bot> ...); hooks and other keys in this file stay yours to edit.` : null;
   }
+  // "All bots" knowledge: the source docs and the synced copies reach every bot's instructions
+  const rt = low(process.env.BOTCORP_HOME || path.join(os.homedir(), '.botcorp'));
+  const n = path.posix.normalize(f);
+  if (n.startsWith(`${rt}/global/`) || (n.startsWith(`${cfg}/rules/`) && path.posix.basename(n).startsWith('botcorp-global-'))) {
+    return `BLOCKED: ${str(file)} is "All bots" knowledge: one doc reaches every bot's instructions, so only the operator changes it (\`botcorp knowledge set --global <doc>\` in their terminal, or the cockpit). A bot edits its own docs: \`botcorp knowledge set <bot> <doc>\`, CLAUDE.md or .claude/rules/.`;
+  }
   const hit = f === `${home}/bot.yaml` || f === `${home}/.claude/settings.json` || f.startsWith(`${home}/.vault/`)
     || f === `${cfg}/channels/telegram/access.json`;
   if (!hit) return null;
