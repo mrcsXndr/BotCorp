@@ -17,7 +17,8 @@
 //                                                     when bot.yaml permissions: bypass (a --bg launch
 //                                                     refuses until the disclaimer is accepted; only
 //                                                     USER settings are honoured for it);
-//                                                     autoCompactWindow from harness.context_window.
+//                                                     autoCompactWindow from harness.context_window,
+//                                                     and the same window in env (see below).
 //   bots/<name>/.claude-<name>/.claude.json          MERGED: projects[<bot home>].hasTrustDialogAccepted
 //                                                     (a --bg launch refuses an untrusted workspace)
 //                                                     and hasClaudeMdExternalIncludesApproved (the
@@ -163,13 +164,28 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
 // project .claude/settings.json). Written only when bot.yaml already opts
 // the bot into bypass; an existing key is left alone otherwise.
 // autoCompactWindow = harness.context_window resolved to tokens, for a session
-// the launcher did not start (the launcher also sets the env var, which Claude
-// Code ranks above this setting); 'auto' leaves the key as it is.
+// the launcher did not start; 'auto' leaves the key as it is.
+// The same window also goes in this file's `env`, because a machine-wide
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks autoCompactWindow and the launch
+// env did not reach the background worker (it carried the User-scope values).
+// Claude Code writes a settings `env` entry into its own process env over the
+// inherited value, so this wins inside the worker. The PCT override is set to
+// 100, which Claude Code ignores (it can only lower the threshold), because a
+// settings file cannot unset the inherited one. 'auto' removes both entries.
 export function mergeConfigHomeSettings(existing, cfg) {
   const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
   if (cfg.permissions === 'bypass') cur.skipDangerousModePermissionPrompt = true;
   const cw = resolveContextWindow(cfg);
   if (cw.tokens) cur.autoCompactWindow = cw.tokens;
+  const env = cur.env && typeof cur.env === 'object' && !Array.isArray(cur.env) ? { ...cur.env } : {};
+  if (cw.tokens) {
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(cw.tokens);
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '100';
+  } else {
+    delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+  }
+  if (Object.keys(env).length) cur.env = env; else delete cur.env;
   return cur;
 }
 

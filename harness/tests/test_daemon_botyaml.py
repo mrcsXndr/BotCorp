@@ -194,6 +194,30 @@ def test_sync_approves_the_harness_rule_imports_and_keeps_every_other_key(tmp_pa
     assert (cfg_home / ".claude.json").read_text(encoding="utf-8") == '{"userID": "u1", "projects": {'
 
 
+def test_sync_puts_the_context_window_in_the_config_home_env(tmp_path):
+    """v0.8.5: a machine-wide CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 +
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50 reached the background worker although
+    the launch set the bot's own. A settings `env` entry is written into Claude
+    Code's process env over the inherited value, so sync puts the window there;
+    PCT 100 is ignored by Claude Code (it can only lower the threshold)."""
+    root = _root_with_bot(tmp_path, "theta", "name: theta\nmodel: claude-opus-5-5\nharness:\n  context_window: 25%\n")
+    cfg_home = root / "bots" / "theta" / ".claude-theta"
+    cfg_home.mkdir(parents=True)
+    (cfg_home / "settings.json").write_text(json.dumps({"theme": "dark", "env": {"OPERATOR_VAR": "1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "500000"}}), encoding="utf-8")
+    r = _node(str(SYNC), "theta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    us = json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+    assert us["env"] == {"OPERATOR_VAR": "1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "100"}
+    assert us["autoCompactWindow"] == 250000 and us["theme"] == "dark"
+    # 'auto': both entries go, the operator's own stays; an env left empty is dropped
+    (root / "bots" / "theta" / "bot.yaml").write_text("name: theta\nharness:\n  context_window: auto\n", encoding="utf-8")
+    assert _node(str(SYNC), "theta", "--botcorp", str(root)).returncode == 0
+    assert json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))["env"] == {"OPERATOR_VAR": "1"}
+    (cfg_home / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000"}}), encoding="utf-8")
+    assert _node(str(SYNC), "theta", "--botcorp", str(root)).returncode == 0
+    assert "env" not in json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+
+
 def test_sync_does_not_add_the_disclaimer_key_for_a_default_permissions_bot(tmp_path):
     root = _root_with_bot(tmp_path, "zeta", "name: zeta\npermissions: default\n")
     r = _node(str(SYNC), "zeta", "--botcorp", str(root))

@@ -24,6 +24,15 @@ versions follow SemVer.
   bot's project record in the config home's `.claude.json`, merged into the
   record like `hasTrustDialogAccepted`. A `.claude.json` that does not parse
   is left as it is instead of being replaced by just those keys.
+- **Fixed: `harness.context_window` reaches the background session.** The
+  launch put the bot's window in the session env, but the background worker
+  carried the machine-wide User-scope values
+  (`CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`,
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50`), which outrank `autoCompactWindow`.
+  sync now also writes the window into the config home's settings `env`,
+  which Claude Code applies over an inherited value, together with
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100` (ignored, so the inherited 50 no
+  longer halves the window). `auto` removes both; other `env` keys are kept.
 
 ## v0.8.4
 
