@@ -3,6 +3,42 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.7
+
+QA pack C: a bot that was busy when a release applied restarts onto it later,
+hook latency is measured and graded, model ids and prices have one source,
+modules stop leaking work when off, and a new context-pressure warning.
+
+- **Fixed (CLI):** `automations list` and `automations run` see the module
+  built-ins the daemon schedules, such as `timeline-summary`.
+- **Fixed (daemon):** a live bot whose session was launched on another
+  harness than the applied release restarts onto it on any later tick, not
+  only on the tick that applied it. It still waits for an idle session and
+  respects the start cap, logs "restart onto vX (launched on vY)", and tries
+  once per applied tag.
+- **Added (hooks):** every hook run is timed into
+  `<rt>/state/<bot>/hooks-timing.jsonl` (in process, capped). A run about to
+  hit its hooks.json timeout is stopped 1 s early and recorded as timed out.
+  `botcorp doctor` and `botcorp observe <bot>` show p50/p95 per hook over
+  24 h and WARN when a p95 passes half the hook's timeout.
+- **Changed (models):** alert triage runs on the workhorse tier of
+  `harness/models.json`, not a hard-coded top-tier id. The doctor probe and
+  the debrief hook read their ids from there too. Prices per tier live in
+  models.json; the cost meter's transcript fallback uses them. A test fails
+  on any literal model id in harness, daemon or CLI code.
+- **Fixed (daemon):** the OTel sink runs only while some bot has module
+  `telemetry` on; with none, a running sink is stopped.
+- **Fixed (timeline):** the PreCompact hook builds the timeline
+  structurally and spawns no LLM distill (a hook has no credentials). The
+  weekly promotion concatenates (`timeline.py distill <week> --structural`).
+  The LLM distill belongs to module `timeline_summary`.
+- **Added (hooks):** module `context_warn` (default off). When the last
+  turn's context passes 90% of `harness.roll_tokens`, the prompt gets one
+  line saying to finish the step, update journal and TDL, and declare a
+  breakpoint. At most once per 30 minutes per session.
+- **Docs:** the engine contract's telegram, usage_resume and telemetry rows
+  now say everything each module gates.
+
 ## v0.9.6
 
 QA pack B: bot-created bots need approval, automations check their own
