@@ -13,11 +13,18 @@
 //
 // BOT_HOOK_TRACE=1: the trace line is written here, before the gates, and not
 // again by _guard.sh.
+//
+// Every run that spawns is timed into state/<bot>/hooks-timing.jsonl
+// (_timing.mjs). The script gets this hook's hooks.json timeout less 1 s, so a
+// run about to be cancelled by Claude Code is killed here first and recorded
+// as timed_out (exit 1: Claude Code ignores the output of a failed hook, as it
+// does a cancelled one's).
 
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { recordTiming } from './_timing.mjs';
 
 const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const [name = '', mod = '-', script = '', ...args] = process.argv.slice(2);
@@ -61,6 +68,20 @@ function bash() {
   return ['bash.exe', []];
 }
 
+// this hook's timeout in hooks.json (seconds), 0 = not found
+function hookTimeout() {
+  try {
+    for (const groups of Object.values(JSON.parse(fs.readFileSync(path.join(HOOKS_DIR, 'hooks.json'), 'utf-8')).hooks)) {
+      for (const g of groups) for (const h of g.hooks) if (Array.isArray(h.args) && h.args[1] === name && h.args[3] === script) return Number(h.timeout) || 0;
+    }
+  } catch {}
+  return 0;
+}
+
 const [exe, pre] = bash();
-const r = spawnSync(exe, [...pre, path.resolve(HOOKS_DIR, script), ...args], { stdio: 'inherit', env, windowsHide: true });
+const t = hookTimeout();
+const budget = t > 0 ? Math.max(1000, Math.floor(t * 1000 - 1000 - performance.now())) : undefined;
+const r = spawnSync(exe, [...pre, path.resolve(HOOKS_DIR, script), ...args], { stdio: 'inherit', env, windowsHide: true, timeout: budget });
+const timedOut = !!(r.error && r.error.code === 'ETIMEDOUT');
+recordTiming(name, performance.now(), r.status, timedOut);
 process.exit(r.status ?? 1);

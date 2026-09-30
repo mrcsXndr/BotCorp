@@ -29,6 +29,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { recordTiming } from './_timing.mjs';
 
 const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url));
 const HARNESS = process.env.CLAUDE_PLUGIN_ROOT || path.dirname(HOOKS_DIR);
@@ -294,6 +295,8 @@ async function main() {
   } else if (GUARDS[mode]) names = [mode];
   else { fs.writeSync(2, `guard.mjs: unknown mode '${mode}' (pre | post | ${Object.keys(GUARDS).join(' | ')})\n`); process.exit(0); }
 
+  // the hooks.json entry points (guard-pre / guard-post) are timed, a direct guard run is not
+  const exit = (code) => { if (mode === 'pre' || mode === 'post') recordTiming(`guard-${mode}`, performance.now(), code); process.exit(code); };
   const warnings = [];
   for (const name of names) {
     trace(name);
@@ -303,11 +306,11 @@ async function main() {
     try { out = await g.run(p); } catch { out = g.closed || null; }
     if (!out) continue;
     // writeSync: an exit right after an async pipe write can drop the message
-    if (g.block) { fs.writeSync(2, out + '\n'); process.exit(2); }
+    if (g.block) { fs.writeSync(2, out + '\n'); exit(2); }
     warnings.push(out);
   }
   if (warnings.length) fs.writeSync(1, warnings.join('\n') + '\n');
-  process.exit(0);
+  exit(0);
 }
 
 main();

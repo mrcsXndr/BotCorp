@@ -554,6 +554,49 @@ export function memoryHealthRows({ home, config, sessionId = '', resolved = null
   return rows;
 }
 
+// hooks.json -> { hook: timeout s }, keyed as harness/hooks/_timing.mjs records
+// them: a run.mjs entry by its name, a guard.mjs entry as guard-<mode>.
+export function hookTimeouts(hooksJson) {
+  const t = {};
+  for (const groups of Object.values((hooksJson && hooksJson.hooks) || {})) {
+    for (const g of Array.isArray(groups) ? groups : []) {
+      for (const h of (g && g.hooks) || []) {
+        const a = Array.isArray(h.args) ? h.args : [];
+        const n = /run\.mjs$/.test(a[0] || '') ? a[1] : /guard\.mjs$/.test(a[0] || '') ? `guard-${a[1]}` : '';
+        if (n && !(n in t)) t[n] = Number(h.timeout) || 0;
+      }
+    }
+  }
+  return t;
+}
+
+// doctor `<bot>: hook timing` (and the observe one-liner): p50/p95 per hook over
+// the last 24 h of state/<bot>/hooks-timing.jsonl. WARN when a hook's p95 is
+// over half its hooks.json timeout, or a run timed out.
+export function hookTimingVerdict(text, timeouts = {}, now = Date.now()) {
+  const by = {}; const late = {};
+  for (const ln of String(text || '').split('\n')) {
+    let r; try { r = JSON.parse(ln); } catch { continue; }
+    if (!r || typeof r.hook !== 'string' || !Number.isFinite(r.ms) || !(now - Date.parse(r.ts) <= 86_400_000)) continue;
+    (by[r.hook] ||= []).push(r.ms);
+    if (r.timed_out) late[r.hook] = (late[r.hook] || 0) + 1;
+  }
+  const names = Object.keys(by).sort();
+  if (!names.length) return { level: 'INFO', detail: 'no hook runs recorded in the last 24 h (state/<bot>/hooks-timing.jsonl)' };
+  const fmt = (ms) => (ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`);
+  const at = (s, p) => s[Math.max(0, Math.ceil((p / 100) * s.length) - 1)];
+  const slow = [];
+  const parts = names.map((n) => {
+    const s = by[n].sort((a, b) => a - b);
+    const p95 = at(s, 95); const t = timeouts[n] || 0;
+    if ((t > 0 && p95 > t * 500) || late[n]) slow.push(n);
+    return `${n} p50 ${fmt(at(s, 50))} p95 ${fmt(p95)}${t ? ` of ${t}s` : ''} (${s.length})${late[n] ? ` ${late[n]} timed out` : ''}`;
+  });
+  return slow.length
+    ? { level: 'WARN', detail: `p95 over half the timeout or timed out: ${slow.join(', ')}. ${parts.join('; ')}` }
+    : { level: 'PASS', detail: parts.join('; ') };
+}
+
 // doctor `<bot>: unpushed commits`: with backup.git_remote set, the auto-commit
 // hook pushes the bot folder's own repo to origin on every Stop (a failed push is
 // retried on the next one), so commits that are not on any origin ref are work

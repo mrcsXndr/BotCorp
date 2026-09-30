@@ -95,6 +95,14 @@ A hook with no module (`-` in `hooks.json`) runs for every bot; any hook but
 `harness.hooks_disable` (the names are the `run.mjs` names in `hooks.json` plus
 the tool guards).
 
+Every hook run that starts (a `run.mjs` hook, or `guard.mjs pre|post` as
+`guard-pre` / `guard-post`) appends `{ts, hook, ms, rc, timed_out?}` to
+`<rt>/state/<bot>/hooks-timing.jsonl` (the last 2000 lines are kept once it
+passes 256 KB). `run.mjs` stops a script 1 s before its `hooks.json` timeout
+and records it as `timed_out`. `botcorp doctor` (`<bot>: hook timing`) and
+`botcorp observe <bot>` report p50/p95 per hook over the last 24 h, WARN when a
+p95 is over half that hook's timeout.
+
 ## Override precedence: harness vs. the bot's own
 
 | Kind | Harness copy | Bot's own | Which one runs |

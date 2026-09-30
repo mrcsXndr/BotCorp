@@ -47,7 +47,7 @@ const {
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage, requireOperator, isOperatorContext, ancestorBotSession, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, readJsonState, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, hookTimeouts, hookTimingVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -1719,6 +1719,13 @@ function cmdStatus({ pos, flags }) {
 
 // Read-only: what each session is doing now (core/observe.mjs). --roster also
 // asks `claude agents --json` (the daemon tick passes it).
+// state/<bot>/hooks-timing.jsonl (harness/hooks/_timing.mjs) against hooks.json: doctor row + observe line
+function hookTiming(bot) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(STATE_DIR, bot, 'hooks-timing.jsonl'), 'utf-8'); } catch {}
+  return hookTimingVerdict(text, hookTimeouts(readJson(path.join(ROOT, 'harness', 'hooks', 'hooks.json'))));
+}
+
 function cmdObserve({ pos, flags }) {
   if (pos[1] && flags.all) usage('observe: <bot> or --all, not both');
   if (!pos[1] && !flags.all) usage('observe: <bot> or --all');
@@ -1727,6 +1734,7 @@ function cmdObserve({ pos, flags }) {
   if (flags.json) { outJson(pos[1] ? all[0] : all); return 0; }
   if (!all.length) out('observe: no bots under bots/ (botcorp new)');
   for (const o of all) out(`${o.bot.padEnd(16)} ${o.phase.padEnd(8)} alive=${o.alive} poller=${o.poller ?? '-'} bg=${o.bg_id ?? '-'}${o.blocked ? ` blocked="${o.blocked.needs}"` : ''}${o.quiet_s !== null ? ` quiet=${o.quiet_s}s` : ''}`);
+  if (pos[1] && all.length) { const v = hookTiming(all[0].bot); out(`hooks 24h ${v.level}: ${v.detail}`); }
   return 0;
 }
 
@@ -3375,6 +3383,10 @@ async function cmdDoctor({ flags }) {
         // memory health: startup context size, timeline distill, import approval, the worker's real window
         const rec = sessionLaunchOf(bot, botState(bot)).rec;
         for (const r of memoryHealthRows({ home: botHome(bot), config: configDir(bot), sessionId: (rawState && rawState.session_id) || '', resolved: resolveContextWindow(cfg), running: s.running, rec })) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
+      }
+      {
+        const v = hookTiming(bot);
+        add(v.level, `${bot}: hook timing`, v.detail.replace(/<bot>/g, bot), 'bots');
       }
       {
         const v = harnessToolsVerdict(bot);
