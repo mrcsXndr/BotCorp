@@ -37,6 +37,15 @@ versions follow SemVer.
   Claude Code walks up from the bot folder and loaded it as project memory.
   The generated `.claude/settings.json` now carries
   `claudeMdExcludes: ["<home>/.claude/CLAUDE.md"]`.
+- **Fixed: a usage-limit hit is recorded again.** Claude Code's StopFailure
+  payload carries `error` as a string (`"rate_limit"`) and the banner in
+  `last_assistant_message`; `usage_monitor.py record-block` expected a dict
+  and crashed, so no alert, no `blocked_until` and no auto-resume. It now
+  reads either shape. A one-model limit ("You've reached your Fable limit.
+  /model to switch models.") is logged, not announced: the session carries
+  on. The daemon's `--resume-check` also scans the transcript for the limit
+  banner and records a block no hook recorded, with the same dedupe and
+  alert. The hook's `events.jsonl` row now keeps the error and the message.
 
 ## v0.8.4
 

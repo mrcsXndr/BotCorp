@@ -8,11 +8,12 @@ the operator just sees the bot go silent and "can't continue from here". This
 monitor is fed by harness hooks (StopFailure / Notification), which is why it
 can still act even though the blocked session itself cannot.
 
-Detection is HOOK-FED, not scanned: a StopFailure hook calls
+Detection is HOOK-FED first: a StopFailure hook calls
 `record-block --stdin` with the failure payload the instant a limit block
 happens, and a Notification hook calls `record-notification --stdin` when the
 harness's own auto-resume mechanism fires (or reports itself stale/disabled).
-There is no transcript-banner scanning here — the hooks are the signal.
+The daemon's `--resume-check` also scans the transcript for CC's limit banner,
+the fallback for a StopFailure hook that was cancelled or never ran.
 
 Behaviour:
   - `record-block --stdin`: parse a reset time out of the StopFailure error
@@ -22,7 +23,9 @@ Behaviour:
     marks the current window resumed; `quota_auto_resume_stale` /
     `quota_auto_resume_disabled` leave the window alone so `--resume-check`
     can still act on it.
-  - `--resume-check`: past the recorded block's reset? Arm the resume prompt
+  - `--resume-check`: first record a limit banner newer than the last
+    recorded block (same dedupe and alert as record-block). Then: past the
+    recorded block's reset? Arm the resume prompt
     and print RESUME (exit 10) so the supervisor relaunches. Prints WAIT /
     SELF-RESUMED / STALE otherwise. May still read transcript mtime, purely
     to detect a session that already came back on its own.
@@ -42,9 +45,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _paths import instance_root, harness_root, config_home, runtime_root, bot_name  # noqa: E402
 
 REPO = str(instance_root())
-# Kept ONLY for the SELF-RESUMED check in --resume-check (a transcript write
-# after the reset means a human already got the session going by hand) — this
-# module no longer scans transcripts for the limit itself.
+# Read for the SELF-RESUMED check in --resume-check (a transcript write after
+# the reset means a human already got the session going by hand) and by the
+# banner fallback (scan_banner).
 TRANSCRIPT_DIR = os.environ.get(
     "BOT_TRANSCRIPT_DIR",
     str(config_home() / "projects" / re.sub(r"[^A-Za-z0-9]", "-", REPO)),
@@ -304,38 +307,50 @@ def _parse_block_reset(message: str, now: datetime) -> tuple[str, datetime]:
     return until.strftime("%H:%M"), until
 
 
-def cmd_record_block(dry_run: bool) -> int:
-    """Hook mode: a StopFailure payload on stdin, e.g.
-    `{"error_code": ..., "message": "..."}` (the hook also tolerates the
-    camelCase `errorCode`, a nested `{"error": {"message": ...}}` shape and
-    a `detail` field). Parses the reset time, dedupes against an
-    already-announced block (cross-tool safe via limit_window.already_announced),
-    stamps blocked_until, then TG-alerts once. The stamp never depends on the
-    send: a blocked session's tg_send.py can fail (a limit blocks it too, or
-    the backlog gate refuses), and --resume-check needs blocked_until either way."""
-    payload = _read_stdin_json()
-    message = str(
-        payload.get("message")
-        or (payload.get("error") or {}).get("message")
+# "You've reached your Fable limit. /model to switch models." A limit on ONE
+# model: the session goes on with another model and there is no reset window
+# to wait out, so it is not a usage block (09-27..09-29: three subagent hits).
+MODEL_LIMIT_RE = re.compile(r"reached your .{1,40} limit.*?/model", re.I | re.S)
+
+
+def _block_message(payload) -> str:
+    """The human text of a StopFailure payload.
+
+    Claude Code 2.1.284 sends `error` as a STRING code ("rate_limit"), the
+    banner text in `last_assistant_message` ("You've hit your session limit ·
+    resets 6:30am (Europe/Stockholm)") and the raw API body in `error_details`.
+    A dict `error` with a `message`, and `message`/`detail`, are still read."""
+    if not isinstance(payload, dict):
+        return ""
+    err = payload.get("error")
+    return str(
+        payload.get("last_assistant_message")
+        or payload.get("message")
+        or (err.get("message") if isinstance(err, dict) else None)
         or payload.get("detail")
+        or payload.get("error_details")
         or ""
     )
-    now = datetime.now(timezone.utc)
-    reset, until = _parse_block_reset(message, now)
-    state = load_state()
 
+
+def _record(state: dict, reset: str, until: datetime, hit_at: datetime,
+            dry_run: bool, source: str) -> bool:
+    """Dedupe, stamp blocked_until, TG-alert once. True when a new block was
+    recorded. The stamp never depends on the send: a blocked session's
+    tg_send.py can fail (a limit blocks it too, or the backlog gate refuses),
+    and --resume-check needs blocked_until either way."""
     if limit_window.already_announced(state, until):
         _log(f"block resetting {until.isoformat()} already announced; staying quiet")
-        return 0
+        return False
 
-    wid = window_id(reset, now)
+    wid = window_id(reset, hit_at)
     # A dry-run stamps nothing: it must never suppress a later live alert.
     if not dry_run:
         state["last_alerted_reset"] = reset
         state["last_alerted_window"] = wid
-        state["last_alerted_at"] = now.isoformat()
+        state["last_alerted_at"] = hit_at.isoformat()
         state["blocked_until"] = until.isoformat()
-        state["source"] = "usage_monitor"
+        state["source"] = source
         state.pop("resumed_for", None)
         state.pop("resume_skipped", None)
         try:
@@ -343,10 +358,95 @@ def cmd_record_block(dry_run: bool) -> int:
         except Exception as e:
             _log(f"state save failed: {e}")
     sent = send_tg(reset, dry_run)
-    _log(f"recorded usage-limit block, resets {reset}"
+    _log(f"recorded usage-limit block ({source}), resets {reset}"
          + (" (dry-run, state not stamped)" if dry_run else "")
          + ("" if sent else " (alert not sent; blocked_until stamped for --resume-check)"))
+    return True
+
+
+def cmd_record_block(dry_run: bool) -> int:
+    """Hook mode: a StopFailure payload on stdin (shape in _block_message).
+    Parses the reset time, dedupes against an already-announced block
+    (cross-tool safe via limit_window.already_announced), stamps
+    blocked_until, then TG-alerts once. A one-model limit is logged only."""
+    message = _block_message(_read_stdin_json())
+    if MODEL_LIMIT_RE.search(message) and not RESET_PHRASE_RE.search(message):
+        _log(f"one-model limit, not a usage block: {message[:80]!r}")
+        return 0
+    now = datetime.now(timezone.utc)
+    reset, until = _parse_block_reset(message, now)
+    _record(load_state(), reset, until, now, dry_run, "usage_monitor")
     return 0
+
+
+# The banner fallback looks this far back. The 5-hour window is the shortest
+# block; an older banner's reset has passed and needs no stamp.
+BANNER_LOOKBACK_H = 6
+BANNER_TAIL_BYTES = 1 << 20
+
+
+def _banner_entries(path: str):
+    """(hit time, text) for each limit banner in the tail of one transcript.
+
+    CC writes a limit as an assistant entry with `isApiErrorMessage: true`,
+    `error: "rate_limit"` and the banner as its text content."""
+    with open(path, "rb") as fh:
+        fh.seek(0, os.SEEK_END)
+        fh.seek(max(0, fh.tell() - BANNER_TAIL_BYTES))
+        data = fh.read().decode("utf-8", "replace")
+    for line in data.splitlines():
+        if '"rate_limit"' not in line:
+            continue
+        try:
+            d = json.loads(line)
+            if not (d.get("isApiErrorMessage") and d.get("error") == "rate_limit"):
+                continue
+            ts = datetime.fromisoformat(str(d["timestamp"]).replace("Z", "+00:00"))
+            content = (d.get("message") or {}).get("content")
+            if isinstance(content, list):
+                text = " ".join(str(c.get("text") or "") for c in content if isinstance(c, dict))
+            else:
+                text = str(content or "")
+        except Exception:
+            continue
+        yield ts, text
+
+
+def scan_banner(state: dict, dry_run: bool) -> bool:
+    """Record the newest limit banner that no hook recorded.
+
+    Only banners newer than the last recorded block count (the hook stamps its
+    run time, after CC wrote the banner), and only ones whose reset is still
+    ahead: a passed window needs no alert, and stamping it would relaunch."""
+    now = datetime.now(timezone.utc)
+    since = now - timedelta(hours=BANNER_LOOKBACK_H)
+    last = None
+    try:
+        last = datetime.fromisoformat(str(state.get("last_alerted_at")))
+        if last.tzinfo is None:
+            last = last.astimezone()
+    except Exception:
+        pass
+    best = None
+    for f in glob.glob(os.path.join(TRANSCRIPT_DIR, "*.jsonl")):
+        try:
+            if os.path.getmtime(f) < since.timestamp():
+                continue
+            for ts, text in _banner_entries(f):
+                if ts <= since or (last and ts <= last):
+                    continue
+                m = RESET_PHRASE_RE.search(text)  # a one-model limit has none
+                if m and (best is None or ts > best[0]):
+                    best = (ts, m.group("reset").strip().strip("."))
+        except Exception as e:
+            _log(f"banner scan skipped {os.path.basename(f)}: {e}")
+    if best is None:
+        return False
+    ts, reset = best
+    until = reset_to_local_dt(reset, ts)
+    if not until or until <= now:
+        return False
+    return _record(state, reset, until, ts, dry_run, "banner")
 
 
 # Notification matcher_value family the harness's own quota-auto-resume
@@ -415,6 +515,10 @@ def main() -> int:
         return 0
 
     if args.resume_check:
+        try:
+            scan_banner(state, args.dry_run)
+        except Exception as e:
+            _log(f"banner scan failed (fail-open): {e}")
         return resume_check(state, args.dry_run)
 
     print("usage_monitor: nothing to do — pass record-block, record-notification, "
