@@ -3,6 +3,29 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.2
+
+Cockpit fixes from the first day on v0.9.0.
+
+- **Fixed:** the failover and admin notify switches wrote `failover_notify` /
+  `admin_notify`, which `config set` rejects as unknown paths. They now write
+  `harness.failover_notify` / `harness.admin_notify`.
+- **Fixed:** pages scrolled twice (the page and the shell), so a screen could
+  scroll about a third past its end. The shell's main pane is now the only
+  scroll container.
+- **Fixed:** on a wide screen the chat now fills the pane; message bubbles keep
+  a readable maximum width.
+- **Fixed:** a new chat read "stopped" until the daemon caught up, then
+  started with the restart prompt. It reads "starting" from the moment Start is
+  sent, and a bot's first launch gets no resume prompt (`daemon/launch.ps1`).
+- **Changed:** the bot menu lists Settings once instead of every manage tab.
+- **Changed:** the Telegram switch, DM policy and Pair ask for confirmation
+  first.
+- **Changed:** Updates lists newer releases, then the installed one, then
+  history, each newest first.
+- **Changed:** a chat's Stop is "Stop and archive": one confirm, then the chat
+  stops and leaves the list. A pinned bot's Stop only stops.
+
 ## v0.9.1
 
 A bot whose TDL is written as bullets now starts with its backlog.
