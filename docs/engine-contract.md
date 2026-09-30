@@ -85,6 +85,7 @@ the daemon tick runs a module's job only for bots that have it on.
 | `sound` | off | the `play-sound` Stop hook |
 | `telemetry` | on | the OpenTelemetry env at launch |
 | `review_board` | off | `review_board.py` and the board line in the session-start context |
+| `auto_roll` | off | the tick's fresh restart at a declared breakpoint once the last-turn context passes `harness.roll_tokens` (`docs/daemon.md` "Auto-roll") |
 | `timeline_summary` | off | the built-in `timeline-summary` automation: every 60 min, `timeline.py summarize-stale` with the vault `oauth_token` (real spend) |
 | `backup` | `backup.git_remote` set | `botcorp backup` and the push in `auto-commit` |
 

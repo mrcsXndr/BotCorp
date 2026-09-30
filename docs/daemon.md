@@ -455,6 +455,7 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                                  -> restart onto the pin ("cc <from> -> <pin>")
                         account roll: the last launch attempted another account than bot.yaml `account:`,
                                  Get-AccountRollAction roll -> restart onto it
+                        auto-roll (module auto_roll, alive only): Get-AutoRollWhy -> a FRESH restart (see "Auto-roll")
                         board: gh_projects.py poll -> tg_send.py per queued card
                         hub:   tools/infra/hub_push.py when present
                         janitor: tools/infra/resource_monitor.ps1 -Clean once a day per bot
@@ -753,6 +754,31 @@ never retries a rejected call on another account inside a turn. A limit is
 known per account id: the same login registered twice (for example the bot's
 own token also added as a registered account) is two ids to the engine, so use
 one id per login.
+
+## Auto-roll
+
+Module `auto_roll` (default off). The daemon does the roll
+`harness/rules/session-lifecycle.md` asks of the bot: a FRESH session at a
+declared breakpoint once the context is large. `Get-AutoRollWhy` (tick.ps1)
+rolls only when ALL of these hold, and anything it cannot read counts as no:
+
+1. `.claude/.botcorp_breakpoint` is younger than `BOT_BREAKPOINT_TTL_MIN` (30)
+   and `Test-SessionBusy` says idle;
+2. no subagent runs: for a bg session, the Claude Code job record
+   (`<config>/jobs/<bg_id>/state.json`) lists no `fan` item of kind `agent`
+   and no `agent` kind in `inFlight`; for a pty session, `subagents.jsonl`
+   holds no start of this session without its stop;
+3. `<config>/botcorp/status.json` belongs to this session, is under 60 min
+   old, and its last-turn context (`context_window.current_usage`: input +
+   cache read + cache creation) is above `harness.roll_tokens` (500000);
+4. `memory/sessions/<session>/journal.md` was written in the last 30 min.
+
+Then it is an ordinary restart (start cap, busy gate, claude pid), with
+`.claude/.botcorp_fresh_restart` written just before `restart.ps1` is spawned,
+the same one-shot marker `botcorp restart <bot> --fresh` writes, so the
+relaunch starts FRESH. The breakpoint marker is deleted (it rolls once) and
+`auto_roll_at` lands in `state/<bot>.json`. A breakpoint that fails a gate
+logs one `auto-roll: not at this breakpoint (<why>)` line.
 
 ## Harness update (admin-applied, never automatic)
 

@@ -82,8 +82,9 @@ export const DEFAULTS = {
       alert_triage: false, hub: false, janitor: true /* | 'report' */,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true, review_board: false,
-      timeline_summary: false,
+      timeline_summary: false, auto_roll: false,
     },
+    roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context
     skills: 'all',
     agents: 'all',
   },
@@ -210,6 +211,7 @@ export function validate(cfg) {
       if (cfg.account && b.includes(cfg.account)) errs.push(`backup_accounts: ${cfg.account} is the primary (account:), not a backup`);
     }
   }
+  if (!(Number.isInteger(cfg.harness.roll_tokens) && cfg.harness.roll_tokens >= 100000)) errs.push(`harness.roll_tokens: an integer token count >= 100000 (got ${JSON.stringify(cfg.harness.roll_tokens)})`);
   if (typeof cfg.harness.failover_notify !== 'boolean') errs.push(`harness.failover_notify: true | false (got ${JSON.stringify(cfg.harness.failover_notify)})`);
   if (cfg.role !== null && cfg.role !== 'admin') errs.push(`role: admin or null (got ${JSON.stringify(cfg.role)})`);
   if (typeof cfg.harness.admin_notify !== 'boolean') errs.push(`harness.admin_notify: true | false (got ${JSON.stringify(cfg.harness.admin_notify)})`);

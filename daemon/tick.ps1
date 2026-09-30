@@ -424,6 +424,58 @@ function Invoke-UsageWarn {
     } catch { Write-DaemonLog "usage_warn: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
+function Get-AutoRollWhy {
+    # Module auto_roll (default off; harness/rules/session-lifecycle.md): the
+    # daemon rolls a FRESH session at a breakpoint the bot declared, the roll the
+    # Director would otherwise do by hand. ALL must hold, and anything it cannot
+    # read is a no:
+    #   the breakpoint marker is fresh (Test-BreakpointFresh) and the session idle;
+    #   no subagent runs (bg: the job record's `fan` / `inFlight.kinds`; pty:
+    #     a subagents.jsonl start of this session with no stop);
+    #   <config>/botcorp/status.json is this session's, < 60 min old, and its
+    #     last-turn context (context_window.current_usage) is above
+    #     harness.roll_tokens (500000);
+    #   the session journal was written within 30 min (the handoff is on disk).
+    # -> the restart reason, or ''.
+    param([string]$Bot, $Cfg, [hashtable]$Paths, [string]$BgId, [string]$SessionId)
+    try {
+        if (-not (Test-BreakpointFresh -Bot $Bot)) { return '' }
+        $no = {
+            param([string]$Why)
+            Write-DaemonLog "auto-roll: not at this breakpoint ($Why)" -Bot $Bot -Quiet
+            return ''
+        }
+        if (Test-SessionBusy -Bot $Bot) { return (& $no 'session busy') }
+        if (-not $SessionId) { try { $SessionId = "$(Get-Content -Raw -LiteralPath (Join-Path $Paths.BotHome '.claude\.current_session_id') -ErrorAction Stop)".Trim() } catch {} }
+        if (-not $SessionId) { return (& $no 'no session id') }
+        if ($BgId -match '^[0-9a-f]{6,12}$') {
+            $job = Read-JsonFile -Path (Join-Path (Join-Path (Join-Path $Paths.ConfigDir 'jobs') $BgId) 'state.json')
+            if (-not $job) { return (& $no 'job record unreadable') }
+            $agents = @(@($job.fan) | Where-Object { $_ -and "$($_.kind)" -eq 'agent' }).Count + @(@($job.inFlight.kinds) | Where-Object { "$_" -match 'agent' }).Count
+            if ($agents -gt 0) { return (& $no 'a subagent is running') }
+        } else {
+            $open = @{}
+            foreach ($ln in @(Get-Content -LiteralPath (Join-Path $Paths.BotStateDir 'subagents.jsonl') -Tail 500 -ErrorAction SilentlyContinue)) {
+                $ev = $null; try { $ev = $ln | ConvertFrom-Json } catch { continue }
+                if ("$($ev.session_id)" -ne $SessionId -or -not "$($ev.agent_id)") { continue }
+                if ("$($ev.event)" -eq 'start') { $open["$($ev.agent_id)"] = $true } elseif ("$($ev.event)" -eq 'stop') { $open.Remove("$($ev.agent_id)") }
+            }
+            if ($open.Count -gt 0) { return (& $no 'a subagent is running') }
+        }
+        $s = Read-JsonFile -Path (Join-Path (Join-Path $Paths.ConfigDir 'botcorp') 'status.json')
+        if (-not $s -or "$($s.session_id)" -ne $SessionId) { return (& $no 'status.json is not this session''s') }
+        $ageMin = ([DateTimeOffset]::UtcNow.ToUnixTimeSeconds() - [double]$s.ts) / 60
+        if ($ageMin -gt 60) { return (& $no "status.json $([int]$ageMin) min old") }
+        $u = $s.context_window.current_usage
+        $ctx = 0.0; foreach ($k in @('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')) { try { if ($null -ne $u.$k) { $ctx += [double]$u.$k } } catch {} }
+        $limit = 500000.0; try { if ($Cfg.harness.roll_tokens) { $limit = [double]$Cfg.harness.roll_tokens } } catch {}
+        if ($ctx -le $limit) { return (& $no "context $([int]($ctx / 1000))K <= roll_tokens $([int]($limit / 1000))K") }
+        $jf = Join-Path (Join-Path (Join-Path (Join-Path $Paths.BotHome 'memory') 'sessions') $SessionId) 'journal.md'
+        if (-not (Test-Path -LiteralPath $jf) -or ((Get-Date) - (Get-Item -LiteralPath $jf).LastWriteTime).TotalMinutes -gt 30) { return (& $no 'journal not written in the last 30 min') }
+        return "auto-roll: context $([int]($ctx / 1000))K > roll_tokens $([int]($limit / 1000))K at a declared breakpoint"
+    } catch { Write-DaemonLog "auto-roll: swallowed exception (fail-open, no roll): $($_.Exception.Message)" -Bot $Bot; return '' }
+}
+
 function Invoke-AlertTriage {
     # alert_triage.py scan every BOT_TRIAGE_EVERY_MIN (30): classifies new
     # alerts.log lines and spawns ONE detached headless fix-or-card run. The
@@ -900,7 +952,7 @@ function Invoke-BotTick {
         $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun
     }
     if (Test-BotModule $cfg 'alert_triage') { Invoke-AlertTriage -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
-    $ccRoll = $false; $acctRoll = $false; $recover = $false; $switch = $false
+    $ccRoll = $false; $acctRoll = $false; $recover = $false; $switch = $false; $autoRoll = $false
     $foRes = @{ Why = ''; Kind = ''; Wanted = $null }
     if ($action -eq 'none') {
         $foRes = Invoke-AccountFailover -Bot $Bot -Cfg $cfg -Paths $P -State $st -Stuck ($limited -or $loginBlocked) -LoginBlocked $loginBlocked -AsDryRun:$DryRun
@@ -914,6 +966,10 @@ function Invoke-BotTick {
             $fb = $script:Failover[$Bot]
             $acctWhy = Get-AccountRoll -Bot $Bot -Cfg $cfg -Paths $P -State $st -Limited $limited -Wanted $foRes.Wanted -Reason $(if ($fb -and "$($fb.decision.action)" -eq 'failback') { 'failback' } else { '' })
             if ($acctWhy) { $action = 'restart'; $why = $acctWhy; $acctRoll = $true }
+        }
+        if ($action -eq 'none' -and $alive -and (Test-BotModule $cfg 'auto_roll')) {
+            $rollWhy = Get-AutoRollWhy -Bot $Bot -Cfg $cfg -Paths $P -BgId $bgId -SessionId $sessionId
+            if ($rollWhy) { $action = 'restart'; $why = $rollWhy; $autoRoll = $true }
         }
         if (Test-BotModule $cfg 'board') { Invoke-BoardPoll -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
         if (Test-BotModule $cfg 'hub') { Invoke-HubPush -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
@@ -952,7 +1008,17 @@ function Invoke-BotTick {
             return
         }
         if ($claudePid -le 0) { Write-DaemonLog 'restart DEFERRED: claude pid unresolved (never restart.ps1 -OldPid 0)' -Bot $Bot; return }
-        $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
+        if ($autoRoll) {
+            # the same fresh restart as `botcorp restart <bot> --fresh`: the one-shot
+            # marker restart.ps1 / launch.ps1 honour (< 300 s), written only now that
+            # every gate passed; the breakpoint is consumed so it rolls once
+            try {
+                Set-Content -LiteralPath $P.FreshMarker -Value (Get-Date).ToString('o') -Encoding utf8
+                Remove-Item -LiteralPath $P.Breakpoint -Force -ErrorAction SilentlyContinue
+            } catch { Write-DaemonLog "auto-roll: fresh marker not written ($($_.Exception.Message)); not rolling" -Bot $Bot; return }
+            Write-BotState -Bot $Bot -Updates @{ auto_roll_at = (Get-Date).ToString('o') }
+        }
+        $rel = if ($autoRoll) { 'FRESH (auto-roll)' } elseif ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session $(if ($limited) { 'usage-limited' } else { 'idle' }) -> $rel)" -Bot $Bot
         if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
         if ($acctRoll) { Write-BotState -Bot $Bot -Updates @{ account_roll_at = (Get-Date).ToString('o') } }

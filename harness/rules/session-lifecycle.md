@@ -46,9 +46,19 @@ running model.
 
 ## Who triggers it
 
-- **Manual (the only way)** — the Director decides at a breakpoint and runs the
-  checklist above. Nothing rolls a session on its own: there is no token
-  threshold and no automatic roll.
+- **Manual (the default)** — the Director decides at a breakpoint and runs the
+  checklist above. Without the `auto_roll` module nothing rolls a session on
+  its own: there is no token threshold and no automatic roll.
+- **Auto-roll (module `auto_roll`, off by default)** — the daemon rolls a
+  FRESH session for the Director, at a declared breakpoint only (below), when
+  every one of these holds: the marker is fresh and the session idle, no
+  subagent runs, the last turn's context (the statusline's `status.json`) is
+  above `harness.roll_tokens` (500000), and the session journal was written
+  in the last 30 minutes. It is the same fresh restart as
+  `botcorp restart <bot> --fresh` and consumes the marker. So with the module
+  on, run the whole handoff checklist BEFORE you drop the marker: the next
+  daemon tick may roll without asking. Verify the new session id afterwards
+  as with a manual roll (`docs/daemon.md` "Auto-roll").
 - **Declared breakpoint** — an idle-transcript signal rarely holds during long
   autonomous work (the Director's own tool call is always the freshest
   transcript write, so it can never observe itself as idle). Instead the
