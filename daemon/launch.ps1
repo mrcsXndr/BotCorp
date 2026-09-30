@@ -139,6 +139,12 @@ if (-not $Force) {
         $bgLive = $false
         if ($bgId -and -not $cliLive) {
             $agents = Get-BgAgents -Bot $Bot -TimeoutSec 20
+            # a failed read is unknown, not "none" (D8): refuse, unless the daemon
+            # decided (its tick defers 3 unknown reads first; a restart stopped the old one)
+            if ($null -eq $agents -and $StartedBy -notin @('daemon-cold', 'daemon-restart')) {
+                Write-Host "  $Bot may be running (bg_id=$bgId): the roster read failed - refusing a possible duplicate. Use -Force." -ForegroundColor Yellow
+                exit 0
+            }
             # a live process only: a copy that never came up reads `blocked` with no pid
             $bgLive = Test-BgAgentPidAlive (Find-BgAgent -Agents $agents -BgId $bgId -SessionId "$($st.session_id)" -BotHome $BotHome)
         }

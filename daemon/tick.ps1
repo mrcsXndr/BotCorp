@@ -712,10 +712,10 @@ function Invoke-BotTick {
     # bg liveness: the supervisor's roster (same token as the launch - the
     # daemon task), by short id, then session id, then cwd. A roster row with a
     # live pid refreshes claude_pid; a `stopped`/`done` row with no pid is dead.
-    $bgNote = ''
+    $bgNote = ''; $rosterUnknown = $false
     if ($service -eq 'bg' -and -not $alive) {
         $agents = Get-BgAgents -Bot $Bot -Paths $P
-        if ($null -eq $agents) { $bgNote = 'roster=unknown' }
+        if ($null -eq $agents) { $bgNote = 'roster=unknown'; $rosterUnknown = $true }
         else {
             $row = Find-BgAgent -Agents $agents -BgId $bgId -SessionId $sessionId -BotHome $P.BotHome
             if ($row) {
@@ -783,7 +783,14 @@ function Invoke-BotTick {
     $startedMin = 1e9
     try { if ($st -and $st.started_at) { $sa = ConvertTo-UtcTime $st.started_at; if ($sa -ne [datetime]::MinValue) { $startedMin = ((Get-Date).ToUniversalTime() - $sa).TotalMinutes } } } catch {}
     $action = 'none'; $why = ''
-    if (-not $alive) { $action = 'cold-start' }
+    # A failed roster read is unknown, not "none": with a stale claude_pid a
+    # cold-start would kill the live session's poller (D8). Cold-start only once
+    # the read has failed on 3 ticks in a row.
+    $prevUnknown = 0; try { if ($st -and ($st.PSObject.Properties.Name -contains 'roster_unknown') -and $st.roster_unknown) { $prevUnknown = [int]$st.roster_unknown } } catch {}
+    $unknownTicks = $(if ($rosterUnknown) { $prevUnknown + 1 } else { 0 })
+    if ($unknownTicks -ne $prevUnknown -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ roster_unknown = $(if ($unknownTicks) { $unknownTicks } else { $null }) } }
+    if (-not $alive -and $rosterUnknown -and $unknownTicks -lt 3) { $action = 'deferred'; Write-DaemonLog "roster unknown, deferring ($unknownTicks/3 before a cold-start)" -Bot $Bot }
+    elseif (-not $alive) { $action = 'cold-start' }
     elseif ($poller -eq 'DEAD' -and $startedMin -ge $LauncherGraceMin) { $action = 'restart' }
 
     if (($action -eq 'cold-start') -and (Test-Path $P.PausedFile)) {
@@ -905,7 +912,7 @@ function Invoke-BotTick {
     Invoke-Automations -Bot $Bot -AsDryRun:$DryRun
     Invoke-InboxKick -Bot $Bot -Paths $P -AsDryRun:$DryRun
 
-    if ($action -in @('none', 'paused', 'locked')) { Write-DaemonLog "no action (alive=$alive poller=$poller$(if ($action -ne 'none') { " $action" }))" -Bot $Bot -Quiet; return }
+    if ($action -in @('none', 'paused', 'locked', 'deferred')) { Write-DaemonLog "no action (alive=$alive poller=$poller$(if ($action -ne 'none') { " $action" }))" -Bot $Bot -Quiet; return }
     if ($DryRun) { Write-DaemonLog "DRYRUN would $action $Bot (alive=$alive poller=$poller)$(if ($why) { " ($why)" })" -Bot $Bot; return }
 
     # --- start cap --------------------------------------------------------------
