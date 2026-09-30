@@ -993,7 +993,6 @@ function isWidening(cfg, segs, value, op = 'set') {
     return b > a ? `loosens dm_policy ${cfg.integrations.telegram.dm_policy} -> ${value}` : null;
   }
   if (p === 'permissions') return value === 'bypass' && cfg.permissions !== 'bypass' ? 'switches permissions to bypass' : null;
-  if (p === 'harness.modules.remote_control') return value === true && cfg.harness.modules.remote_control !== true ? 'enables Remote Control' : null;
   if (segs[0] === 'automations' && segs[2] === 'secrets') {
     const el = findElem(cfg.automations, segs[1]);
     const cur = listOf(el && el.secrets);
@@ -1979,7 +1978,6 @@ const MODULE_DESC = {
   alert_triage: 'headless fix-or-card pass over memory/metrics/alerts.log',
   hub: 'status push to a hub URL (integrations.hub, vault key hub_token)',
   janitor: 'disk/transcript/orphan hygiene on the daemon tick (report = scan and log only, touch nothing)',
-  remote_control: 'Claude Remote Control (needs an interactive /login in this bot\'s config home)',
   lessons: 'inject harness/lessons/INDEX.md at session start',
   debrief: 'headless session debrief on Stop (real spend)',
   auto_commit: 'commit on Stop (and push, with backup.git_remote); a no-op unless the folder is a repo',

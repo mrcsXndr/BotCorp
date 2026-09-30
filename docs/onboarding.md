@@ -121,14 +121,12 @@ tool — `Read`/`Bash` included — from touching a vault or the secrets CLI's
 mutating verbs). Two classes of change:
 
 - **Applies immediately** (written, then `sync`; effective at the next
-  session roll): `model`, `effort`, `persona`, `harness.modules.*` (except
-  `remote_control`), `harness.hooks_disable`, turning a job OFF
+  session roll): `model`, `effort`, `persona`, `harness.modules.*`, `harness.hooks_disable`, turning a job OFF
   (`automations.<name>.enabled false`), `suggest.*`,
   `integrations.hub.interval_s`, and anything else that does not widen.
 - **Widening changes wait for you.** Adding to
   `integrations.telegram.allow_from`, loosening `dm_policy`
-  (`disabled` -> `allowlist` -> `pairing`), `permissions: bypass`, turning on
-  `harness.modules.remote_control`, changing `account`, adding a vault key
+  (`disabled` -> `allowlist` -> `pairing`), `permissions: bypass`, changing `account`, adding a vault key
   (`secrets`) or adding one to an automation's `secrets`, adding an
   automation, turning a job ON (`automations.<name>.enabled` false -> true),
   adding a `tools:` entry that is an integration or carries secrets, or

@@ -15,8 +15,8 @@ from test_operator_only import box, cli, make_bot, needs_node, queue  # noqa: F4
 def test_two_bots_one_entry_each(box):
     rt, bots, env = box
     make_bot(bots, "u")
-    queue(rt, "t", [{"id": "aaa111", "ts": "2026-09-27T01:00:00Z", "path": "harness.modules.remote_control",
-                     "value": True, "requested_by": "bot:t", "reason": "enables Remote Control"}])
+    queue(rt, "t", [{"id": "aaa111", "ts": "2026-09-27T01:00:00Z", "path": "harness.modules.debrief",
+                     "value": True, "requested_by": "bot:t", "reason": "enables the debrief"}])
     queue(rt, "u", [{"id": "bbb222", "ts": "2026-09-27T02:00:00Z", "op": "append", "path": "secrets",
                      "value": "gh_token", "requested_by": "bot:u", "reason": "declares a new vault secret"}])
     r = cli({**env, "BOT_NAME": "t"}, "approvals", "--json")
@@ -24,8 +24,8 @@ def test_two_bots_one_entry_each(box):
     rows = json.loads(r.stdout)
     assert len(rows) == 2
     by_bot = {row["bot"]: row for row in rows}
-    assert by_bot["t"]["diff"] == "harness.modules.remote_control: false -> true"
-    assert by_bot["t"]["why"] == "enables Remote Control" and by_bot["t"]["op"] == "set"
+    assert by_bot["t"]["diff"] == "harness.modules.debrief: false -> true"
+    assert by_bot["t"]["why"] == "enables the debrief" and by_bot["t"]["op"] == "set"
     assert by_bot["u"]["diff"] == "secrets: + gh_token"
     assert by_bot["u"]["why"] == "declares a new vault secret" and by_bot["u"]["op"] == "append"
     for row in rows:

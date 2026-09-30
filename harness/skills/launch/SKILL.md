@@ -8,6 +8,8 @@ allowed-tools: Bash, Read, Write, Edit
 
 Usage: `/launch <project-name>`.
 
+The Cloudflare checks use the bot's own `tools/cloudflare_ops.py`: the harness ships no `tools/cloudflare_ops.py`. If the bot folder has none, skip those checks and say so.
+
 A reusable launch runbook. Adapt the steps to whatever the project is — the structure (prep → DNS / SSL / cache → smoke tests → sign-off) is the same whether you're shipping a casino, a marketing site, or a SaaS product.
 
 ## Steps

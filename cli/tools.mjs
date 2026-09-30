@@ -345,7 +345,6 @@ export const MODULE_TEXT = {
   alert_triage: 'A headless fix-or-card pass over memory/metrics/alerts.log.',
   hub: 'Pushes status to a hub (integrations.hub).',
   janitor: 'Disk, transcript and stray-process hygiene on the daemon tick ("report" only scans).',
-  remote_control: 'Claude Remote Control for this session (needs a /login in its config home).',
   lessons: 'Injects the harness lessons index at session start.',
   debrief: 'A headless session debrief on Stop (real spend).',
   auto_commit: 'Commits the bot folder on Stop; pushes with backup.git_remote.',

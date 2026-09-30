@@ -491,7 +491,6 @@ queues nothing and prints the pending entry's id (`already queued ...`):
 | `integrations.telegram.allow_from` | the new list adds an id |
 | `integrations.telegram.dm_policy` | it loosens: `disabled` < `allowlist` < `pairing` (pairing admits new senders with a code) |
 | `permissions` | `default` -> `bypass` |
-| `harness.modules.remote_control` | `false` -> `true` |
 | `automations.<name>.secrets` | the new list adds a vault key |
 | `automations.<name>.enabled` | `false` -> `true` |
 | `secrets` (set or add) | it declares a new vault key |

@@ -39,8 +39,8 @@ T_YAML = (
     "  - name: off\n    command: echo hi\n    trigger: { interval_min: 60 }\n    enabled: false\n"
     "tools: []\n"
 )
-ENTRY = {"id": "abc123", "ts": "2026-09-27T00:00:00Z", "path": "harness.modules.remote_control", "value": True,
-         "requested_by": "bot:u", "reason": "enables Remote Control"}
+ENTRY = {"id": "abc123", "ts": "2026-09-27T00:00:00Z", "path": "harness.modules.debrief", "value": True,
+         "requested_by": "bot:u", "reason": "enables the debrief"}
 
 
 def _free_port() -> int:
@@ -122,7 +122,7 @@ def test_get_routes_return_their_shapes(cockpit):
     kinds = {(i["bot"], i["kind"]) for i in att["items"]}
     assert ("u", "approval") in kinds and ("t", "automation_failing") in kinds and ("t", "registry") in kinds, kinds
     appr = next(i for i in att["items"] if i["kind"] == "approval")
-    assert appr["action"] == {"type": "approve", "bot": "u", "id": "abc123"} and appr["text"] == "u asks: Enables Remote Control", appr
+    assert appr["action"] == {"type": "approve", "bot": "u", "id": "abc123"} and appr["text"] == "u asks: Enables the debrief", appr
     assert all(set(i) == {"bot", "kind", "severity", "text", "action"} for i in att["items"])
 
     code, usage = c.call("GET", "/api/usage")
@@ -132,7 +132,7 @@ def test_get_routes_return_their_shapes(cockpit):
 
     code, ap = c.call("GET", "/api/approvals")
     assert code == 200 and [p["id"] for p in ap["pending"]] == ["abc123"] and ap["recent"] == [], ap
-    assert ap["pending"][0]["diff"] == "harness.modules.remote_control: false -> true"
+    assert ap["pending"][0]["diff"] == "harness.modules.debrief: false -> true"
 
     code, scan = c.call("GET", "/api/bots/t/tools")
     assert code == 200 and scan["registry"] == "warn" and scan["unregistered"] == ["tools/stray.py"], scan
@@ -151,7 +151,7 @@ def test_approve_needs_the_token_then_applies_and_audits(cockpit):
     code, body = c.call("POST", "/api/bots/u/approvals/abc123/approve", token=True)
     assert code == 200 and body["ok"], body
     assert json.loads((rt / "state" / "u.approvals.json").read_text(encoding="utf-8")) == []
-    assert "remote_control: true" in (bots / "u" / "bot.yaml").read_text(encoding="utf-8")
+    assert "debrief: true" in (bots / "u" / "bot.yaml").read_text(encoding="utf-8")
     hist = json.loads((rt / "state" / "u.approvals.history.jsonl").read_text(encoding="utf-8").splitlines()[-1])
     assert hist["approved_by"] == "local"
 
@@ -256,12 +256,12 @@ def test_approval_attention_reads_as_the_cards_title_not_the_raw_change():
     script = ("const { attentionItems } = await import(process.argv[1]);"
               "console.log(JSON.stringify(attentionItems(JSON.parse(process.argv[2]))));")
     inp = {"approvals": [
-        {"bot": "t", "id": "a1", "path": "harness.modules.remote_control", "diff": "harness.modules.remote_control: false -> true", "why": "enables Remote Control"},
+        {"bot": "t", "id": "a1", "path": "harness.modules.debrief", "diff": "harness.modules.debrief: false -> true", "why": "enables the debrief"},
         {"bot": "t", "id": "a2", "path": "tools", "diff": "tools: + 2 (x, y)", "why": "widening"}]}
     r = subprocess.run(["node", "--input-type=module", "-e", script, ATTENTION, json.dumps(inp)], capture_output=True, text=True, timeout=60, cwd=str(ASSEMBLY))
     assert r.returncode == 0, r.stderr
     texts = [i["text"] for i in json.loads(r.stdout) if i["kind"] == "approval"]
-    assert texts == ["t asks: Enables Remote Control", "t asks: Change tools"], texts
+    assert texts == ["t asks: Enables the debrief", "t asks: Change tools"], texts
 
 
 def _account_items(attempted, last4, running=True):

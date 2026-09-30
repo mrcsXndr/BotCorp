@@ -66,7 +66,7 @@ safety hooks. A bot opts into the rest through `bot.yaml`:
 | Hooks | session start/end, inbound-prompt guard, precompact extract + timeline, memory sync, cost meter, auto-commit, block-dialogs, config-guard, vault-guard, operator-guard, core-guard, stop-failure, notification, subagent start/stop | loaded from the plugin automatically; `bot.yaml` `harness.hooks_disable: [...]` turns any off except vault-guard and operator-guard |
 | Agents | `planner`, `senior-coder`, `coder`, `one-shot`, `critic`, `fable` | all available; a same-named file in the bot's own `.claude/agents/` overrides one |
 | Skills | `review-artifact`, `morning`, `standup`, `weekly`, `tasks`, `notes`, `prd`, `launch` (+ the `/critic` command) | `harness.skills: all` or a list; the rest are hidden |
-| Modules | `telegram`, `board`, `cost_meter`, `usage_resume`, `alert_triage`, `hub`, `janitor`, `remote_control`, `lessons`, `debrief`, `auto_commit`, `memory_sync`, `sound`, `telemetry`, `review_board`, `backup` | `harness.modules.<x>: true` in `bot.yaml` → env for the launched session + which daemon ticks run for this bot |
+| Modules | `telegram`, `board`, `cost_meter`, `usage_resume`, `alert_triage`, `hub`, `janitor`, `lessons`, `debrief`, `auto_commit`, `memory_sync`, `sound`, `telemetry`, `review_board`, `backup` | `harness.modules.<x>: true` in `bot.yaml` → env for the launched session + which daemon ticks run for this bot |
 | Ticks / automations | board poll, worklist, janitor, hub push, harness-update check (records pending releases only — see Admin-gated harness updates below), plus any bot-declared job | per module, or declared directly under `bot.yaml` `automations:` — run by the one host daemon, with backoff, daily caps and idle-gating; board poll, hub push and janitor run only on a tick that leaves the bot alone (a down or restarting bot skips them) |
 | Integrations | Telegram (the official Claude Code plugin), a GitHub Projects (v2) board, a generic status hub (`integrations.hub`, optional), Cloudflare Tunnel + Access for cockpit exposure (`integrations.access`, optional — loopback stays the default until you run `botcorp cockpit expose`), a bot's own tools for anything else | the matching `integrations.<x>` block in `bot.yaml`; credentials live in `.vault/`, never in the file itself |
 
@@ -120,12 +120,11 @@ of exposing the cockpit. Full model: `docs/cockpit.md` and
 
 ## Remote Control
 
-Optional, per bot, **off by default** (`harness.modules.remote_control:
-false`). Turning it on requires an interactive `/login` in that bot's own
-config home — a `claude setup-token` cannot enable it — surfaced from the
-cockpit as an "Enable Remote Control" action. Transcripts of any Remote
-Control session are stored on Anthropic's servers, not on this machine; the
-cockpit never wraps that login in anything but Claude Code's own flow.
+Not a bot.yaml module: BotCorp never turns it on. The operator can start it by
+hand with `/remote-control` in an attached session, after an interactive
+`/login` in that bot's own config home (a `claude setup-token` cannot enable
+it). Transcripts of any Remote Control session are stored on Anthropic's
+servers, not on this machine.
 
 ## Admin-gated harness updates
 

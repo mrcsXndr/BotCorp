@@ -13,14 +13,23 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 
-// harness.hooks_disable takes the hook's file name without `.sh` (play-sound,
-// session-debrief, ...): what each hook passes to _guard.sh. Read from disk so
-// the list can never drift from the hooks that exist.
+// harness.hooks_disable takes a hook's name: what run.mjs gets as its first
+// argument in harness/hooks/hooks.json (play-sound, session-summarize,
+// cost-meter, ...) and the names of the tool guards guard.mjs runs. Read from
+// hooks.json so the list is exactly the names BOT_DISABLED_HOOKS can switch off.
 const HOOKS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'harness', 'hooks');
+// The tool guards all run inside ONE `guard.mjs pre|post` process, so they have
+// no hooks.json entry of their own; a test holds this list equal to guard.mjs's.
+export const GUARD_HOOKS = ['block-dialogs', 'config-guard', 'core-guard', 'operator-guard', 'tools-nudge', 'vault-guard'];
 export function hookNames() {
+  const names = new Set(GUARD_HOOKS);
   try {
-    return fs.readdirSync(HOOKS_DIR).filter((f) => f.endsWith('.sh') && !f.startsWith('_') && f !== 'py.sh').map((f) => f.slice(0, -3)).sort();
+    const hooks = JSON.parse(fs.readFileSync(path.join(HOOKS_DIR, 'hooks.json'), 'utf-8')).hooks || {};
+    for (const groups of Object.values(hooks)) for (const g of groups || []) for (const h of (g && g.hooks) || []) {
+      if (Array.isArray(h.args) && String(h.args[0]).endsWith('/run.mjs') && h.args[1]) names.add(String(h.args[1]));
+    }
   } catch { return []; }
+  return [...names].sort();
 }
 // harness.disable takes `skill:<name>` / `agent:<name>`: a harness skill folder
 // or agent file, read from disk for the same reason.
@@ -70,7 +79,7 @@ export const DEFAULTS = {
     admin_notify: false,            // role: admin only: one Telegram line (this bot's own tg_send.py) per admin action, on top of the audit log
     modules: {
       telegram: false, board: false, cost_meter: true, usage_resume: true,
-      alert_triage: false, hub: false, janitor: true /* | 'report' */, remote_control: false,
+      alert_triage: false, hub: false, janitor: true /* | 'report' */,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true, review_board: false,
     },

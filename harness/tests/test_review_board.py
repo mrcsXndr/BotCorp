@@ -7,7 +7,7 @@ Locked behaviour:
 - status --from-page counts open/answered from the review-state block.
 - session start injects the board line only with the module on AND a board recorded.
 - turning the module on from a bot session applies at once (not widening);
-  remote_control from the same session still queues (the positive control).
+  a widening change (role: admin) from the same session still queues (the positive control).
 """
 from __future__ import annotations
 
@@ -189,9 +189,9 @@ def test_a_bot_turns_the_board_on_without_an_approval(box):
 
 
 @needs_node
-def test_positive_control_remote_control_still_queues(box):
+def test_positive_control_a_widening_change_still_queues(box):
     rt, bots, env = box
-    r = cli({**env, "BOT_NAME": "t"}, "config", "set", "t", "harness.modules.remote_control", "true")
+    r = cli({**env, "BOT_NAME": "t"}, "config", "set", "t", "role", "admin")
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads((rt / "state" / "t.approvals.json").read_text(encoding="utf-8"))
-    assert "remote_control" not in (bots / "t" / "bot.yaml").read_text(encoding="utf-8")
+    assert "role:" not in (bots / "t" / "bot.yaml").read_text(encoding="utf-8")

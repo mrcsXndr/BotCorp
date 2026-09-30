@@ -152,10 +152,19 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     for (const s of off('skill')) keep.delete(s);
     settings.disabledSkills = all.filter(s => !keep.has(s)).sort().map(s => `botcorp:${s}`);
   }
+  // harness.agents is an allowlist like harness.skills ('all' = every one): a
+  // harness agent left out of it, or named in harness.disable, gets a deny rule.
+  const agentsOff = new Set(off('agent'));
+  if (Array.isArray(cfg.harness.agents)) {
+    const keep = new Set(cfg.harness.agents.map(String));
+    let all = [];
+    try { all = fs.readdirSync(path.join(botcorpRoot, 'harness', 'agents')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)); } catch {}
+    for (const a of all) if (!keep.has(a)) agentsOff.add(a);
+  }
   // A registry entry with enabled: false: the session may not run it (a Claude
   // Code deny rule on any Bash command naming its path; a policy, not a sandbox).
   const deny = [
-    ...off('agent').sort().map((a) => `Agent(botcorp:${a})`),
+    ...[...agentsOff].sort().map((a) => `Agent(botcorp:${a})`),
     ...(Array.isArray(cfg.tools) ? cfg.tools : []).filter((t) => t && t.enabled === false && typeof t.path === 'string').map((t) => `Bash(*${t.path.replace(/\\/g, '/').replace(/^\.\//, '')}*)`).sort(),
   ];
   if (deny.length) settings.permissions.deny = [...settings.permissions.deny, ...deny];

@@ -24,7 +24,7 @@
 5. **Hand decisions and approvals off through the task board, not chat.** A
    Telegram message scrolls away and dies with the session; a board card is
    durable, actionable from a phone, and survives context compaction. See
-   `.claude/rules/task-board.md`.
+   `harness/rules/task-board.md` (imported below).
 6. **NEVER use blocking TUI dialogs — `AskUserQuestion` and `ExitPlanMode` are
    HARD-DENIED** (settings.json deny rule + the harness's `PreToolUse`
    `block-dialogs.sh` guard). A blocking dialog freezes the headless/
@@ -37,7 +37,7 @@
 7. **Write to the Director's Journal liberally.** Findings, decisions, open
    questions, hypotheses, and actions, as they happen — journal + timeline
    replace re-reading message history after compaction. If you don't write it
-   down, it's gone. See `.claude/rules/memory-loop.md`.
+   down, it's gone. See `harness/rules/memory-loop.md` (imported below).
 8. **`memory/TDL.md` is the always-in-memory backlog.** A single,
    hand-maintained markdown file listing every undone / blocked / deferred
    item, so nothing survives only in session context. Session start injects

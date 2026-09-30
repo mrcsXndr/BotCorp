@@ -55,7 +55,7 @@ GATED = [
     (("accounts", "add", "acc1"), FAKE + "\n"),
     (("accounts", "remove", "acc1"), None),
     (("accounts", "seed"), None),
-    (("config", "set", "t", "harness.modules.remote_control", "true", "--requested-by", "operator:me"), None),
+    (("config", "set", "t", "role", "admin", "--requested-by", "operator:me"), None),
 ]
 
 
@@ -132,7 +132,7 @@ def test_operator_cc_rollback_reaches_the_pin_script(box):
 @needs_node
 def test_a_bot_queues_under_its_own_name(box):
     rt, bots, env = box
-    r = cli({**env, "BOT_NAME": "t"}, "config", "set", "t", "harness.modules.remote_control", "true")
+    r = cli({**env, "BOT_NAME": "t"}, "config", "set", "t", "role", "admin")
     assert r.returncode == 0, r.stdout + r.stderr
     q = json.loads((rt / "state" / "t.approvals.json").read_text(encoding="utf-8"))
     assert [e["requested_by"] for e in q] == ["bot:t"]

@@ -6,7 +6,7 @@
 # STRICTLY FAIL-OPEN: any error here must never fail the hook.
 
 set -uo pipefail
-. "$(dirname "$0")/_guard.sh" stop-failure
+. "$(dirname "$0")/_guard.sh" stop-failure usage_resume
 
 PAYLOAD=""
 if ! [ -t 0 ]; then

@@ -39,7 +39,6 @@ harness:
     alert_triage: false           # headless fix-or-card pass over memory/metrics/alerts.log
     hub: false                    # status push to any hub (integrations.hub)
     janitor: true                 # disk/transcript/orphan hygiene on the daemon tick; `report` = scan + log, touch nothing (shared host)
-    remote_control: false         # OFF by default; needs an interactive /login in this bot's config home
     lessons: true                 # inject harness/lessons/INDEX.md at session start
     debrief: false                # headless session debrief on Stop (real spend)
     auto_commit: true             # commit the bot repo on Stop (runs its pre-commit secret scan); with backup.git_remote also pushes

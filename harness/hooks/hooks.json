@@ -68,7 +68,7 @@
       {
         "matcher": "rate_limit",
         "hooks": [
-          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "stop-failure", "-", "stop-failure.sh"], "timeout": 15 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "stop-failure", "usage_resume", "stop-failure.sh"], "timeout": 15 }
         ]
       }
     ],
@@ -76,7 +76,7 @@
       {
         "matcher": "quota_auto_resume_fired|quota_auto_resume_stale|quota_auto_resume_disabled",
         "hooks": [
-          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "notification", "-", "notification.sh"], "timeout": 15 }
+          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "notification", "usage_resume", "notification.sh"], "timeout": 15 }
         ]
       }
     ],
