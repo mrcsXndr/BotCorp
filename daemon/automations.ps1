@@ -197,7 +197,8 @@ function Add-AlertLine {
 #   timeline_summary -> timeline-summary: every 60 min, `timeline.py
 #     summarize-stale` distills the current session's timeline when a hook left
 #     it structural (hooks get no Claude credentials; this run gets oauth_token).
-#     The model is the workhorse tier of harness/models.json.
+#     The model is the workhorse tier of harness/models.json. 10 min covers
+#     its two distills (session + week) at timeline.py's 180 s each.
 function Get-BuiltinAutomations {
     param($Cfg)
     $out = @()
@@ -206,7 +207,7 @@ function Get-BuiltinAutomations {
         $model = ''; try { $model = "$((Get-Content -Raw -LiteralPath (Join-Path $Harness 'models.json') | ConvertFrom-Json).tiers.workhorse.id)" } catch {}
         if ($model -match '^[a-z0-9][a-z0-9.-]*$') { $cmd = "set BOT_DISTILL_MODEL=$model&& $cmd" }
         $out += [pscustomobject]@{ name = 'timeline-summary'; module = 'timeline_summary'; trigger = [pscustomobject]@{ interval_min = 60 }
-            command = $cmd; secrets = @(@($Cfg.secrets) | Where-Object { "$_" -eq 'oauth_token' }); timeout_min = 6 }
+            command = $cmd; secrets = @(@($Cfg.secrets) | Where-Object { "$_" -eq 'oauth_token' }); timeout_min = 10 }
     }
     $declared = @(@($Cfg.automations) | Where-Object { $_ -and $_.name } | ForEach-Object { "$($_.name)" })
     return @($out | Where-Object { $declared -notcontains $_.name })

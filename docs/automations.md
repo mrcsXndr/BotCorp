@@ -43,7 +43,7 @@ but is defined in `daemon/automations.ps1` (`Get-BuiltinAutomations`), not in
 
 | module | job | what it does |
 |---|---|---|
-| `timeline_summary` | `timeline-summary`, every 60 min, `secrets: [oauth_token]`, 6 min | `timeline.py summarize-stale`: LLM-distils the current session's timeline when it is missing or structural, then the current ISO week's `memory/timelines/<week>.md` when the PreCompact hook left it concatenated. Hooks get no Claude credentials, so every hook-built timeline is structural; this run has the vault token. Model: the workhorse tier of `harness/models.json`. Exit 1 when the distill fell back, so three misses in a row reach alerts.log. |
+| `timeline_summary` | `timeline-summary`, every 60 min, `secrets: [oauth_token]`, 10 min | `timeline.py summarize-stale`: LLM-distils the current session's timeline when it is missing or structural, then the current ISO week's `memory/timelines/<week>.md` when the PreCompact hook left it concatenated. Hooks get no Claude credentials, so every hook-built timeline is structural; this run has the vault token. Model: the workhorse tier of `harness/models.json`. Exit 1 when the distill fell back, so three misses in a row reach alerts.log. |
 
 ## Prompt automations (`kind: prompt`)
 

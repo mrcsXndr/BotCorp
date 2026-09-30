@@ -129,6 +129,21 @@ def test_the_module_runs_the_builtin_job_with_the_vault_token(oauth_bot, tmp_pat
 
 
 @needs_win
+def test_the_builtin_timeout_outlasts_both_distills():
+    # QA r4 N2: 6 min equalled two 180 s distills, so a slow pair met the tree-kill
+    script = (
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{ASSEMBLY / 'daemon' / 'automations.ps1'}', [ref]$null, [ref]$null);"
+        "$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-BuiltinAutomations' }, $true);"
+        f"Invoke-Expression $fn.Extent.Text; $Harness = '{ASSEMBLY / 'harness'}';"
+        "(Get-BuiltinAutomations ([pscustomobject]@{ _modules = @('timeline_summary'); secrets = @(); automations = @() })).timeout_min")
+    r = subprocess.run([*PWSH, "-Command", script], capture_output=True, text=True, timeout=120)
+    assert r.returncode == 0, r.stderr
+    import timeline
+    assert float(r.stdout.strip()) * 60 >= 2 * timeline.DISTILL_TIMEOUT + 60, r.stdout
+
+
+@needs_win
 def test_without_the_module_the_name_is_refused(oauth_bot):  # noqa: F811
     name, home, rt, env = oauth_bot
     (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  modules:\n    telegram: false\n", encoding="utf-8")
