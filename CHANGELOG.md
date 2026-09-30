@@ -3,6 +3,44 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.3
+
+Faster, stricter hooks, and the guard gaps the 2026-09-30 review found.
+Needs Claude Code 2.1.283 or newer.
+
+- **Changed:** all hooks run in Claude Code's exec form. The tool guards are
+  one node process (`harness/hooks/guard.mjs`), which takes 71-363 ms instead
+  of 5.7-12.2 s per tool call. They no longer hit the timeout, which let a
+  tool call through when a guard was cancelled. Every hook timeout is at least
+  15 s.
+- **Fixed:** guard bypasses.
+  - config-guard: an edit of `settings.local.json` that changes `env` or
+    `disableAllHooks` is refused.
+  - vault-guard: catches any `.vault` path segment and the vault functions.
+  - operator-guard: catches quoted and continued verbs and `$BC`.
+  - config-guard and operator-guard fail closed.
+  - Monitor and MCP tools now meet the guards.
+  - `BOT_DISABLED_HOOKS` can't switch off vault-guard or operator-guard.
+- **Fixed:** a multi-line Telegram message is never taken for a slash command.
+  `/clear` and `/resume` keep the poller lock.
+- **Added:** `harness/rules/delegation.md`. The main thread orchestrates and
+  subagents do the work: anything touching more than 1 file or needing more
+  than 3 searches, fanned out in one message. The session-start context carries
+  a one-line reminder for every bot. A bot picks up the rule when its CLAUDE.md
+  imports it; new bots get the import from the template.
+- **Changed:** the auto-commit hooks commit at most once an hour each, and
+  never for `memory/metrics/` changes alone (`BOT_AUTO_COMMIT_EVERY_MIN`).
+- **Fixed:** the inbox counts a message typed into a busy session as
+  delivered. If a message isn't confirmed, the inbox retries it once when the
+  session is idle.
+- **Added:** a dead Telegram poller that a busy session keeps from restarting
+  for 10+ minutes sends one CRITICAL alert. An opt-in getUpdates probe
+  (`BOT_TG_PROBE_EVERY_MIN`, off by default) can also check a poller that reads
+  OWNED.
+- **Changed:** the janitor gives each bot its own agent-browser directory and
+  kills only that bot's own processes. It reports other processes and never
+  prunes a transcript folder that a live session is still writing to.
+
 ## v0.9.2
 
 Cockpit fixes from the first day on v0.9.0.
