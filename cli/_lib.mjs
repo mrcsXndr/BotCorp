@@ -139,18 +139,44 @@ export function readJson(file) {
   try { return JSON.parse(fs.readFileSync(file, 'utf-8')); } catch { return null; }
 }
 
-export function writeJsonAtomic(file, obj) {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n');
-  fs.renameSync(tmp, file);
+function sleepSync(ms) { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); }
+const BUSY = new Set(['EPERM', 'EBUSY', 'EACCES']);   // Windows: another process has the file open
+
+// For a read-modify-write of a file other processes also write (state/<bot>.json,
+// accounts.json, updates.json): undefined when the file is ABSENT, the value when
+// it parses, and after a few retries a CliError when it exists but does not parse
+// (a writer mid-write, or corrupt). readJson's null for all three let a caller
+// rebuild the file from nothing and drop every key it did not know.
+export function readJsonState(file, { tries = 6, waitMs = 50 } = {}) {
+  let why = '';
+  for (let i = 0; i < tries; i++) {
+    if (i) sleepSync(waitMs * i);
+    let text;
+    try { text = fs.readFileSync(file, 'utf-8'); } catch (e) {
+      if (e.code === 'ENOENT') return undefined;
+      if (!BUSY.has(e.code)) throw e;
+      why = e.code; continue;
+    }
+    try { return JSON.parse(text); } catch (e) { why = e.message; }
+  }
+  fail(`${file}: exists but does not read as JSON (${why}); left untouched`);
 }
+
+// The one atomic write: a unique temp file beside the target, then rename over
+// it (retried while a reader holds it open), so no reader ever sees a partial
+// file and two writers never share a temp file.
+export function writeJsonAtomic(file, obj) { writeTextAtomic(file, JSON.stringify(obj, null, 2) + '\n'); }
 
 export function writeTextAtomic(file, text) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const tmp = file + '.tmp';
+  const tmp = `${file}.${process.pid}.${Math.random().toString(16).slice(2, 10)}.tmp`;
   fs.writeFileSync(tmp, text);
-  fs.renameSync(tmp, file);
+  for (let i = 0; ; i++) {
+    try { fs.renameSync(tmp, file); return; } catch (e) {
+      if (i >= 10 || !BUSY.has(e.code)) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+      sleepSync(20 * (i + 1));
+    }
+  }
 }
 
 // ---- processes -----------------------------------------------------------------

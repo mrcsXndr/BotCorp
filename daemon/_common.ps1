@@ -90,13 +90,23 @@ function Read-JsonFile {
 
 function Write-JsonFile {
     # No BOM, trailing newline, parent dir created. Fail-open (returns $false).
+    # Atomic: a unique temp file, then one replacing rename, so a reader (the CLI,
+    # the cockpit, another tick) never sees a truncated file it would read as "no record".
     param([string]$Path, $Object, [int]$Depth = 8)
+    $tmp = "$Path.$PID.$([guid]::NewGuid().ToString('N').Substring(0, 8)).tmp"
     try {
         $dir = Split-Path $Path -Parent
         if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-        [System.IO.File]::WriteAllText($Path, (($Object | ConvertTo-Json -Depth $Depth) + "`n"))
+        [System.IO.File]::WriteAllText($tmp, (($Object | ConvertTo-Json -Depth $Depth) + "`n"))
+        for ($i = 0; ; $i++) {
+            # a reader holding the target open makes the rename fail for a moment on Windows
+            try { [System.IO.File]::Move($tmp, $Path, $true); break } catch { if ($i -ge 10) { throw }; Start-Sleep -Milliseconds (20 * ($i + 1)) }
+        }
         return $true
-    } catch { return $false }
+    } catch {
+        try { if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force } } catch {}
+        return $false
+    }
 }
 
 function ConvertTo-Hashtable {

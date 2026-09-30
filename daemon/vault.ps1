@@ -367,9 +367,12 @@ function Update-VaultLaunchState {
     param([string]$Bot, $Launch)
     $p = Get-VaultLaunchStatePath $Bot
     $m = [ordered]@{}
-    try {
-        if (Test-Path $p) { $cur = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json; foreach ($prop in $cur.PSObject.Properties) { $m[$prop.Name] = $prop.Value } }
-    } catch {}
+    # A file that exists but does not parse (a writer mid-write) is retried, then
+    # refused: rebuilding it from nothing dropped bg_id, claude_pid, desired, ...
+    for ($i = 0; (Test-Path $p); $i++) {
+        try { $cur = [System.IO.File]::ReadAllText($p) | ConvertFrom-Json -ErrorAction Stop; foreach ($prop in $cur.PSObject.Properties) { $m[$prop.Name] = $prop.Value }; break }
+        catch { if ($i -ge 5) { throw "state file $p exists but does not read as JSON; left untouched" }; Start-Sleep -Milliseconds (50 * ($i + 1)) }
+    }
     if (-not $m.Contains('bot')) { $m['bot'] = $Bot }
     # The launcher's outcome (phase, phase_at, exit_code) shares the `launch`
     # block (state schema v2); a new attestation keeps it.
@@ -378,7 +381,9 @@ function Update-VaultLaunchState {
     $m['launch'] = $l
     $dir = Split-Path $p -Parent
     if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-    [System.IO.File]::WriteAllText($p, (($m | ConvertTo-Json -Depth 6) + "`n"))
+    $tmp = "$p.$PID.tmp"
+    [System.IO.File]::WriteAllText($tmp, (($m | ConvertTo-Json -Depth 6) + "`n"))
+    [System.IO.File]::Move($tmp, $p, $true)
 }
 
 function New-LaunchNonce {

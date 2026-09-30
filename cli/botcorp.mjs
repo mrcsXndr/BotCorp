@@ -46,7 +46,7 @@ const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
-  readJson, writeJsonAtomic, writeTextAtomic,
+  readJson, readJsonState, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
@@ -561,7 +561,8 @@ function logBotAccounts(bot, rec) {
 // failover. An operator's account choice starts over from the primary.
 function clearAccountActive(bot) {
   const file = path.join(STATE_DIR, `${bot}.json`);
-  const st = readJson(file);
+  let st;
+  try { st = readJsonState(file); } catch { return; }   // unreadable: never rewrite it from a guess
   if (!st || !(st.account_active || st.account_switch_at)) return;
   delete st.account_active;
   delete st.account_switch_at;
@@ -572,7 +573,8 @@ function clearAccountActive(bot) {
 // on its own. A re-added token is the operator's fix, so it clears the mark.
 function clearAccountFailed(id) {
   const file = path.join(STATE_DIR, 'accounts.json');
-  const st = readJson(file);
+  let st;
+  try { st = readJsonState(file); } catch { return; }   // unreadable: never rewrite it from a guess
   const e = st && st.accounts && st.accounts[id];
   if (!e || !e.failed) return;
   e.failed = null;
@@ -1442,7 +1444,7 @@ function botState(bot) { return readJson(path.join(STATE_DIR, `${bot}.json`)) ||
 function mintLaunchNonce(bot) {
   const nonce = crypto.randomBytes(32).toString('hex');
   const file = path.join(STATE_DIR, `${bot}.json`);
-  const st = readJson(file) || { bot };
+  const st = readJsonState(file) || { bot };
   const prev = st.launch && typeof st.launch === 'object' ? st.launch : {};
   st.launch = {
     nonce_sha256: crypto.createHash('sha256').update(nonce, 'utf8').digest('hex'),
@@ -1453,8 +1455,7 @@ function mintLaunchNonce(bot) {
     // the launcher's outcome shares the block (state schema v2); a new attestation keeps it
     ...Object.fromEntries(['phase', 'phase_at', 'exit_code'].filter((k) => k in prev).map((k) => [k, prev[k]])),
   };
-  fs.mkdirSync(STATE_DIR, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(st, null, 2) + '\n');
+  writeJsonAtomic(file, st);
   return nonce;
 }
 
@@ -1510,8 +1511,9 @@ function stopBot(bot) {
     if (r.code !== 0) fail(`stop: pty-host --stop exited ${r.code}`);
     // stop.ps1 records this for a bg bot (state schema v2 `desired`)
     const file = path.join(STATE_DIR, `${bot}.json`);
-    const st = readJson(file);
-    if (st) fs.writeFileSync(file, JSON.stringify({ ...st, desired: { state: 'stopped', by: 'cli', at: new Date().toISOString() } }, null, 2) + '\n');
+    let st;
+    try { st = readJsonState(file); } catch {}   // unreadable: leave it (the paused marker below is what stops the daemon)
+    if (st) writeJsonAtomic(file, { ...st, desired: { state: 'stopped', by: 'cli', at: new Date().toISOString() } });
   }
   // Without this marker the daemon's next tick would cold-start the bot again.
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -2573,7 +2575,7 @@ function shellDaemonScript(script, args, label) {
 // each bot's next safe restart (smoke test + rollback kept). Never `-Apply` here.
 function updatesPath() { return path.join(STATE_DIR, 'updates.json'); }
 function readUpdates() {
-  const j = readJson(updatesPath());
+  const j = readJsonState(updatesPath());
   return isObj(j) && Array.isArray(j.releases) ? j : { releases: [] };
 }
 
