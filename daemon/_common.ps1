@@ -1051,6 +1051,40 @@ function Get-PollerVerdict {
     return 'DEAD'
 }
 
+function Get-TgSlotHealth {
+    # v0.8.6 R9: what an OWNED poller verdict cannot see. bot.pid alive says the
+    # plugin process lives, not that it still polls: after 8 409s in a row it
+    # leaves its poll loop and stays alive (deaf), and a second poller for the
+    # token (a stray launcher, another host) keeps the slot (stolen). Reads the
+    # codes of `secrets.ps1 -Action tg-probe` (getUpdates, which Telegram answers
+    # 409 while another getUpdates holds the slot):
+    #   401 / 404   rejected  the token no longer works
+    #   a 409       ok        someone polls; stolen when the plugin's own process
+    #                         has NO connection to Telegram ($OwnConn -eq $false;
+    #                         $null = not measurable, which never reads stolen)
+    #   only 200s   deaf      nobody polls this token
+    #   else        unknown   network trouble: no verdict
+    param([int[]]$Codes = @(), $OwnConn = $null)
+    $c = @($Codes)
+    if ($c -contains 401 -or $c -contains 404) { return 'rejected' }
+    if ($c -contains 409) { return $(if ($OwnConn -eq $false) { 'stolen' } else { 'ok' }) }
+    if ($c.Count -and -not @($c | Where-Object { $_ -ne 200 }).Count) { return 'deaf' }
+    return 'unknown'
+}
+
+function Test-TgConnection {
+    # Does process $ProcId hold an established TCP connection to $HostName?
+    # $true / $false; $null when it cannot be measured (no pid, DNS, netstat).
+    param([int]$ProcId, [string]$HostName = 'api.telegram.org')
+    if ($ProcId -le 0) { return $null }
+    try {
+        $ips = @([System.Net.Dns]::GetHostAddresses($HostName) | ForEach-Object { $_.IPAddressToString })
+        if (-not $ips.Count) { return $null }
+        $conns = @(Get-NetTCPConnection -State Established -ErrorAction Stop | Where-Object { $_.OwningProcess -eq $ProcId })
+        return [bool](@($conns | Where-Object { $ips -contains $_.RemoteAddress }).Count)
+    } catch { return $null }
+}
+
 function Get-BgBlock {
     # The session is waiting on something no unattended launch can answer (a
     # login, a dialog, a permission) - '' when it is not, or when that cannot

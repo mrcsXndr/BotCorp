@@ -296,6 +296,67 @@ function Invoke-Janitor {
     } catch { Write-DaemonLog "janitor: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
+function Send-TgSlotAlert {
+    # Inbound Telegram is dead and nothing heals it right now: ONE line through
+    # the severity-gated alert path (tg_send.py --alert: alerts.log for triage,
+    # and pushed because it says CRITICAL), at most once per
+    # BOT_TG_ALERT_EVERY_MIN (120) minutes per bot (state tg_alert_at).
+    param([string]$Bot, $Cfg, [hashtable]$Paths, [string]$Text)
+    try {
+        $every = 120; try { if ($env:BOT_TG_ALERT_EVERY_MIN) { $every = [double]$env:BOT_TG_ALERT_EVERY_MIN } } catch {}
+        $st = Read-BotState -Bot $Bot
+        $last = $null; try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_alert_at')) { $last = $st.tg_alert_at } } catch {}
+        if ($last) { $t = [datetime]::MinValue; if ([datetime]::TryParse("$last", [ref]$t) -and (((Get-Date) - $t).TotalMinutes -lt $every)) { Write-DaemonLog "tg alert held (one per ${every} min): $Text" -Bot $Bot -Quiet; return } }
+        Write-BotState -Bot $Bot -Updates @{ tg_alert_at = (Get-Date).ToString('o') }
+        $tg = Join-Path $Harness 'tools\tg\tg_send.py'
+        $s = Invoke-Bounded -Exe $pyExe -Arguments @($tg, '--alert', "CRITICAL: $Bot inbound Telegram is down. $Text") -TimeoutSec 60 -Label 'tg alert' -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
+        Write-DaemonLog "tg alert sent (exit=$($s.ExitCode)): $Text" -Bot $Bot
+    } catch { Write-DaemonLog "tg alert: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
+function Invoke-TgProbe {
+    # v0.8.6 R9: a poller verdict of OWNED (bot.pid alive under claude) cannot
+    # see a plugin that stopped polling or a slot another process took. Every
+    # BOT_TG_PROBE_EVERY_MIN (15) minutes the vault token probes getUpdates
+    # (secrets.ps1 -Action tg-probe in a child: the token never enters the
+    # tick) and Get-TgSlotHealth reads the codes. Two bad probes in a row alert
+    # (Send-TgSlotAlert); nothing is restarted from here.
+    param([string]$Bot, $Cfg, [hashtable]$Paths, [switch]$AsDryRun)
+    try {
+        $every = 15; try { if ($env:BOT_TG_PROBE_EVERY_MIN) { $every = [double]$env:BOT_TG_PROBE_EVERY_MIN } } catch {}
+        $st = Read-BotState -Bot $Bot
+        $last = $null; try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_probe_at')) { $last = $st.tg_probe_at } } catch {}
+        if ($last) { $t = [datetime]::MinValue; if ([datetime]::TryParse("$last", [ref]$t) -and (((Get-Date) - $t).TotalMinutes -lt $every)) { return } }
+        if ($AsDryRun) { Write-DaemonLog 'tg probe: DRYRUN would probe getUpdates with the vault token' -Bot $Bot; return }
+        Write-BotState -Bot $Bot -Updates @{ tg_probe_at = (Get-Date).ToString('o') }
+        $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $PSScriptRoot 'secrets.ps1'), '-Bot', $Bot, '-Action', 'tg-probe', '-ProbeReason', 'daemon')
+        if ($env:BOTCORP_TG_API_BASE) { $a += @('-TgApiBase', $env:BOTCORP_TG_API_BASE) }   # tests: a loopback fake (secrets.ps1 refuses anything else)
+        $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments $a -TimeoutSec 90 -Label 'tg probe' -Capture -WorkingDirectory $Paths.BotHome -Bot $Bot
+        $j = $null; try { $j = ("$($r.Output)" -split "`n" | Where-Object { $_.Trim().StartsWith('{') } | Select-Object -Last 1) | ConvertFrom-Json } catch {}
+        if (-not $j -or ($j.PSObject.Properties.Name -contains 'skipped')) { Write-DaemonLog "tg probe: not probed ($(if ($j) { $j.skipped } else { "exit=$($r.ExitCode)" }))" -Bot $Bot -Quiet; return }
+        $codes = @($j.codes | ForEach-Object { [int]$_ })
+        $own = $null
+        if ($codes -contains 409) {
+            $botPid = 0
+            try { $botPid = Get-FirstPid ((Get-Content -LiteralPath (Join-Path $Paths.ConfigDir 'channels\telegram\bot.pid') -ErrorAction Stop | Select-Object -First 1)) } catch {}
+            $own = Test-TgConnection -ProcId $botPid -HostName $(if ($env:BOTCORP_TG_API_BASE) { '127.0.0.1' } else { 'api.telegram.org' })
+        }
+        $health = Get-TgSlotHealth -Codes $codes -OwnConn $own
+        $bad = 0; try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_probe_bad')) { $bad = [int]$st.tg_probe_bad } } catch {}
+        if ($health -in @('deaf', 'stolen', 'rejected')) { $bad++ } elseif ($health -eq 'ok') { $bad = 0 }
+        Write-BotState -Bot $Bot -Updates @{ tg_probe_bad = $bad; tg_probe_health = $health }
+        Write-DaemonLog "tg probe: $health (codes $($codes -join ','); bad $bad/2)" -Bot $Bot -Quiet:($health -eq 'ok')
+        if ($bad -ge 2 -and $health -in @('deaf', 'stolen', 'rejected')) {
+            $what = switch ($health) {
+                'deaf' { 'The plugin process is alive but nothing polls getUpdates (it gives up after repeated 409s). botcorp restart ' + $Bot + ' brings it back.' }
+                'stolen' { 'Another process polls this bot token, not this bot''s plugin. Find and stop the second poller (a stray claude --channels, another host).' }
+                'rejected' { 'Telegram rejects the token: botcorp secrets set ' + $Bot + ' telegram.' }
+            }
+            Send-TgSlotAlert -Bot $Bot -Cfg $Cfg -Paths $Paths -Text $what
+        }
+    } catch { Write-DaemonLog "tg probe: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
 function Invoke-RegistryScan {
     # Once a day per bot with a `tools:` list: `botcorp tools <bot> scan` records
     # the day in <rt>/state/<bot>.registry-days.json, so a quiet day still
@@ -709,6 +770,8 @@ function Invoke-BotTick {
         Write-BotState -Bot $Bot -Updates $upd
     }
     if ($ProbeOnly) { return }
+    if ($hasTg -and $alive -and $poller -eq 'OWNED') { Invoke-TgProbe -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
+    try { if ($poller -ne 'DEAD' -and $st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ tg_dead_since = $null } } } catch {}
 
     # --- decide -----------------------------------------------------------------
     # A poller DEAD within the launcher grace may still be connecting: not yet.
@@ -850,7 +913,17 @@ function Invoke-BotTick {
         if (-not $why) { $why = if ($migrateVisible) { 'migrate hidden session-0 bot to visible' } else { "poller $poller" } }
         $stuck = $limited -or $switch
         if ($stuck) { Write-DaemonLog "session $(if ($limited) { 'usage-limited' } else { 'blocked on a login' }): the turn cannot proceed -> restart allowed (no live work to protect)" -Bot $Bot }
-        if (Test-SessionBusy -Bot $Bot -LimitBlocked:$stuck) { Write-DaemonLog "restart DEFERRED ($why): session BUSY (transcript fresh) - not killing live work" -Bot $Bot; return }
+        if (Test-SessionBusy -Bot $Bot -LimitBlocked:$stuck) {
+            Write-DaemonLog "restart DEFERRED ($why): session BUSY (transcript fresh) - not killing live work" -Bot $Bot
+            if ($poller -eq 'DEAD') {
+                # a turn that ends within a tick or two heals it without a word; one that keeps it deaf alerts
+                $since = [datetime]::MinValue
+                try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since) { [void][datetime]::TryParse("$($st.tg_dead_since)", [ref]$since) } } catch {}
+                if ($since -eq [datetime]::MinValue) { Write-BotState -Bot $Bot -Updates @{ tg_dead_since = (Get-Date).ToString('o') } }
+                elseif (((Get-Date) - $since).TotalMinutes -ge 10) { Send-TgSlotAlert -Bot $Bot -Cfg $cfg -Paths $P -Text "The poller died $([int]((Get-Date) - $since).TotalMinutes) min ago and the session is still busy, so the restart that heals it waits for the turn to end." }
+            }
+            return
+        }
         if ($claudePid -le 0) { Write-DaemonLog 'restart DEFERRED: claude pid unresolved (never restart.ps1 -OldPid 0)' -Bot $Bot; return }
         $rel = if ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session $(if ($limited) { 'usage-limited' } else { 'idle' }) -> $rel)" -Bot $Bot

@@ -6,7 +6,7 @@
 #   secrets.ps1 -Bot <name> -Action delete -Key <key>
 #   secrets.ps1 -Bot <name> -Action get    -Key <key> -Nonce <launch nonce> # plaintext to stdout: an ATTESTED launcher only
 #   secrets.ps1 -Bot <name> -Action doctor [-Json]                          # acl + one audited decrypt probe + lock state
-#   secrets.ps1 -Bot <name> -Action tg-probe                                # getUpdates 409 probe with telegram_token; prints codes only
+#   secrets.ps1 -Bot <name> -Action tg-probe [-ProbeReason daemon]          # getUpdates 409 probe with telegram_token; prints codes only
 #   secrets.ps1 -Bot <name> -Action acl                                     # re-apply the vault ACL
 #   secrets.ps1 -Bot <name> -Action migrate                                 # v1 (bot-name entropy) -> v2 (per-bot key)
 #   secrets.ps1 -Bot <name> -Action lock                                    # passphrase on stdin -> operator lock; already locked: re-lock now
@@ -39,7 +39,8 @@ param(
     [switch]$AllowHome,
     [switch]$Force,
     [switch]$Permanent,
-    [string]$TgApiBase
+    [string]$TgApiBase,
+    [ValidateSet('doctor', 'daemon')][string]$ProbeReason = 'doctor'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -143,7 +144,7 @@ try {
         'tg-probe' {
             # doctor `<bot>: telegram slot`: the getUpdates-409 probe runs HERE,
             # so the token never leaves this process (one audited decrypt, reason
-            # doctor; no launch nonce is minted). Up to 4 calls 2 s apart,
+            # doctor, or daemon for the tick's probe; no launch nonce is minted). Up to 4 calls 2 s apart,
             # timeout=0&limit=1 and NO offset (nothing queued is confirmed or
             # dropped), stopping at the first 409. Prints {"codes":[...]} or
             # {"skipped":"..."}; never the token. -TgApiBase is for tests and
@@ -156,7 +157,7 @@ try {
             $out = [ordered]@{}
             if ((Get-VaultLockState -BotHome $botHome -Bot $Bot).locked) { $out.skipped = 'vault locked' }
             else {
-                $tok = Get-VaultSecret -BotHome $botHome -Bot $Bot -Key 'telegram_token' -Reason 'doctor'
+                $tok = Get-VaultSecret -BotHome $botHome -Bot $Bot -Key 'telegram_token' -Reason $ProbeReason
                 if ($null -eq $tok) { $out.skipped = 'no telegram_token in the vault' }
                 else {
                     $codes = @()
