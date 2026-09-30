@@ -46,7 +46,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
     const bits = [fmtWhen(turn.ts), Number.isFinite(t.durationMs) ? fmtDuration(t.durationMs!) : '', Number.isFinite(t.tokens) ? tt(COPY.row.tokens, { n: fmtTok(t.tokens!) }) : '',
       Number.isFinite(t.toolUses) ? tt(COPY.row.toolUses, { n: t.toolUses! }) : ''].filter(Boolean);
     return (
-      <div className="max-w-[92%] px-3.5 py-3 rounded-card bg-task">
+      <div className="max-w-[min(92%,46rem)] px-3.5 py-3 rounded-card bg-task">
         <div className="text-sm font-semibold"><span className={TASK_TONE[t.status] || 'text-text-2'}>{t.status || COPY.row.task}</span></div>
         <div className="mt-0.5 text-body text-text">{t.summary}</div>
         {bits.length > 0 && <div className="num mt-0.5 text-xs text-text-3">{bits.join(' · ')}</div>}
@@ -57,7 +57,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
   if (turn.role === 'tg_out') {
     return (
       <div className="flex flex-col items-start">
-        <div className="max-w-[85%] px-3.5 py-2.5 rounded-card rounded-bl-xs bg-sent shadow-[inset_0_0_0_1px_var(--sent-line)] text-body leading-body text-text"><Md text={turn.text || ''} /></div>
+        <div className="max-w-[min(85%,46rem)] px-3.5 py-2.5 rounded-card rounded-bl-xs bg-sent shadow-[inset_0_0_0_1px_var(--sent-line)] text-body leading-body text-text"><Md text={turn.text || ''} /></div>
         <Meta tg>{[COPY.row.sentOnTelegram, fmtWhen(turn.ts)].filter(Boolean).join(' · ')}</Meta>
       </div>
     );
@@ -65,7 +65,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
   if (turn.role === 'transcript') {
     return (
       <div className="flex flex-col items-end">
-        <div className="max-w-[85%] px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
+        <div className="max-w-[min(85%,46rem)] px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
           <div className="text-xs font-semibold text-text-2">{COPY.row.transcript}</div>
           <div className="whitespace-pre-wrap">{turn.text}</div>
         </div>
@@ -79,7 +79,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
     const meta = turn.meta ? [tg ? turn.meta.user || '' : turn.meta.source, fmtWhen(turn.meta.ts || turn.ts)].filter(Boolean).join(' · ') : fmtWhen(turn.ts);
     return (
       <div className="flex flex-col items-end">
-        <div className="max-w-[85%] min-w-0 px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
+        <div className="max-w-[min(85%,46rem)] min-w-0 px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
           {(turn.meta?.media || []).map((m, i) => (
             <div key={i} className="text-sm"><span className="font-semibold">{m.label || COPY.row.file}</span>{m.detail && <span className="text-text-2"> {m.detail}</span>}</div>
           ))}
@@ -93,7 +93,7 @@ function Turn({ turn }: { turn: ChatTurn }) {
   const tools = turn.tools?.length ? toolsLine(turn.tools) : '';
   return (
     <div className="flex flex-col items-start">
-      <div className="max-w-[92%] min-w-0 px-3.5 py-3 rounded-card rounded-bl-xs bg-surface shadow-1 text-body leading-body text-text">
+      <div className="max-w-[min(92%,46rem)] min-w-0 px-3.5 py-3 rounded-card rounded-bl-xs bg-surface shadow-1 text-body leading-body text-text">
         {turn.text && <Md text={turn.text} />}
         {tools && <div className="mt-1.5 flex items-center gap-1.5 text-xs text-text-3"><Icon name="tool" size={13} className="flex-none" /><span className="truncate">{tools}</span></div>}
       </div>
@@ -107,7 +107,7 @@ function SentBubble({ s }: { s: Sent }) {
   const say = (s.status === 'held' || s.status === 'expired' || s.status === 'failed') && s.detail ? `${label}: ${s.detail}` : label;
   return (
     <div className="flex flex-col items-end">
-      <div className="max-w-[85%] min-w-0 px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
+      <div className="max-w-[min(85%,46rem)] min-w-0 px-3.5 py-2.5 rounded-card rounded-br-xs bg-accent-soft text-body leading-body text-text">
         {s.text && <div className="whitespace-pre-wrap break-words">{s.text}</div>}
         <Chips files={s.files} />
       </div>
@@ -156,7 +156,7 @@ export function ChatView({ chat, sent }: { chat: TermState['chat']; sent: Sent[]
   return (
     <div className="relative flex-1 min-h-0 flex flex-col">
       <div ref={box} onScroll={onScroll} className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-4 py-4">
-        <div className="mx-auto w-full max-w-[688px]">{body}</div>
+        <div className="w-full">{body}</div>
       </div>
       {!follow && (
         <button type="button" onClick={toLatest} aria-label={unseen ? `${COPY.button.jumpLatest}, ${unseen}` : COPY.button.jumpLatest}

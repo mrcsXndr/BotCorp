@@ -40,7 +40,7 @@ export function Composer({ bot, onSend }: { bot: string; onSend: (text: string, 
     <form className="flex-none bg-bg shadow-[0_-1px_0_var(--line)] px-2 pt-2 pb-[max(8px,env(safe-area-inset-bottom))]"
       onSubmit={(e) => { e.preventDefault(); send(); }}>
       {files.length > 0 && (
-        <div className="mx-auto max-w-[704px] flex flex-wrap gap-1.5 px-1 pb-2">
+        <div className="flex flex-wrap gap-1.5 px-1 pb-2">
           {files.map((f, i) => {
             const v = attachView(f, i);
             return (
@@ -53,7 +53,7 @@ export function Composer({ bot, onSend }: { bot: string; onSend: (text: string, 
           })}
         </div>
       )}
-      <div className="mx-auto max-w-[704px] flex items-end gap-1.5">
+      <div className="flex items-end gap-1.5">
         <IconButton icon="clip" label={COPY.button.attach} onPress={() => input.current?.click()} />
         <input ref={input} type="file" multiple hidden onChange={(e) => { add([...(e.target.files || [])]); e.target.value = ''; }} />
         <TextField aria-label={label} value={text} onChange={setText} className="flex-1 min-w-0">

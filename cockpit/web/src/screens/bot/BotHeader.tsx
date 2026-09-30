@@ -32,7 +32,7 @@ export function BotHeader({ bot, status, view, onView, onAction, onStart, starti
   const chat = !isPinned(bot);
   return (
     <header className="flex-none bg-bg pt-[max(8px,env(safe-area-inset-top))] shadow-[0_1px_0_var(--line)]">
-     <div className="mx-auto w-full max-w-[720px]">
+     <div className="w-full">
       <div className={`flex items-center gap-1 ${wide ? 'pl-4 pr-2 pt-2' : 'pl-1 pr-1'}`}>
         {!wide && (
           <Link to="/" aria-label={COPY.button.back}
