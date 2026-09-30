@@ -126,10 +126,24 @@ export function findBgRow(rows, { bgId = '', sessionId = '', home = '' }) {
     || null;
 }
 
+// daemon/_common.ps1 Test-SessionBusy step 0: the bg job record says a turn is
+// in progress (tempo 'active') and was written within 30 min. It outranks a
+// breakpoint (a turn started after it was declared) and a quiet transcript (one
+// long tool call). An older record is not trusted.
+export const JOB_FRESH_MS = 30 * 60_000;
+export function jobActive(job, recordMtimeMs, now = Date.now()) {
+  return !!job && job.tempo === 'active' && Number.isFinite(recordMtimeMs) && now - recordMtimeMs < JOB_FRESH_MS;
+}
+export function jobFileActive(jobFile, job, now = Date.now()) {
+  if (!jobFile || !job) return false;
+  try { return jobActive(job, fs.statSync(jobFile).mtimeMs, now); } catch { return false; }
+}
+
 // activity from what was measured (pure, the tests drive it directly)
-export function activityOf({ alive, blocked = null, breakpoint = false, quietMs = null, rosterState = '' }) {
+export function activityOf({ alive, blocked = null, breakpoint = false, quietMs = null, rosterState = '', active = false }) {
   if (!alive) return 'down';
   if (blocked) return 'blocked';
+  if (active) return 'working';
   if (breakpoint) return 'idle';
   if (quietMs !== null) return quietMs < QUIET_MIN * 60_000 ? 'working' : 'idle';
   if (rosterState === 'working') return 'working';
@@ -207,9 +221,11 @@ export function observeBot(name, { roster = false, parents = processParents } = 
   const quietMs = alive ? transcriptQuietMs(name, now) : null;
   let blocked = null;
   let awaitingPrompt = false;
+  let active = false;
   if (alive && kind === 'bg') {
     const jobFile = bgJobFile(cfgDir, bgId);
     const job = jobFile ? readJson(jobFile) : null;
+    active = jobFileActive(jobFile, job, now);
     const v = bgBlockVerdict({ running: true, bgId, job });
     // kind: 'limit' (a usage limit the daemon recovers from) | 'human' (a FAIL only a person answers) | null (a WARN);
     // since: when the record went blocked (the text's reset clock rolls forward from it)
@@ -217,7 +233,7 @@ export function observeBot(name, { roster = false, parents = processParents } = 
     awaitingPrompt = v.level === 'WARN' || (v.level === 'PASS' && (
       (job.tempo === 'blocked' && String(job.needs || '').includes('send a prompt to start')) || turnEnded(job, quietMs, now)));
   }
-  const activity = activityOf({ alive, blocked: !!blocked && blocked.level === 'FAIL', breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState });
+  const activity = activityOf({ alive, blocked: !!blocked && blocked.level === 'FAIL', breakpoint: alive && breakpointFresh(name, now), quietMs, rosterState, active });
   return {
     bot: name,
     alive,

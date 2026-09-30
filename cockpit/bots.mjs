@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url';
 import yaml from 'js-yaml';
 import { botLiveness, processParentsAsync, sessionAliveVerdict, bgJobFile, bgBlockVerdict, firstInt } from '../cli/_lib.mjs';
 import { botsDir } from '../core/paths.mjs';
-import { activityOf, breakpointFresh, transcriptQuietMs } from '../core/observe.mjs';
+import { activityOf, breakpointFresh, transcriptQuietMs, jobFileActive } from '../core/observe.mjs';
 import { phase } from '../core/state.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -82,7 +82,7 @@ export async function liveness(name, cfg, state, pty, cfgDir = configDir(name)) 
   const blocked = block.level === 'FAIL' || block.level === 'WARN';
   // core/observe.mjs's activity from this measurement, and the one phase every reader shows (core/state.mjs);
   // only a hard block (FAIL) is activity `blocked`, a WARN session still takes its next prompt
-  const activity = activityOf({ alive: live.alive, blocked: block.level === 'FAIL', breakpoint: live.alive && breakpointFresh(name), quietMs: live.alive ? transcriptQuietMs(name) : null });
+  const activity = activityOf({ alive: live.alive, blocked: block.level === 'FAIL', breakpoint: live.alive && breakpointFresh(name), quietMs: live.alive ? transcriptQuietMs(name) : null, active: jobFileActive(jobFile, job) });
   return {
     running: live.alive,
     activity,
