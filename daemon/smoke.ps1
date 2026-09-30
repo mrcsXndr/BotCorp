@@ -10,6 +10,8 @@
 #   bash-n            bash -n every harness/hooks/*.sh
 #   node-check        node --check on statusline.js, pty-host.mjs, cockpit/server.mjs,
 #                     daemon/sync.mjs, daemon/botyaml.mjs
+#   cockpit-dist      cockpit/web/dist/index.html exists and every /assets/ file it
+#                     names exists (the SPA ships prebuilt: -Apply runs no npm step)
 #   hook-session-start / hook-session-end
 #                     fake-stdin runs of the two lifecycle hooks against a temp BOT_HOME
 #   tick-probe        daemon/tick.ps1 -ProbeOnly exits 0
@@ -96,6 +98,16 @@ Step 'node-check' {
         if ($r.code -ne 0) { $bad += "$([System.IO.Path]::GetFileName($f)): $(Tail $r.out 1)" }
     }
     return @{ ok = ($bad.Count -eq 0); detail = "$($files.Count) files$(if ($bad) { '; ' + ($bad -join '; ') })" }
+}
+
+Step 'cockpit-dist' {
+    $dist = Join-Path $BotCorp 'cockpit\web\dist'
+    $index = Join-Path $dist 'index.html'
+    if (-not (Test-Path -LiteralPath $index)) { return @{ ok = $false; detail = 'cockpit/web/dist/index.html missing' } }
+    $refs = @([regex]::Matches((Get-Content -Raw -LiteralPath $index), '(?:src|href)="/(assets/[^"?#]+)"') | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    $missing = @($refs | Where-Object { -not (Test-Path -LiteralPath (Join-Path $dist $_)) })
+    # no reference at all is a broken page too, not a pass
+    return @{ ok = ($refs.Count -gt 0 -and $missing.Count -eq 0); detail = "$($refs.Count) assets$(if ($missing) { '; missing ' + ($missing -join ', ') })" }
 }
 
 # fake-stdin hook runs against a throwaway BOT_HOME (never a real bot's memory/)

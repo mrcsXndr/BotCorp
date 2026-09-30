@@ -3,6 +3,38 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.0
+
+A new cockpit: four places, labels instead of prose, and nothing dangerous one
+tap away.
+
+- **Rebuilt UI** (`cockpit/web`, React Aria Components + Tailwind v4, the built
+  `dist/` committed). The server serves `web/dist` first; the previous cockpit
+  stays at `/classic`.
+- **Four places:** Bots, Inbox, Accounts, Settings (a bottom bar on a phone, a
+  sidebar on desktop). `#/approvals` lands on Inbox, `#/usage` on Accounts.
+- **Main actions:** New chat and New bot. Long-running bots (`service: daemon`)
+  are Pinned; chats are listed under Chats and can be archived.
+- **Bot screen:** Chat and Terminal; Restart, Restart fresh, Stop and Archive
+  sit in the cog menu behind a confirm. Remote Control is gone from the UI.
+- **Manage a bot:** Settings (persona, a model picker from `/api/models`, keep
+  running, the account chain, the board from a pasted GitHub project link,
+  the answer page), Telegram, Secrets (write-only), Automations (next/last
+  run) and Tools (plumbing modules hidden, plain descriptions).
+- **Inbox** holds approvals and everything else that needs you, one card
+  each; Link accounts asks first.
+- **Accounts** merges usage: one card per account with its 5 h / 7 d meters,
+  the detected plan and which bots use it.
+- **Updates** live on the version card: the logo, the release notes, Apply,
+  and Roll back inside History behind a confirm. No build ids.
+- **Help** replaces the guide: eight short sections.
+- **Copy lint:** every UI string is capped by its role and checked for banned
+  terms (`copy.test.ts`).
+- **CI:** a `cockpit-web` job (typecheck, test, build, dist drift, size), and a
+  `cockpit-dist` smoke step.
+- **Fixed:** the classic cockpit raised its login bar for any link in a reply;
+  it now does so only for a real sign-in link.
+
 ## v0.8.5
 
 Bots start with their memory again, every backup is an account, and one

@@ -152,7 +152,12 @@ app.use(async (req, res, next) => {
 app.use(express.json({ limit: '8mb' }));
 
 // ---- static ------------------------------------------------------------------
+// The v0.9 SPA (web/dist, committed prebuilt) wins; the classic UI (public/) is
+// the fallback for anything dist does not ship (guide.html, app.js, ...) and is
+// reachable at /classic for one release.
+app.use(express.static(path.join(__dirname, 'web', 'dist')));
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/classic', (_req, res) => res.sendFile(path.join(__dirname, 'public', 'index.html')));
 const nm = path.join(bots.BOTCORP_ROOT, 'node_modules', '@xterm');
 app.use('/vendor/xterm', express.static(path.join(nm, 'xterm', 'lib')));
 app.use('/vendor/xterm-css', express.static(path.join(nm, 'xterm', 'css')));

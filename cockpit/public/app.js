@@ -7,10 +7,6 @@
 // to '\x1bm' (Alt+M, the documented Windows fallback).
 const MODE_KEY_SEQ = '\x1b[Z';
 
-// Login / Remote Control links printed in the TUI. The pty stream carries the
-// URL unbroken even when the grid soft-wraps it.
-const AUTH_URL_RE = /https:\/\/(?:claude\.(?:ai|com)|console\.anthropic\.com|accounts\.google\.com)[^\s\x1b"')\]]*/;
-
 const unwrap = (g, key) => (g && g[key]) || g;
 const FitAddonCtor = unwrap(window.FitAddon, 'FitAddon');
 const WebLinksAddonCtor = unwrap(window.WebLinksAddon, 'WebLinksAddon');
@@ -526,11 +522,10 @@ el('exitbarClose').onclick = () => el('exitbar').classList.remove('show');
 el('exitRestartBtn').onclick = () => lifecycle('start');
 
 function scanForAuthUrl(chunk) {
-  const m = AUTH_URL_RE.exec(chunk);
-  if (!m || m[0] === state.lastAuthUrl || m[0].length < 30) return;
-  state.lastAuthUrl = m[0];
-  const isRc = /claude\.ai\/code|remote/i.test(m[0]);
-  el('linkbarText').textContent = `${state.linkIntent || (isRc ? 'Remote Control link' : 'Login link')}: ${m[0]}`;
+  const url = window.CockpitCards.authUrl(chunk);
+  if (!url || url === state.lastAuthUrl || url.length < 30) return;
+  state.lastAuthUrl = url;
+  el('linkbarText').textContent = `${state.linkIntent || 'Login link'}: ${url}`;
   el('linkbarBtn').onclick = () => { window.open(state.lastAuthUrl, '_blank', 'noopener'); };
   el('linkbar').classList.add('show');
 }

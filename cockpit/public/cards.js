@@ -204,6 +204,22 @@
     };
   }
 
+  // The login bar: a sign-in link printed in the terminal. Only an oauth,
+  // authorize or login path on claude.ai, claude.com or console.anthropic.com,
+  // or an accounts.google.com URL; an artifact, chat or share link never is.
+  // chunk: raw pty output (it carries the URL unbroken even when the grid
+  // soft-wraps it). -> the first sign-in URL in it, or null.
+  const LINK_RE = /https:\/\/(claude\.(?:ai|com)|console\.anthropic\.com|accounts\.google\.com)(?![\w.-])(\/[^\s\x1b"')\]]*)?/g;
+  const AUTH_PATH_RE = /^\/(?:[^/?#]+\/)*(?:oauth|authorize|login)(?:[/?#]|$)/i;
+  const NOT_AUTH_RE = /^\/(?:(?:code\/)?artifact|chat|share)\//i;
+  function authUrl(chunk) {
+    for (const m of String(chunk || '').matchAll(LINK_RE)) {
+      const p = m[2] || '/';
+      if (m[1] === 'accounts.google.com' || (!NOT_AUTH_RE.test(p) && AUTH_PATH_RE.test(p))) return m[0];
+    }
+    return null;
+  }
+
   root.CockpitCards = { fmtTok, lifecycleButtons, approvalView, widensOf, contextBar, accountName, chainLine, configField, configRows, configText, toolName, toolsLine, WIDENS,
-    fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX, boardLink };
+    fmtBytes, attachView, splitAttached, ATTACH_EXT, ATTACH_MAX, boardLink, authUrl };
 })(typeof window !== 'undefined' ? window : globalThis);

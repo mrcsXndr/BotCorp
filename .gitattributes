@@ -1,0 +1,6 @@
+# The cockpit web app: LF everywhere, so the committed dist/ hashes the same
+# on every host (CI rebuilds it and runs `git diff --exit-code cockpit/web/dist`).
+cockpit/web/** text eol=lf
+cockpit/web/**/*.woff2 binary
+cockpit/web/**/*.png binary
+cockpit/web/dist/** -diff linguist-generated=true

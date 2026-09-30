@@ -136,6 +136,23 @@ test('config field: enums, booleans, numbers, text; lists and other pages read-o
   assert.equal(configText(false), 'false');
 });
 
+test('auth url: only a sign-in link raises the login bar; an artifact, chat or share link never does', () => {
+  const { authUrl } = sandbox.CockpitCards;
+  const login = 'https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a&response_type=code&state=abc';
+  const google = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=1&scope=email';
+  assert.equal(authUrl('Published: https://claude.ai/code/artifact/0a1b2c3d-4e5f-6789-abcd-ef0123456789'), null, 'an artifact link: no bar');
+  assert.equal(authUrl(`Browser didn't open? Use the url below to sign in:\r\n\r\n${login}\r\n`), login);
+  assert.equal(authUrl(`open ${google}`), google);
+  // the other sign-in hosts and paths
+  for (const u of ['https://claude.com/cai/oauth/authorize?code=true&client_id=1', 'https://console.anthropic.com/oauth/authorize?x=1', 'https://claude.ai/login?returnTo=%2F']) assert.equal(authUrl(u), u, u);
+  // never: artifacts, chats, shares, a Remote Control session, a lookalike host
+  for (const u of ['https://claude.ai/artifact/0a1b2c3d-4e5f', 'https://claude.ai/chat/0a1b2c3d?login=1', 'https://claude.ai/share/0a1b2c3d/login',
+    'https://claude.ai/code/session_01AbCdEf', 'https://claude.ai', 'https://claude.ai.evil.example/oauth/authorize', 'https://accounts.google.com.evil.example/x']) assert.equal(authUrl(u), null, u);
+  // an artifact link earlier in the same chunk does not hide a later sign-in link
+  assert.equal(authUrl(`https://claude.ai/code/artifact/0a1b2c3d-4e5f\x1b[0m then ${login}\x1b[0m`), login);
+  assert.equal(authUrl(''), null);
+});
+
 test('chain line: empty without backups; the chain in order, and where it is after a failover', () => {
   const { chainLine } = sandbox.CockpitCards;
   assert.equal(chainLine({ backups: [] }), '');

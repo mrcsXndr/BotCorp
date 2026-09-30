@@ -1,0 +1,120 @@
+/* ==== BotCorp design tokens: "Quiet Sage", web edition ========================
+   Ported from cockpit/public/tokens.css, then tuned for a phone read (TG 10854:
+   "much more readable and modern"): a larger type scale, darker meta text, a
+   display face for names and titles, 44px touch targets, and skeleton tones.
+   Every colour, size, radius, shadow and duration the web UI uses comes from
+   here; src/app.css maps them onto Tailwind with @theme. Font, shadow and ease
+   tokens carry their own prefixes (--face-, --elev-, --motion-) so they never
+   share a name with a Tailwind theme key.
+   Light is the default; dark by the OS setting or the viewer's pick
+   (public/theme.js sets html[data-theme]). The terminal stays dark in both. */
+:root {
+  color-scheme: light;
+  /* colour roles */
+  --bg: #F9FBF8;              /* the page */
+  --side: #EAF1EB;            /* the rail, the nav bar */
+  --surface: #FFFFFF;         /* cards, assistant bubbles, menus, sheets */
+  --field: #FBFCFB;           /* inputs, code */
+  --task: #F1F6F1;            /* task and approval cards: a step under the surface */
+  --hover: rgba(28, 35, 32, .055);
+  --press: rgba(28, 35, 32, .1);
+  --line: #DFE6DF;            /* hairline edges, used sparingly */
+  --line-strong: #C3CCC2;     /* inputs, secondary buttons */
+  --switch-off: #7E8B83;      /* an off switch's track: 3:1 on the page, 3.5:1 under the knob */
+  --switch-knob: #FFFFFF;     /* an off switch's knob */
+  --text: #131B16;
+  --text-2: #435048;          /* sentences, hints */
+  --text-3: #626E67;          /* meta only; every text token clears 4.5:1 on every surface, both themes */
+  --accent: #2E6A54;          /* the one accent: a deep, quiet green */
+  --accent-hover: #255845;
+  --accent-press: #1E4A3A;
+  --accent-ink: #FFFFFF;      /* text on the accent */
+  --accent-soft: #E4EEE8;     /* the operator's own bubbles, selected rows */
+  --accent-soft-line: #C8DBD0;
+  --ok: #257046;
+  --warn: #8A5200;
+  --warn-soft: #FFF6E5;
+  --warn-line: #EBCB93;
+  --bad: #B3261E;
+  --bad-soft: #FCEEEC;
+  --bad-line: #EBB8B3;
+  --bad-ink: #FFFFFF;         /* text on --bad */
+  --sent: #ECF3F5;            /* a reply the bot sent on Telegram */
+  --sent-line: #CFDFE3;
+  --selection: #CFE2D7;
+  --scrim: rgba(20, 28, 24, .42);
+  --skel: #DDE5DD;            /* skeleton base */
+  --skel-hi: #EDF2ED;         /* skeleton shimmer band */
+  /* the terminal: the TUI's own dark surface in both themes */
+  --term-bg: #0E110F;
+  --term-fg: #D8DED9;
+  --term-cursor: #8FC4AB;
+  --term-selection: #2C4338;
+  /* type: the system face for reading, one display face for names and titles,
+     mono only for numbers and code. --face-display is picked at the design gate;
+     html[data-face] switches between the candidates until then. */
+  --face-sans: -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --face-mono: ui-monospace, "SF Mono", "Cascadia Mono", Consolas, Menlo, monospace;
+  --face-display: "Karrik", var(--face-sans);
+  --fs-xs: 12.5px;            /* meta, captions */
+  --fs-sm: 14px;              /* secondary UI */
+  --fs-ui: 15px;              /* controls, lists */
+  --fs-body: 16px;            /* chat text, inputs (16px: no iOS zoom on focus) */
+  --fs-lg: 18px;              /* sheet titles, row titles */
+  --fs-xl: 24px;              /* the bot name (display) */
+  --fs-2xl: 30px;             /* a screen title (display) */
+  --lh-body: 1.55;
+  --lh-ui: 1.4;
+  --lh-tight: 1.15;
+  /* spacing */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-5: 20px; --sp-6: 24px; --sp-8: 32px;
+  /* touch */
+  --tap: 44px;                /* every control's minimum height on a phone */
+  --nav-h: 64px;              /* the bottom bar */
+  /* radii: 4 chips and marks, 6 buttons and inputs, 12 cards and sheets; no pills */
+  --r-xs: 4px;
+  --r-btn: 6px;
+  --r-card: 12px;
+  /* elevation: tight and downward, never a halo */
+  --elev-1: 0 1px 2px rgba(28, 35, 32, .07);
+  --elev-2: 0 1px 2px rgba(28, 35, 32, .07), 0 8px 24px -12px rgba(28, 35, 32, .22);
+  /* motion: every transition is at most --t-med, eased */
+  --t-fast: 120ms;
+  --t-med: 200ms;
+  --motion-ease: cubic-bezier(.2, .7, .2, 1);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #141816; --side: #101412; --surface: #1E2521; --field: #171C19; --task: #1A211D;
+    --hover: rgba(228, 233, 229, .06); --press: rgba(228, 233, 229, .11);
+    --line: #2C3530; --line-strong: #46524A; --switch-off: #7C897F; --switch-knob: #EDF2EE;
+    --text: #EDF2EE; --text-2: #BAC5BE; --text-3: #929E96;
+    --sent: #1A2527; --sent-line: #2B3C3F;
+    --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-press: #7AB298; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
+    --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
+    --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;
+    --selection: #2C4338; --scrim: rgba(0, 0, 0, .55);
+    --skel: #222A25; --skel-hi: #2B342F;
+    --elev-1: 0 1px 0 rgba(0, 0, 0, .35);
+    --elev-2: 0 1px 0 rgba(0, 0, 0, .35), 0 10px 28px -12px rgba(0, 0, 0, .7);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #141816; --side: #101412; --surface: #1E2521; --field: #171C19; --task: #1A211D;
+  --hover: rgba(228, 233, 229, .06); --press: rgba(228, 233, 229, .11);
+  --line: #2C3530; --line-strong: #46524A; --switch-off: #7C897F; --switch-knob: #EDF2EE;
+  --text: #EDF2EE; --text-2: #BAC5BE; --text-3: #929E96;
+  --sent: #1A2527; --sent-line: #2B3C3F;
+  --accent: #8FC4AB; --accent-hover: #A5D2BD; --accent-press: #7AB298; --accent-ink: #0E1A14; --accent-soft: #1E2C25; --accent-soft-line: #2C4338;
+  --ok: #7FD19B; --warn: #E6B35C; --warn-soft: #241E14; --warn-line: #5A4623;
+  --bad: #F08A80; --bad-soft: #2A1715; --bad-line: #5C2F2A; --bad-ink: #1A0C0A;
+  --selection: #2C4338; --scrim: rgba(0, 0, 0, .55);
+  --skel: #222A25; --skel-hi: #2B342F;
+  --elev-1: 0 1px 0 rgba(0, 0, 0, .35);
+  --elev-2: 0 1px 0 rgba(0, 0, 0, .35), 0 10px 28px -12px rgba(0, 0, 0, .7);
+}
+/* display-face candidates for the design gate (step 12); the pick stays, the rest go */
+:root[data-face="apfel"] { --face-display: "Apfel Grotezk", var(--face-sans); }
+:root[data-face="ortica"] { --face-display: "Ortica Linear", var(--face-sans); }
