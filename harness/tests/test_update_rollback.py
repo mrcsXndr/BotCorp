@@ -211,6 +211,18 @@ def test_apply_of_an_older_tag_rolls_back(tmp_path):
 
 
 @needs_pwsh_git
+def test_a_successful_apply_removes_a_stale_failure_card(tmp_path):
+    work, rt = _repo(tmp_path)
+    _git(work, "checkout", "-q", "--detach", "v1.0.0")
+    _seed(rt, [{"tag": "v1.1.0", "status": "apply_requested"}])
+    card = rt / "state" / "update_failed_card.md"
+    card.write_text("Harness update v0.7.7 -> v0.8.0 failed\n", encoding="utf-8")
+    r = _ps(work, rt, "-Apply", "-Tag", "v1.1.0")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not card.exists()
+
+
+@needs_pwsh_git
 def test_apply_of_a_newer_tag_includes_the_one_between_and_records_where_it_came_from(tmp_path):
     work, rt = _repo(tmp_path)
     _git(work, "checkout", "-q", "--detach", "v1.0.0")

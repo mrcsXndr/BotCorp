@@ -301,6 +301,8 @@ if ($node) {
     }
 }
 [void](Set-ReleaseStatus -ForTag $to -Status 'applied' -Extra @{ applied_at = (Get-Date).ToString('o'); from = $from })
+# a card body left by an older failed apply (Write-Failed) is stale now
+Remove-Item -LiteralPath (Join-Path $StateDir 'update_failed_card.md') -Force -ErrorAction SilentlyContinue
 
 # Releases are cumulative: a checkout of <to> carries every older tag with it.
 #   upgrade:  a release between <from> and <to> still pending, requested, failed
