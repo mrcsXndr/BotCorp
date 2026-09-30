@@ -47,7 +47,9 @@ def _run(tmp_path, home, cfg, prompt="hello", modules="context_warn", roll=""):
     env = {k: v for k, v in os.environ.items() if not k.startswith("BOT_")}
     env.update({"CLAUDE_PLUGIN_ROOT": str(ASSEMBLY / "harness"), "BOT_HOME": str(home), "BOT_NAME": home.name,
                 "BOTCORP_HOME": str(tmp_path / "rt"), "CLAUDE_CONFIG_DIR": str(cfg), "BOT_TG_MUTE": "1",
-                "BOT_MODULES": modules, "PYTHONIOENCODING": "utf-8"})
+                "PYTHONIOENCODING": "utf-8"})
+    if modules is not None:
+        env["BOT_MODULES"] = modules
     if roll:
         env["BOT_ROLL_TOKENS"] = roll
     r = subprocess.run(["bash", str(HOOK)], input=json.dumps({"session_id": SID, "prompt": prompt}),
@@ -74,6 +76,13 @@ def test_above_90_percent_warns_once(tmp_path):
 def test_no_line(tmp_path, case):
     home, cfg = _box(tmp_path, ctx=450000 if case == "at-90" else 460000, status_sid="x" if case == "other-session" else SID)
     assert _run(tmp_path, home, cfg, modules="lessons" if case == "module-off" else "context_warn") == []
+
+
+@needs_bash
+def test_unset_bot_modules_is_off(tmp_path):
+    home, cfg = _box(tmp_path)
+    assert _run(tmp_path, home, cfg, modules=None) == []
+    assert not (home / ".claude" / ".context_warn").exists()
 
 
 @needs_bash

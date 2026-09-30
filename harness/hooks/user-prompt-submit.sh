@@ -78,7 +78,7 @@ if tg:
 warn = ""
 mods = os.environ.get("BOT_MODULES")
 sid = str(d.get("session_id") or "")
-if sid and (mods is None or {"context_warn", "*"} & set(mods.split(","))):
+if sid and mods is not None and {"context_warn", "*"} & set(mods.split(",")):
     try:
         cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
         s = json.load(open(os.path.join(cfg, "botcorp", "status.json"), encoding="utf-8"))
