@@ -190,7 +190,13 @@ function Invoke-AutomationJob {
     param([string]$JobFile)
     $job = Read-JsonFile -Path $JobFile
     if (-not $job) { Log "job file unreadable: $JobFile"; return }
-    $a = $job.automation; $name = "$($a.name)"; $runId = "$($job.run_id)"; $logPath = "$($job.log)"
+    # The job file is writable by any process of this user (D3): it names the
+    # run, bot.yaml says what runs. The command, prompt, timeout and secrets come
+    # from bot.yaml's entry of that name, and so does the account; no entry, no run.
+    $name = "$($job.automation.name)"; $runId = "$($job.run_id)"; $logPath = "$($job.log)"
+    $jcfg = Get-BotConfig -Bot $Bot
+    $a = $(if ($jcfg -and $name) { @($jcfg.automations | Where-Object { $_ -and "$($_.name)" -eq $name }) | Select-Object -First 1 })
+    if (-not $a) { Log "job $JobFile names automation '$name', which bot.yaml does not declare - refused"; return }
     if ($job.fake_now -and -not $env:BOTCORP_FAKE_NOW) { $env:BOTCORP_FAKE_NOW = "$($job.fake_now)" }
     $timeoutMin = Num $a.timeout_min 20
     if ($timeoutMin -le 0) { $timeoutMin = 20 }
@@ -202,7 +208,7 @@ function Invoke-AutomationJob {
     $envMap = @{
         BOT_HOME = $P.BotHome; BOT_NAME = $Bot; BOTCORP_HOME = $RtHome; BOTCORP_ROOT = $BotCorp
         CLAUDE_CONFIG_DIR = $P.ConfigDir; CLAUDE_PLUGIN_ROOT = $Harness; PYTHONIOENCODING = 'utf-8'
-        BOT_MODULES = (@($job.modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
+        BOT_MODULES = (@($jcfg._modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
         GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
     }
     # Python for the job: BOT_PYTHON, and its folder (+ Scripts) first on PATH so
@@ -226,7 +232,7 @@ function Invoke-AutomationJob {
     if ($secretNames.Count -gt 0) {
         try {
             . (Join-Path $PSScriptRoot 'vault.ps1')
-            $acct = "$($job.account)"   # the session's active account (Get-ActiveAccount: a failover's, else bot.yaml account): a job's oauth_token follows it
+            $acct = "$(Get-ActiveAccount -Bot $Bot -Cfg $jcfg -State (Read-BotState -Bot $Bot))"   # the session's active account (Get-ActiveAccount: a failover's, else bot.yaml account): a job's oauth_token follows it
             foreach ($k in $secretNames) {
                 $v = $null
                 if ("$k" -eq 'oauth_token' -and $acct) {
