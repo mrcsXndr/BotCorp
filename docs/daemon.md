@@ -768,13 +768,15 @@ every bot is at a safe point (its observed phase is `idle`, `blocked`, `down`
 or `stopped`; `working`, `starting`, `unknown` or not observed this tick
 defers): `update.ps1 -Apply -Tag <tag>`,
 bounded to 3 minutes: refuse on a dirty tree (status `failed`, reason `dirty
-tree`); `git checkout --detach <tag>`; `smoke.ps1`; pass -> `state/harness.json`,
-`harness/migrations/NNN-*.ps1` newer than the recorded schema, `node
+tree`); `git checkout --detach <tag>`; `smoke.ps1`; pass ->
+`harness/migrations/NNN-*.ps1` newer than the recorded schema (the first one
+that fails stops the apply), `state/harness.json`, `node
 daemon/sync.mjs <bot>` for every bot, status `applied`, the cockpit restarted
 onto the new code and `/healthz` polled; then every live bot restarts through
 the normal (idle-gated) restart path, resuming its conversation on the new
-harness. Fail -> `git checkout --detach <from>`, status `failed` with the
-smoke tail, a Ready card `HARNESS UPDATE FAILED <tag>` for every bot whose
+harness. Fail (smoke, or reason `migration failed`) -> `git checkout --detach
+<from>`, status `failed` with the smoke or migration tail, `harness.json`
+untouched, a Ready card `HARNESS UPDATE FAILED <tag>` for every bot whose
 `board` module is on, else a `HUMAN:` line in `<BotHome>/memory/metrics/alerts.log`.
 `launch.ps1` no longer applies anything.
 

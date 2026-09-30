@@ -45,8 +45,10 @@ every bot to regenerate `settings.json` from the now-current `bot.yaml`.
 
 `update.ps1 -Apply` runs, in name order, every migration numbered above the
 schema recorded in `~/.botcorp/state/harness.json`. There is no upper bound:
-a migration numbered above the new `botYamlSchema` runs too. A migration's
-exit code is only logged: a failure does not stop the update, and the apply
-still stamps `max(old schema, botYamlSchema)` into `harness.json`, so a
-failed migration is NOT retried by the next apply. Its exit code is in the
-daemon log (`update: migration <name>: exit=<n>`).
+a migration numbered above the new `botYamlSchema` runs too. A migration that
+exits non-zero (or runs out of the budget) fails the apply: no later
+migration runs, the checkout goes back to the previous release, the release
+is marked `failed` (reason `migration failed`, the migration's name, exit and
+output tail in `fail_detail`) and `harness.json` keeps its old schema, so the
+next apply runs that migration again. The migrations that passed before it
+are not undone, which is why each must be idempotent.

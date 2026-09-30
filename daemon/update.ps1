@@ -265,7 +265,7 @@ $toSha = (Invoke-Git @('rev-parse', 'HEAD') 20).out
 $schemaNew = 1; try { $bj = Read-JsonFile -Path (Join-Path $BotCorp 'botcorp.json'); if ($bj -and $bj.botYamlSchema) { $schemaNew = [int]$bj.botYamlSchema } } catch {}
 $prev = Read-JsonFile -Path $harnessFile
 $schemaOld = 0; try { if ($prev -and $null -ne $prev.schema) { $schemaOld = [int]$prev.schema } } catch {}
-$ran = @()
+$ran = @(); $migFail = ''
 try {
     $migDir = Join-Path $Harness 'migrations'
     if (Test-Path $migDir) {
@@ -273,12 +273,25 @@ try {
             if ($m.Name -notmatch '^(\d+)') { continue }
             $n = [int]$matches[1]
             if ($n -le $schemaOld) { continue }
-            $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $m.FullName) -TimeoutSec (Remaining 15) -Label "migration $($m.Name)" -Env @{ BOTCORP_ROOT = $BotCorp; BOTCORP_HOME = $RtHome } -WorkingDirectory $BotCorp
+            $r = Invoke-Bounded -Exe (Resolve-PwshExe) -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $m.FullName) -TimeoutSec (Remaining 15) -Label "migration $($m.Name)" -Capture -Env @{ BOTCORP_ROOT = $BotCorp; BOTCORP_HOME = $RtHome } -WorkingDirectory $BotCorp
             Log "migration $($m.Name): exit=$($r.ExitCode)"
+            if ($r.ExitCode -ne 0) {
+                $migFail = "$($m.Name): $(if ($r.Killed) { 'timed out' } else { "exit=$($r.ExitCode)" })`n" + ((($r.Output -split "`n") | Where-Object { $_.Trim() } | Select-Object -Last 12) -join "`n")
+                break
+            }
             $ran += $m.Name
         }
     }
-} catch { Log "migrations: swallowed exception (fail-open): $($_.Exception.Message)" }
+} catch { $migFail = "migrations threw: $($_.Exception.Message)" }
+# A failed migration fails the apply: back to <from>, schema not stamped, so
+# the next apply runs it again (migrations are idempotent; the ones that
+# passed are not undone).
+if ($migFail) {
+    $back = Invoke-Git @('checkout', '--quiet', '--detach', $(if ($fromSha) { $fromSha } else { $from })) 60
+    Log "rolled back to $from after a failed migration (checkout exit=$($back.code))"
+    Write-Failed 'migration failed' $migFail
+    exit 1
+}
 [void](Write-JsonFile -Path $harnessFile -Object ([ordered]@{ tag = $to; sha = $toSha; channel = 'stable'; applied_at = (Get-Date).ToString('o'); schema = [Math]::Max($schemaOld, $schemaNew); migrations = $ran }))
 $node = Resolve-Node
 if ($node) {

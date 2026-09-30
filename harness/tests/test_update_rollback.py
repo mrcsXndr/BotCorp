@@ -145,8 +145,9 @@ SECTION = {"v1.0.0": "First one.\n\n- **Base.** The start.\n",
            "v1.2.0": "The newest release, with an → arrow.\n\n- **Top.** Adds the top.\n- **Also.** And more.\n"}
 
 
-def _repo(tmp_path: Path, failing_smoke: tuple = ()) -> tuple[Path, Path]:
-    """-> (checkout, runtime). The checkout's daemon/ is this repo's update.ps1 and its helpers."""
+def _repo(tmp_path: Path, failing_smoke: tuple = (), migrations: dict | None = None) -> tuple[Path, Path]:
+    """-> (checkout, runtime). The checkout's daemon/ is this repo's update.ps1 and its helpers.
+    migrations: {tag: {file name: script}} added to harness/migrations/ from that tag on."""
     src = tmp_path / "src"
     (src / "daemon").mkdir(parents=True)
     (src / "core").mkdir()
@@ -161,6 +162,9 @@ def _repo(tmp_path: Path, failing_smoke: tuple = ()) -> tuple[Path, Path]:
         (src / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
         (src / "botcorp.json").write_text(json.dumps({"version": tag[1:], "botYamlSchema": 1}), encoding="utf-8")
         (src / "daemon" / "smoke.ps1").write_text(f"Write-Output 'smoke {tag}'\nexit {1 if tag in failing_smoke else 0}\n", encoding="utf-8")
+        for name, script in (migrations or {}).get(tag, {}).items():
+            (src / "harness" / "migrations").mkdir(parents=True, exist_ok=True)
+            (src / "harness" / "migrations" / name).write_text(script, encoding="utf-8")
         _git(src, "add", "-A")
         _git(src, "commit", "-q", "-m", tag)
         _git(src, "tag", tag)
@@ -237,6 +241,27 @@ def test_a_failed_smoke_on_a_roll_back_goes_back(tmp_path):
     assert u["v1.0.0"]["status"] == "failed" and u["v1.0.0"]["fail_reason"] == "smoke failed"
     assert u["v1.2.0"]["status"] == "applied"
     assert not (rt / "state" / "harness.json").exists()
+
+
+@needs_pwsh_git
+def test_a_failed_migration_fails_the_apply_and_goes_back(tmp_path):
+    # Code review 2026-09-30, D14: a migration's non-zero exit used to be logged
+    # and the release marked applied with the schema stamped past it, so it never ran again.
+    ok = "Set-Content -Path (Join-Path $env:BOTCORP_HOME 'mig-001.ran') -Value 1\nexit 0\n"
+    bad = "Set-Content -Path (Join-Path $env:BOTCORP_HOME 'mig-002.ran') -Value 1\nexit 3\n"
+    after = "Set-Content -Path (Join-Path $env:BOTCORP_HOME 'mig-003.ran') -Value 1\nexit 0\n"
+    work, rt = _repo(tmp_path, migrations={"v1.2.0": {"001-ok.ps1": ok, "002-bad.ps1": bad, "003-after.ps1": after}})
+    _git(work, "checkout", "-q", "--detach", "v1.1.0")
+    _seed(rt, [{"tag": "v1.1.0", "status": "applied"}, {"tag": "v1.2.0", "status": "apply_requested"}])
+    r = _ps(work, rt, "-Apply", "-Tag", "v1.2.0")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert _head_tag(work) == "v1.1.0"
+    u = _updates(rt)
+    assert u["v1.2.0"]["status"] == "failed" and u["v1.2.0"]["fail_reason"] == "migration failed", u["v1.2.0"]
+    assert "002-bad.ps1" in u["v1.2.0"]["fail_detail"] and "exit=3" in u["v1.2.0"]["fail_detail"]
+    assert (rt / "mig-001.ran").exists() and (rt / "mig-002.ran").exists()
+    assert not (rt / "mig-003.ran").exists(), "a migration after the failed one ran"
+    assert not (rt / "state" / "harness.json").exists(), "the schema was stamped past a failed migration"
 
 
 @needs_pwsh_git
