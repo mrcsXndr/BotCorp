@@ -312,11 +312,12 @@ def cmd_read(session_id: str) -> int:
     return 0
 
 
-def cmd_distill(since: str) -> int:
+def cmd_distill(since: str, structural_only: bool = False) -> int:
     """Cross-session distill — glob session timelines whose mtime >= since,
     concatenate, send to LLM, write memory/timelines/<since>.md.
 
-    Phase 2: LLM-powered. Falls back to concatenation on error.
+    Phase 2: LLM-powered. Falls back to concatenation on error; structural_only
+    (the PreCompact hook) writes the concatenation without trying the LLM.
     """
     TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
     target = TIMELINES_DIR / f"{since}.md"
@@ -348,6 +349,8 @@ Apply the 5-band credibility rubric. Deduplicate.
 {bundled}
 """
     try:
+        if structural_only:
+            raise RuntimeError("--structural")
         if not _claude_auth_available():
             raise RuntimeError("no Claude credentials in this env")
         result = subprocess.run(
@@ -370,7 +373,8 @@ Apply the 5-band credibility rubric. Deduplicate.
             print(json.dumps({"status": "distilled", "path": str(target), "sessions": len(timelines)}))
             return 0
     except Exception as e:
-        print(f"WARN: cross-session distill failed: {e!r}; writing concatenated fallback", file=sys.stderr)
+        if not structural_only:
+            print(f"WARN: cross-session distill failed: {e!r}; writing concatenated fallback", file=sys.stderr)
 
     target.write_text(f"# Cross-session timelines for {since} (concatenated fallback)\n\n{bundled}\n", encoding="utf-8")
     print(json.dumps({"status": "concatenated-fallback", "path": str(target), "sessions": len(timelines)}))
@@ -384,7 +388,7 @@ Usage:
   timeline.py build <session_id>                # LLM-distilled (default, Opus)
   timeline.py build <session_id> --structural   # fast structural extraction
   timeline.py read <session_id>
-  timeline.py distill <since>                   # cross-session, e.g. "2026-W18"
+  timeline.py distill <since> [--structural]    # cross-session, e.g. "2026-W18"; --structural: concatenate, no LLM
   timeline.py summarize-stale [<session_id>]    # distill only a missing/structural timeline (the daemon job)
 
 Env:
@@ -409,7 +413,7 @@ def main(argv: list[str]) -> int:
     if cmd == "summarize-stale":
         return cmd_summarize_stale(resolve_session_id(argv[2] if len(argv) >= 3 else None))
     if cmd == "distill" and len(argv) >= 3:
-        return cmd_distill(argv[2])
+        return cmd_distill(argv[2], structural_only="--structural" in argv[3:])
     print(USAGE, file=sys.stderr)
     return 2
 

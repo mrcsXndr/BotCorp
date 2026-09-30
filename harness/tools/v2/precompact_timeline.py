@@ -13,25 +13,21 @@ rebuilt when someone ran `timeline.py build` by hand — which, in a 35-day
 pre-compaction extraction) and the OpenClaw notes (#1, structured summarization
 at PreCompact), the principled trigger is the instant BEFORE compaction.
 
-The 15s-hook constraint
------------------------
-The PreCompact hook is time-boxed (15s in settings.json). The LLM distill
-(`timeline.py build`, default Opus) can take up to 180s — it CANNOT run
-synchronously in the hook or it gets killed mid-write. So this script does a
-two-tier rebuild:
+No LLM here
+-----------
+The PreCompact hook is time-boxed (15s in hooks.json), and a hook gets no
+Claude credentials (Claude Code strips the OAuth token from its env), so an
+LLM distill spawned from it spends a process and falls back. The narrative
+upgrade belongs to the `timeline_summary` module's daemon job
+(`timeline.py summarize-stale`, with the vault token). This script:
 
   1. SYNCHRONOUS structural build (zero-LLM, <1s) — guarantees a FRESH timeline
      exists at compaction, every time. Captures the current journal state into
      timeline.md as bucketed sections.
-  2. DETACHED LLM distill (non-blocking) — spawns a hidden, orphaned process
-     that upgrades timeline.md to the goal->match->resolution narrative shortly
-     after, without blocking compaction. If it dies, the structural one stands.
-  3. DETACHED weekly promotion (non-blocking, gated to once / WEEKLY_GATE_H) —
-     `timeline.py distill <ISO-week>` rolls per-session timelines into
-     memory/timelines/<week>.md so the narrative survives the session.
-
-No auto-critic: distillation is one cheap summarization call (the existing
-timeline path); credibility grading stays the manual/gated /critic.
+  2. DETACHED weekly promotion (non-blocking, gated to once / WEEKLY_GATE_H) —
+     `timeline.py distill <ISO-week> --structural` rolls per-session timelines
+     into memory/timelines/<week>.md (concatenated, no LLM) so the narrative
+     survives the session.
 
 STRICTLY FAIL-OPEN. Any error -> print a status line and exit 0. Must never
 block or fail compaction.
@@ -117,8 +113,7 @@ def _spawn_detached(args: list[str]) -> bool:
     exits this hook normally (it does NOT terminate the claude tree), so a
     detached child outlives us. Returns True if the launcher spawned (NOT
     whether the async work succeeded). Child gets PYTHONIOENCODING=utf-8 so
-    timeline.py's Windows output never chokes; it inherits PATH so its inner
-    `claude --print` resolves (falling back to structural if not)."""
+    timeline.py's Windows output never chokes."""
     try:
         kwargs: dict = dict(
             stdout=subprocess.DEVNULL,
@@ -174,7 +169,6 @@ def run(session_id: str, dry_run: bool) -> dict:
         result.update({
             "status": "dry-run",
             "would_structural_build": True,
-            "would_spawn_distill": True,
             "would_spawn_weekly": weekly_open,
             "would_backfill": _missing_prior_weeks(now) if weekly_open else [],
         })
@@ -192,21 +186,16 @@ def run(session_id: str, dry_run: bool) -> dict:
     except Exception as e:
         result["structural"] = f"error:{e!r}"
 
-    # --- tier 2: detached LLM distill (non-blocking narrative upgrade) -------
-    result["distill_spawned"] = _spawn_detached(
-        [PYTHON, str(TIMELINE_PY), "build", session_id]
-    )
-
-    # --- tier 3: detached weekly promotion (gated) ---------------------------
+    # --- tier 2: detached weekly promotion (gated, no LLM) --------------------
     if weekly_open:
         result["weekly_spawned"] = _spawn_detached(
-            [PYTHON, str(TIMELINE_PY), "distill", week]
+            [PYTHON, str(TIMELINE_PY), "distill", week, "--structural"]
         )
         # Backfill any earlier week that never got promoted. Without this a week
         # with no gate-open PreCompact is lost forever (the 2026-W33 hole).
         backfilled = [
             wk for wk in _missing_prior_weeks(now)
-            if _spawn_detached([PYTHON, str(TIMELINE_PY), "distill", wk])
+            if _spawn_detached([PYTHON, str(TIMELINE_PY), "distill", wk, "--structural"])
         ]
         result["weekly_backfilled"] = backfilled
         if result["weekly_spawned"] or backfilled:
