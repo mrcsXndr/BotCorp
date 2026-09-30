@@ -3,6 +3,36 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.5
+
+QA pack A: faster hooks, a Chrome lockout guard, usage and quiet-hours
+controls for Telegram, and module wiring that now does what bot.yaml says.
+
+- **Fixed (browser):** `ab.sh` launches Chrome on a seeded persistent profile
+  with `--auth-server-allowlist=none.invalid`, so Chrome never tries a Windows
+  logon that could lock the account. If the seed fails, Chrome is not
+  launched.
+- **Faster (hooks):** hooks start Git's `usr/bin/bash` directly, skipping the
+  launcher. Session-start runs in one Python process (was 12), and
+  user-prompt-submit in one per prompt (was 5). Measured on the host:
+  session-start 21.6 s to 0.6 s, a prompt 5.6 s to 0.5 s, a Telegram
+  prompt 16.3 s to 1.0 s.
+- **Added (usage):** `usage_monitor.py warn` sends one alert per limit window
+  at 98%, and `/usage` on Telegram shows the 5h and 7d usage. The daemon tick
+  does not run `warn` yet.
+- **Changed (journal):** entries are stamped with the date and time. Recall,
+  the timeline, precompact and session-start read both formats.
+- **Faster (statusline):** the statusline and the Telegram footer share a
+  30 s git-status cache.
+- **Fixed (modules):** `harness.agents` as a list denies the harness agents
+  that are not in it. The quota hooks (stop-failure, notification) run only
+  with `usage_resume`. `hooks_disable` knows the guard hooks. The inert
+  `remote_control` module is gone. The engine contract documents the modules
+  and the override order.
+- **Added (Telegram):** `integrations.telegram.quiet: 'HH:MM-HH:MM'`. Inside
+  that window, a scheduled send (`BOT_TG_SCHEDULED=1`) is written to
+  alerts.log instead of being sent. CRITICAL alerts are still sent.
+
 ## v0.9.4
 
 Fixes from the 2026-09-30 code review: the cockpit, the CLI, and the daemon
