@@ -9,9 +9,11 @@ passes --no-session-persistence.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import types
+from datetime import datetime, timezone
 
 import pytest
 
@@ -73,12 +75,36 @@ def test_a_login_in_the_config_dir_counts_as_credentials(tmp_path, monkeypatch):
     assert timeline._claude_auth_available() is True
 
 
+def _age_into(path, day):
+    t = datetime(*day, 12, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(path, (t, t))
+
+
 def test_cross_session_distill_without_credentials_concatenates(session, monkeypatch):
     (session / "timeline.md").write_text("# t\n", encoding="utf-8")
+    _age_into(session / "timeline.md", (2026, 9, 23))   # in 2026-W39
     calls = _spy(monkeypatch)
     assert timeline.cmd_distill("2026-W39") == 0
     assert calls == []
     assert "concatenated fallback" in (timeline.TIMELINES_DIR / "2026-W39.md").read_text(encoding="utf-8")
+
+
+def test_a_week_label_bundles_only_the_sessions_of_that_week(session, monkeypatch):
+    # QA r4 N1: the weekly roll-up sent every session timeline ever
+    sessions = session.parent
+    for sid, day in (("in-week", (2026, 9, 23)), ("week-before", (2026, 9, 16)), ("journal-in-week", (2026, 9, 16))):
+        (sessions / sid).mkdir()
+        (sessions / sid / "timeline.md").write_text(f"# {sid}\n", encoding="utf-8")
+        _age_into(sessions / sid / "timeline.md", day)
+    (sessions / "journal-in-week" / "journal.md").write_text("## Actions\n", encoding="utf-8")
+    _age_into(sessions / "journal-in-week" / "journal.md", (2026, 9, 27))   # Sunday of W39
+    (session / "timeline.md").write_text("# now\n", encoding="utf-8")        # written today, not in W39
+    _spy(monkeypatch)
+    assert timeline.cmd_distill("2026-W39", structural_only=True) == 0
+    out = (timeline.TIMELINES_DIR / "2026-W39.md").read_text(encoding="utf-8")
+    assert "=== Session in-week ===" in out and "=== Session journal-in-week ===" in out
+    assert "week-before" not in out
+    assert "sess-1" not in out
 
 
 def test_the_installed_claude_knows_the_flag():

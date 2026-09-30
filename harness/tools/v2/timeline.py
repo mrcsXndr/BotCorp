@@ -24,7 +24,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -337,18 +337,36 @@ def cmd_read(session_id: str) -> int:
     return 0
 
 
+def _week_bounds(label: str) -> tuple[float, float] | None:
+    """[start, end) epoch seconds of an ISO-week label like 2026-W40 (UTC); None for any other label."""
+    m = re.fullmatch(r"(\d{4})-W(\d{2})", label)
+    if not m:
+        return None
+    try:
+        start = datetime.fromisocalendar(int(m.group(1)), int(m.group(2)), 1).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+    return start.timestamp(), (start + timedelta(weeks=1)).timestamp()
+
+
 def cmd_distill(since: str, structural_only: bool = False) -> int:
-    """Cross-session distill — glob session timelines whose mtime >= since,
-    concatenate, send to LLM, write memory/timelines/<since>.md.
+    """Cross-session distill — concatenate the session timelines of period
+    `since`, send to LLM, write memory/timelines/<since>.md. An ISO-week label
+    (2026-W40) keeps only the sessions whose timeline or journal was written
+    in that week (UTC); any other label takes every session.
 
     Phase 2: LLM-powered. Falls back to concatenation on error; structural_only
     (the PreCompact hook) writes the concatenation without trying the LLM.
     """
     TIMELINES_DIR.mkdir(parents=True, exist_ok=True)
     target = TIMELINES_DIR / f"{since}.md"
+    week = _week_bounds(since)
 
     timelines: list[tuple[str, str]] = []
     for sd in sorted(SESSIONS_DIR.glob("*/timeline.md")):
+        if week and not any(week[0] <= p.stat().st_mtime < week[1]
+                            for p in (sd, sd.parent / "journal.md") if p.exists()):
+            continue
         try:
             timelines.append((sd.parent.name, sd.read_text(encoding="utf-8")))
         except Exception:
