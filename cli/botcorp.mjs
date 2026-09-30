@@ -1311,7 +1311,9 @@ function approvalDiff(cfg, e) {
 }
 
 // `approvals [--json]`: every bot's pending entries (read-only, so a bot may run it).
-function cmdApprovals({ flags }) {
+// `explain`: the entry in plain words (cli/explain.mjs), null if it could not be read.
+async function cmdApprovals({ flags }) {
+  const { explainApproval } = await import('./explain.mjs');
   const rows = [];
   for (const bot of listBots()) {
     const q = readApprovals(bot);
@@ -1319,8 +1321,10 @@ function cmdApprovals({ flags }) {
     let cfg = null;
     try { cfg = loadBotYaml(botYamlPath(bot)); } catch {}
     for (const e of q) {
+      let explain = null;
+      try { explain = explainApproval(bot, cfg, e); } catch {}
       rows.push({ id: e.id, bot, requested_by: e.requested_by, at: e.ts, op: e.op || 'set', path: e.path,
-        value: short(e.value), diff: approvalDiff(cfg, e), why: e.reason || 'widening' });
+        value: short(e.value), diff: approvalDiff(cfg, e), why: e.reason || 'widening', explain });
     }
   }
   if (flags.json) { outJson(rows); return 0; }
