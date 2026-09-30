@@ -568,7 +568,13 @@ async function cmdChat({ flags }) {
     else cwd = ans;
   }
   if (cwd && !fs.existsSync(cwd)) fail(`chat: folder not found: ${cwd}`);
-  const args = ['-Account', account, ...(generic ? ['-Generic'] : ['-Cwd', path.resolve(cwd)]), ...(flags['dry-run'] ? ['-DryRun'] : [])];
+  // A tab in a bot's own folder runs as its bot.yaml `permissions` says, like
+  // the bot's session; generic and any other folder stay Manual.
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const bot = generic ? null : listBots().find((b) => same(path.resolve(botHome(b)), path.resolve(cwd)));
+  let bypass = false;
+  if (bot) { try { bypass = loadBotYaml(botYamlPath(bot)).permissions === 'bypass'; } catch {} }
+  const args = ['-Account', account, ...(generic ? ['-Generic'] : ['-Cwd', path.resolve(cwd)]), ...(bypass ? ['-Bypass'] : []), ...(flags['dry-run'] ? ['-DryRun'] : [])];
   const r = runPwshFile(chatPs, args, { timeoutMs: 60_000 });
   return echoPs(r);
 }

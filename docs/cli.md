@@ -417,6 +417,13 @@ Generic mode's cwd is the account home. It never inherits the machine-wide
 HKCU `CLAUDE_CODE_OAUTH_TOKEN`. `--dry-run` prints the window command and the
 env with the token masked, launching nothing.
 
+Permissions: a `--cwd` that is a bot's own folder, whose `bot.yaml` says
+`permissions: bypass`, opens in bypass (`--dangerously-skip-permissions`, and
+`skipDangerousModePermissionPrompt` + `permissions.defaultMode:
+bypassPermissions` merged into the account's `settings.json`). Every other tab,
+generic included, runs `--permission-mode manual` and shows `[manual]` in its
+title.
+
 ### `attach <bot> [--elevate]`
 
 Pulls a bot's background session up into a Windows Terminal tab:

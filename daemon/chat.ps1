@@ -8,6 +8,13 @@
 #   chat.ps1 -Account <id> -Generic             # generic mode: the operator's plain Claude, cwd = the account's home
 #   chat.ps1 -Account <id> ... -DryRun          # print the window command + env (token masked), launch nothing
 #   chat.ps1 -Account <id> ... -InTab           # INSIDE the tab: vault -> env, then `claude` (what the tab runs)
+#   chat.ps1 -Account <id> -Cwd <bot> -Bypass   # a bypass bot's folder (the CLI decides): --dangerously-skip-permissions
+#
+# Permissions: -Bypass passes --dangerously-skip-permissions and puts the keys
+# sync gives a bypass bot (skipDangerousModePermissionPrompt, defaultMode
+# bypassPermissions) in the account's settings.json. Every other tab passes
+# --permission-mode manual, so that shared settings file never makes a generic
+# tab bypass, and says "manual" in its title.
 #
 # Isolation: CLAUDE_CONFIG_DIR = <BOTCORP_HOME>/accounts/<id>/claude (per account,
 # so logins and histories never mix, and never the real ~/.claude), seeded on
@@ -24,6 +31,7 @@ param(
     [switch]$Generic,
     [switch]$InTab,
     [switch]$DryRun,
+    [switch]$Bypass,
     [string]$Title
 )
 
@@ -41,6 +49,7 @@ if ([System.IO.Path]::GetFullPath($configDir).TrimEnd('\') -ieq [System.IO.Path]
 
 if ($Generic -and $Cwd) { Write-Error 'chat: -Generic or -Cwd, not both'; exit 1 }
 if (-not $Generic -and -not $Cwd) { Write-Error 'chat: -Cwd <folder> or -Generic required'; exit 1 }
+if ($Generic -and $Bypass) { Write-Error 'chat: a generic tab stays Manual; -Bypass is for a bot folder'; exit 1 }
 $workDir = if ($Generic) { $accHome } else { [System.IO.Path]::GetFullPath($Cwd) }
 if (-not (Test-Path $workDir -PathType Container)) { Write-Error "chat: workspace folder not found: $workDir"; exit 1 }
 
@@ -89,6 +98,23 @@ function Initialize-AccountConfigDir {
             $seeded += 'settings.json (from ~/.claude, minus plugins/hooks/env)'
         } catch { $seeded += "settings.json NOT seeded ($($_.Exception.Message))" }
     }
+    if ($Bypass) {
+        # Without skipDangerousModePermissionPrompt the tab stops on the bypass
+        # disclaimer. A file that does not parse is left alone.
+        try {
+            $s = $null
+            if (Test-Path $accSettings) { $raw = Get-Content $accSettings -Raw; if ($raw) { $s = $raw | ConvertFrom-Json } }
+            if (-not $s) { $s = [pscustomobject]@{} }
+            $perm = if (($s.PSObject.Properties.Name -contains 'permissions') -and $s.permissions) { $s.permissions } else { [pscustomobject]@{} }
+            if (-not ($s.skipDangerousModePermissionPrompt -eq $true -and $perm.defaultMode -eq 'bypassPermissions')) {
+                $s | Add-Member -Force -NotePropertyName skipDangerousModePermissionPrompt -NotePropertyValue $true
+                $perm | Add-Member -Force -NotePropertyName defaultMode -NotePropertyValue 'bypassPermissions'
+                $s | Add-Member -Force -NotePropertyName permissions -NotePropertyValue $perm
+                [System.IO.File]::WriteAllText($accSettings, (($s | ConvertTo-Json -Depth 20) + "`n"))
+                $seeded += 'settings.json (bypass keys)'
+            }
+        } catch { $seeded += "settings.json bypass keys NOT written ($($_.Exception.Message))" }
+    }
     $cj = Join-Path $configDir '.claude.json'
     $key = $workDir.Replace('\', '/')
     $obj = $null
@@ -119,7 +145,9 @@ function Update-Recent {
 }
 
 $exe = Resolve-ClaudeExe
-$tabTitle = if ($Title) { $Title } elseif ($Generic) { "claude ($Account)" } else { "claude ($Account) $(Split-Path $workDir -Leaf)" }
+$permArgs = @(if ($Bypass) { '--dangerously-skip-permissions' } else { '--permission-mode', 'manual' })
+$permLabel = if ($Bypass) { 'bypass' } else { 'manual' }
+$tabTitle = if ($Title) { $Title } elseif ($Generic) { "claude ($Account) [$permLabel]" } else { "claude ($Account) $(Split-Path $workDir -Leaf) [$permLabel]" }
 
 if ($InTab) {
     # --- inside the tab: vault -> env, then claude (this process becomes the shell claude runs in)
@@ -135,8 +163,9 @@ if ($InTab) {
     Update-Recent
     $host.UI.RawUI.WindowTitle = $tabTitle
     Write-Host "botcorp chat: account $Account  token $(Mask $env:CLAUDE_CODE_OAUTH_TOKEN)  config $configDir$(if ($seeded.Count) { "  seeded: $($seeded -join '; ')" })" -ForegroundColor DarkGray
+    Write-Host "botcorp chat: permissions $permLabel$(if ($Bypass) { ' (the bot''s bot.yaml)' } else { ' - each tool call asks for approval' })" -ForegroundColor DarkGray
     Set-Location $workDir
-    & $exe
+    & $exe @permArgs
     exit $LASTEXITCODE
 }
 
@@ -144,6 +173,7 @@ if ($InTab) {
 $pwsh = Resolve-PwshExe
 $tabArgs = @('-NoExit', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath, '-Account', $Account, '-InTab')
 if ($Generic) { $tabArgs += '-Generic' } else { $tabArgs += @('-Cwd', $workDir) }
+if ($Bypass) { $tabArgs += '-Bypass' }
 if ($Title) { $tabArgs += @('-Title', $Title) }
 $wtCmd = Get-Command wt.exe -ErrorAction SilentlyContinue
 $wtAlias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\wt.exe'
@@ -159,7 +189,7 @@ if ($wt) {
 }
 if ($DryRun) {
     Write-Output "chat dry-run: $cmdLine"
-    Write-Output "chat dry-run: env in the tab = CLAUDE_CONFIG_DIR=$configDir CLAUDE_CODE_OAUTH_TOKEN=<from account vault, never printed> cwd=$workDir claude=$exe"
+    Write-Output "chat dry-run: env in the tab = CLAUDE_CONFIG_DIR=$configDir CLAUDE_CODE_OAUTH_TOKEN=<from account vault, never printed> cwd=$workDir claude=$exe $($permArgs -join ' ') (permissions $permLabel)"
     exit 0
 }
 if ($wt) { Start-Process -FilePath $wt -ArgumentList $wtArgs | Out-Null }

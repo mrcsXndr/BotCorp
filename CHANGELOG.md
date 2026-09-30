@@ -46,6 +46,15 @@ versions follow SemVer.
   on. The daemon's `--resume-check` also scans the transcript for the limit
   banner and records a block no hook recorded, with the same dedupe and
   alert. The hook's `events.jsonl` row now keeps the error and the message.
+- **Fixed: a chat tab in a bypass bot's folder no longer asks for every
+  Bash call.** `botcorp chat` (and the cockpit's New chat) started plain
+  `claude` in an account config dir with no settings, so the tab ran in
+  Manual mode. A tab whose folder is a bot with `permissions: bypass` now
+  passes `--dangerously-skip-permissions` and merges
+  `skipDangerousModePermissionPrompt` and `permissions.defaultMode:
+  bypassPermissions` into the account's `settings.json`. Generic tabs and
+  other folders pass `--permission-mode manual` and show `[manual]` in the
+  tab title.
 
 ## v0.8.4
 
