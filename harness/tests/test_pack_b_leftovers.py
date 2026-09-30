@@ -5,6 +5,9 @@ Locked behaviour:
   its built bundle and docs/cockpit.md, like everywhere else since pack A;
 - the session-summarize Stop hook runs only with module session_summarize
   (on by default): the exact hooks.json command writes no snapshot without it;
+- the Tools tab's hook list (cli/tools.mjs toolInventory) is hooks.json's
+  run.mjs names plus the tool guards, the same list harness.hooks_disable
+  accepts, each with a purpose read from the script it runs.
 """
 from __future__ import annotations
 
@@ -46,3 +49,29 @@ def test_session_summarize_runs_only_with_its_module(tmp_path):
         assert r.returncode == 0, r.stderr
         snaps = list((home / "memory" / "sessions").glob("*.md")) if (home / "memory" / "sessions").exists() else []
         assert bool(snaps) is want, (mods, snaps, r.stderr)
+
+
+@needs_node
+def test_the_tools_tab_lists_the_hooks_hooks_json_runs(tmp_path):
+    home = tmp_path / "bots" / "t"
+    home.mkdir(parents=True)
+    (home / "bot.yaml").write_text("name: t\nharness:\n  hooks_disable: [cost-meter]\n", encoding="utf-8")
+    js = (
+        "const [tools, botyaml, home, root] = process.argv.slice(1);"
+        "const { toolInventory } = await import(tools); const { loadBotYaml, hookNames } = await import(botyaml);"
+        "const inv = toolInventory({ botHome: home, cfg: loadBotYaml(home + '/bot.yaml'), botcorpRoot: root });"
+        "const s = inv.groups.find((g) => g.source === 'harness').sections.find((x) => x.kind === 'hook');"
+        "console.log(JSON.stringify({ names: hookNames(), hooks: s.items }));"
+    )
+    env = {**os.environ, "BOTCORP_HOME": str(tmp_path / "rt"), "BOTCORP_BOTS_DIR": str(tmp_path / "bots")}
+    r = subprocess.run(["node", "--input-type=module", "-e", js, (ASSEMBLY / "cli" / "tools.mjs").as_uri(),
+                        (ASSEMBLY / "daemon" / "botyaml.mjs").as_uri(), str(home), str(ASSEMBLY)],
+                       capture_output=True, text=True, timeout=60, env=env, cwd=str(ASSEMBLY))
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    hooks = {h["name"]: h for h in out["hooks"]}
+    assert sorted(hooks) == out["names"]
+    assert {"session-summarize", "cost-meter", "precompact-extract", "precompact-timeline"} <= set(hooks)
+    assert [n for n, h in hooks.items() if not h["description"]] == []
+    assert hooks["cost-meter"]["on"] is False and hooks["cost-meter"]["toggle"] == {"list": "harness.hooks_disable", "item": "cost-meter"}
+    assert hooks["vault-guard"]["toggle"] is None and hooks["vault-guard"]["locked"]

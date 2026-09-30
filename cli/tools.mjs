@@ -12,6 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { isShim } from '../daemon/sync.mjs';
+import { GUARD_HOOKS } from '../daemon/botyaml.mjs';
 
 export const TOOL_EXTS = ['.py', '.mjs', '.js', '.cjs', '.sh', '.ps1'];
 export const TOOL_ROOTS = ['tools', 'scripts'];
@@ -380,8 +381,11 @@ export function frontmatter(text) {
   }
   return out;
 }
-// The first comment line under a script's shebang: what a hook is for.
+// What a hook is for: the first comment line under a shell script's shebang, or
+// the first paragraph of a Python script's docstring.
 function scriptPurpose(text) {
+  const doc = /^(?:#.*\r?\n)*\s*"""([\s\S]*?)"""/.exec(String(text || ''));
+  if (doc) return clip(doc[1].trim().split(/\r?\n\s*\r?\n/)[0].replace(/^[\w.-]+\.py\s*[-—:]\s*/, ''), 160);
   const c = String(text || '').split(/\r?\n/).filter((l) => /^#(?!!)/.test(l)).map((l) => l.replace(/^#\s?/, '')).filter((l) => l.trim());
   return clip((c[0] || '').replace(/^[\w.-]+\.sh\s*[-—:]\s*/, ''), 160);
 }
@@ -431,9 +435,17 @@ export function toolInventory({ botHome, cfg, botcorpRoot, scan = null }) {
   const commands = listDir(path.join(H, 'commands'), (d) => d.isFile() && d.name.endsWith('.md')).map((f) => item('harness', 'command', {
     id: `command:${f.slice(0, -3)}`, name: `/${f.slice(0, -3)}`, description: clip(frontmatter(readSafe(path.join(H, 'commands', f))).description), on: true,
   }));
-  const hooks = listDir(path.join(H, 'hooks'), (d) => d.isFile() && d.name.endsWith('.sh') && !d.name.startsWith('_') && d.name !== 'py.sh').map((f) => {
-    const h = f.slice(0, -3);
-    return item('harness', 'hook', { id: `hook:${h}`, name: h, description: scriptPurpose(readSafe(path.join(H, 'hooks', f))), on: !hooksOff.has(h),
+  // The hooks are hooks.json's run.mjs names plus the tool guards: exactly the names
+  // harness.hooks_disable takes. Each one's purpose comes from the script it runs.
+  const hookScripts = new Map(GUARD_HOOKS.map((g) => [g, path.join(H, 'hooks', `${g}.sh`)]));
+  const hooksJson = jsonSafe(path.join(H, 'hooks', 'hooks.json'));
+  for (const groups of Object.values((hooksJson && hooksJson.hooks) || {})) for (const g of groups || []) for (const hk of (g && g.hooks) || []) {
+    const a = Array.isArray(hk.args) ? hk.args.map(String) : [];
+    if (!a[0] || !a[0].endsWith('/run.mjs') || !a[1] || hookScripts.has(a[1])) continue;
+    hookScripts.set(a[1], a[3] === 'py.sh' && a[6] ? path.join(H, 'tools', a[6]) : path.join(H, 'hooks', a[3] || ''));
+  }
+  const hooks = [...hookScripts.keys()].sort().map((h) => {
+    return item('harness', 'hook', { id: `hook:${h}`, name: h, description: scriptPurpose(readSafe(hookScripts.get(h))), on: !hooksOff.has(h),
       toggle: LOCKED_HOOKS[h] ? null : { list: 'harness.hooks_disable', item: h }, locked: LOCKED_HOOKS[h] ? `always on: it ${LOCKED_HOOKS[h]}` : null });
   });
   const rules = listDir(path.join(H, 'rules'), (d) => d.isFile() && d.name.endsWith('.md')).map((f) => {
