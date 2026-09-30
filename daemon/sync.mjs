@@ -35,9 +35,10 @@
 //                                                     it; ids already in the file get no
 //                                                     second marker, so a re-sync never
 //                                                     re-greets anyone).
-//   bots/<name>/.claude-<name>/botcorp/telegram.json  GENERATED: default_chat_id from bot.yaml
-//                                                     integrations.telegram.chat_id, read by
-//                                                     tools/tg/* at send time (no restart).
+//   bots/<name>/.claude-<name>/botcorp/telegram.json  GENERATED: default_chat_id and quiet from
+//                                                     bot.yaml integrations.telegram.chat_id /
+//                                                     .quiet, read by tools/tg/* at send time
+//                                                     (no restart).
 //   bots/<name>/tools/<dir>/<tool>.{py,sh,ps1}        forwarding SHIM per harness tools/<dir>/ tool
 //                                                     (toolShimText): the rules, skills and CLAUDE.md
 //                                                     say `python tools/tg/tg_send.py`, `bash
@@ -426,10 +427,11 @@ export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.e
     report['.claude-<name>/channels/telegram/access.json'] = 'skipped (telegram module off)';
   }
 
-  // 2b. the default chat for tools/tg/* (tg_send.py resolve_chat_id reads it at send time)
+  // 2b. the default chat and the quiet hours for tools/tg/* (tg_send.py reads them at send time)
   const chatId = cfg.integrations.telegram.chat_id;
+  const quiet = typeof cfg.integrations.telegram.quiet === 'string' ? cfg.integrations.telegram.quiet.trim() : null;
   report['.claude-<name>/botcorp/telegram.json'] = writeIfChanged(path.join(configDir, 'botcorp', 'telegram.json'),
-    JSON.stringify({ _generated_by: GENERATED_HEADER, default_chat_id: chatId == null || chatId === '' ? null : String(chatId) }, null, 2) + '\n', dryRun);
+    JSON.stringify({ _generated_by: GENERATED_HEADER, default_chat_id: chatId == null || chatId === '' ? null : String(chatId), quiet }, null, 2) + '\n', dryRun);
 
   // 2c. tools/tg shims (the bot's own copies are kept)
   syncToolShims(botHome, root, dryRun, report);

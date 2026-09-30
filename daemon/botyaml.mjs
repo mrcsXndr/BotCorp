@@ -87,7 +87,9 @@ export const DEFAULTS = {
     agents: 'all',
   },
   integrations: {
-    telegram: { allow_from: [], dm_policy: 'pairing', chat_id: null },
+    // quiet: 'HH:MM-HH:MM' local time (may wrap midnight) in which a scheduled send
+    // (BOT_TG_SCHEDULED=1) goes to alerts.log instead of the phone; null = none
+    telegram: { allow_from: [], dm_policy: 'pairing', chat_id: null, quiet: null },
     hub: { url: null, interval_s: 300 },
     board: { owner: null, number: null, type: 'user' },
     access: { team: null, aud: null, frame_ancestors: null },
@@ -234,6 +236,11 @@ export function validate(cfg) {
   else if (![true, false, 'report'].includes(cfg.harness.modules.janitor)) errs.push(`harness.modules.janitor: true | false | report (got ${JSON.stringify(cfg.harness.modules.janitor)})`);
   if (!['pairing', 'allowlist', 'disabled'].includes(cfg.integrations.telegram.dm_policy)) errs.push('integrations.telegram.dm_policy: pairing | allowlist | disabled');
   if (!Array.isArray(cfg.integrations.telegram.allow_from)) errs.push('integrations.telegram.allow_from: must be a list of ids');
+  {
+    const q = cfg.integrations.telegram.quiet;
+    const m = typeof q === 'string' ? /^([01]\d|2[0-3]):([0-5]\d)-([01]\d|2[0-3]):([0-5]\d)$/.exec(q.trim()) : null;
+    if (q !== null && !(m && `${m[1]}${m[2]}` !== `${m[3]}${m[4]}`)) errs.push(`integrations.telegram.quiet: 'HH:MM-HH:MM' (24 h local time, start != end, e.g. '22:00-08:00') or null (got ${JSON.stringify(q)})`);
+  }
   if (!Array.isArray(cfg.integrations.cloudflare.workers)) errs.push('integrations.cloudflare.workers: must be a list of Worker names');
   const remote = cfg.backup.git_remote;
   if (remote !== null && !(typeof remote === 'string' && /^(https:\/\/|ssh:\/\/|git@)/.test(remote))) errs.push('backup.git_remote: null or an https:// / ssh:// / git@ URL');

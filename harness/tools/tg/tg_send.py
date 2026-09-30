@@ -25,6 +25,9 @@ Behavior:
       ```block```, [text](url)) to Telegram HTML
     - Splits at 4000 chars on newline boundaries
     - On HTTP 400 parse error, retries the same text in plain mode
+    - BOT_TG_SCHEDULED=1 (an automation run) inside bot.yaml
+      integrations.telegram.quiet ('22:00-08:00'): held in alerts.log, not sent;
+      a CRITICAL --alert still goes out
 
 Exit codes:
     0  all chunks sent
@@ -110,6 +113,38 @@ def resolve_chat_id_source() -> tuple[str, str]:
     if isinstance(ids, list) and len(ids) == 1 and str(ids[0]).strip():
         return str(ids[0]).strip(), "the only allowFrom id in access.json"
     return "", ""
+
+
+def quiet_window() -> str:
+    """bot.yaml integrations.telegram.quiet ('HH:MM-HH:MM', local time), through the
+    telegram.json `botcorp sync` writes; '' when unset."""
+    gen = _read_json(config_home() / "botcorp" / "telegram.json")
+    q = gen.get("quiet") if isinstance(gen, dict) else None
+    return q.strip() if isinstance(q, str) else ""
+
+
+def in_quiet_hours(window: str, now: _dt.datetime) -> bool:
+    """True when `now` (local) falls in `window`; a window may wrap midnight
+    ('22:00-08:00'). An unparsable window is never quiet."""
+    m = re.fullmatch(r"(\d{2}):(\d{2})-(\d{2}):(\d{2})", window or "")
+    if not m:
+        return False
+    start, end = int(m[1]) * 60 + int(m[2]), int(m[3]) * 60 + int(m[4])
+    t = now.hour * 60 + now.minute
+    return start <= t < end if start < end else (t >= start or t < end)
+
+
+def _append_alerts_log(text: str) -> None:
+    """One line per entry in memory/metrics/alerts.log (alert triage reads it)."""
+    try:
+        log = instance_root() / "memory" / "metrics" / "alerts.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        stamp = _dt.datetime.now().isoformat(timespec="seconds")
+        one_line = " | ".join(l.strip() for l in text.strip().splitlines() if l.strip())
+        with log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp}\t{one_line[:600]}\n")
+    except Exception:
+        pass
 
 
 def resolve_token() -> str:
@@ -448,18 +483,11 @@ def main() -> int:
     # find. So an alert lands in a log the operator's agent reads and acts on.
     # If the fix genuinely needs a decision, that decision belongs in a review
     # artifact alongside the others, not in a 3am push.
+    crit = None
     if args.alert:
         # Log EVERY alert, including the ones that also get pushed, so the
         # triage log is a complete record rather than only the quiet half.
-        try:
-            log = instance_root() / "memory" / "metrics" / "alerts.log"
-            log.parent.mkdir(parents=True, exist_ok=True)
-            stamp = _dt.datetime.now().isoformat(timespec="seconds")
-            one_line = " | ".join(l.strip() for l in text.strip().splitlines() if l.strip())
-            with log.open("a", encoding="utf-8") as fh:
-                fh.write(f"{stamp}\t{one_line[:600]}\n")
-        except Exception:
-            pass
+        _append_alerts_log(text)
 
         # Severity gates the silence. Routing ALL alerts to a log is too broad
         # when something is actually critical — a "LIVE site DOWN" sitting
@@ -478,6 +506,18 @@ def main() -> int:
         args.force = True
         print(f"[alert] logged AND sending (matched {crit.group(0)!r})" if crit
               else "[alert] logged AND sending (BOT_TG_ALERTS=1)", file=sys.stderr)
+
+    # Quiet hours (bot.yaml integrations.telegram.quiet). A scheduled send
+    # (BOT_TG_SCHEDULED=1, for an automation run to set) inside the window is held in
+    # alerts.log for triage rather than waking the operator; a CRITICAL alert
+    # still goes out. A send the operator is waiting for is never scheduled.
+    if os.environ.get("BOT_TG_SCHEDULED") == "1" and crit is None:
+        window = quiet_window()
+        if window and in_quiet_hours(window, _dt.datetime.now()):
+            if not args.alert:  # an alert is in the log already
+                _append_alerts_log(f"[quiet hours {window}] {text}")
+            print(f"[quiet] inside quiet hours {window}: held in alerts.log, not sent", file=sys.stderr)
+            return 0
 
     # Unanswered-backlog guard.
     #

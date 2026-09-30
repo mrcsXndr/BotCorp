@@ -54,6 +54,7 @@ integrations:
     allow_from: []                # Telegram user ids allowed to DM; the token lives in .vault/, never here
     dm_policy: pairing            # pairing | allowlist | disabled
     chat_id: null                 # the operator's DM chat id for outbound (tg_send.py default)
+    quiet: null                   # e.g. '22:00-08:00' (local): a scheduled send (BOT_TG_SCHEDULED=1) in this window goes to alerts.log; CRITICAL alerts still go out
   hub:
     url: null                     # e.g. https://hub.example.com/api/ingest ; token = vault key hub_token
     interval_s: 300
