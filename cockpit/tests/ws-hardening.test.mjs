@@ -99,6 +99,45 @@ test('C5: an error or a frame on the browser socket before bridge() settles is h
   assert.equal(browser.readyState, 3, 'the errored socket is closed');
 });
 
+function auditRows() {
+  const f = path.join(RT, 'state', 'cockpit-audit.jsonl');
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+}
+let auditFrom = 0;   // rows an earlier test wrote (C4's resets share the runtime) are not this test's
+async function waitAudit(pred) {
+  for (let i = 0; i < 60; i++) { const r = auditRows().slice(auditFrom).filter(pred); if (r.length) return r; await sleep(50); }
+  return [];
+}
+
+test('C1: /term needs the operator (a session cookie alone gets need + 4403); every attach is audited', async () => {
+  const c = await startCockpit();
+  auditFrom = auditRows().length;
+  // a local process with only the page cookie (a bot's curl): refused, told why, audited
+  const plain = new WebSocket(`ws://127.0.0.1:${c.port}/term/demo`, { headers: { cookie: c.cookie } });
+  plain.on('error', () => {});
+  const got = [];
+  plain.on('message', (d) => got.push(JSON.parse(d.toString())));
+  const [code] = await once(plain, 'close');
+  assert.equal(code, 4403);
+  assert.deepEqual(got.map((m) => m.t), ['need']);
+  assert.equal(got[0].need, 'approve-token');
+  const refused = await waitAudit((r) => r.method === 'WS' && r.result === 403);
+  assert.equal(refused.length, 1);
+  assert.deepEqual({ ...refused[0], ts: undefined }, { ts: undefined, identity: 'local', method: 'WS', path: '/term/demo', bot: 'demo', result: 403 });
+
+  // with the operator's approval token: attached (no pty-host up -> stopped), one audit line
+  const op = new WebSocket(`ws://127.0.0.1:${c.port}/term/demo`, { headers: { cookie: c.cookie, 'x-approve-token': c.token } });
+  op.on('error', () => {});
+  const [first] = await once(op, 'message');
+  assert.equal(JSON.parse(first.toString()).t, 'stopped');
+  op.close();
+  const attached = await waitAudit((r) => r.method === 'WS' && r.result === 'attached');
+  assert.equal(attached.length, 1);
+  assert.equal(attached[0].bot, 'demo');
+  assert.doesNotMatch(JSON.stringify(auditRows()), new RegExp(c.token), 'the token never reaches the audit log');
+  await alive(c);
+});
+
 test('C6: a frame over the pty-host cap does not kill the host (or the session it owns)', async () => {
   const t = track(spawn(process.execPath, [PTY_HOST, '--bot', 'demo', '--botcorp', ROOT], {
     env: { ...process.env, BOTCORP_HOME: RT, BOTCORP_BOTS_DIR: BOTS, BOTCORP_PTY_COMMAND: process.platform === 'win32' ? 'ping -n 60 127.0.0.1 >nul' : 'sleep 60' },

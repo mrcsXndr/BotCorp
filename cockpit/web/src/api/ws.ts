@@ -8,6 +8,7 @@
 // terminal (onOutput); the reducer only looks at it for a sign-in link.
 import { useEffect, useMemo, useReducer, useRef } from 'react';
 import { authUrl } from '../lib/cards';
+import { askNeed } from './http';
 
 export interface ChatMedia { kind: string; label: string; detail: string }
 export interface ChatTurn {
@@ -27,7 +28,8 @@ export type Down =
   | { t: 'chat'; available?: boolean; reason?: string; rotated?: boolean; initial?: boolean; hasSession: boolean; turns: ChatTurn[]; cursor: number; file: string | null }
   | ({ t: 'status' } & StatusPush)
   | { t: 'stopped' }
-  | { t: 'detached' };
+  | { t: 'detached' }
+  | { t: 'need'; need: string; m?: string };
 // What the socket itself reports, and what the UI dispatches.
 export type Local = { t: '@connecting' } | { t: '@open' } | { t: '@closed' } | { t: '@reset' } | { t: '@dismiss-auth' };
 export type TermEvent = Down | Local;
@@ -84,14 +86,17 @@ export function termReducer(s: TermState, e: TermEvent): TermState {
 
 // ---- the socket ----------------------------------------------------------------------
 export interface TermSocket { input(d: string): void; resize(cols: number, rows: number): void; chatReset(): void; close(): void }
-export interface TermSocketDeps { WebSocket: typeof WebSocket; location: Pick<Location, 'protocol' | 'host'> }
+export interface TermSocketDeps { WebSocket: typeof WebSocket; location: Pick<Location, 'protocol' | 'host'>; askNeed?: typeof askNeed }
 
-// Reconnects with backoff (1 s doubling to 15 s) until close(), like the classic UI.
+// Reconnects with backoff (1 s doubling to 15 s) until close(). A close with
+// 4403 is the server refusing a browser that is not the operator's: no retry
+// loop, the need handler (pairing) runs once, and a yes reconnects.
 export function openTermSocket(bot: string, on: { event(e: TermEvent): void; output?(d: string): void }, deps: TermSocketDeps = { WebSocket, location }): TermSocket {
   let ws: WebSocket | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let delay = 1000;
   let closed = false;
+  let need: { need: string; m: string } | null = null;
   const connect = () => {
     on.event({ t: '@connecting' });
     const proto = deps.location.protocol === 'https:' ? 'wss' : 'ws';
@@ -103,13 +108,24 @@ export function openTermSocket(bot: string, on: { event(e: TermEvent): void; out
       try { msg = JSON.parse(String(ev.data)); } catch { return; }
       if (!msg || typeof msg.t !== 'string') return;
       if (msg.t === 'o' && typeof msg.d === 'string') on.output?.(msg.d);
+      if (msg.t === 'need') need = { need: String(msg.need), m: String(msg.m || 'needs the operator') };
       on.event(msg);
     };
-    sock.onclose = () => {
+    sock.onclose = (ev?: CloseEvent) => {
       if (ws !== sock) return;
       ws = null;
       on.event({ t: '@closed' });
       if (closed) return;
+      if (ev?.code === 4403) {
+        const n = need ?? { need: 'approve-token', m: 'needs the operator' };
+        need = null;
+        void (deps.askNeed ?? askNeed)(n.need, n.m).then((ok) => {
+          if (closed) return;
+          if (ok) connect();
+          else on.event({ t: 'err', m: n.m });
+        });
+        return;
+      }
       timer = setTimeout(connect, delay);
       delay = Math.min(15000, delay * 2);
     };

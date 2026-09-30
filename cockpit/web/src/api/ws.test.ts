@@ -134,3 +134,24 @@ test('socket: routes frames, sends input/resize/chat-reset, reconnects with back
   vi.advanceTimersByTime(60000);
   expect(FakeWS.all).toHaveLength(3);
 });
+
+test('socket: a 4403 refusal asks for the operator once (no retry loop); paired, it reconnects; declined, it stops with the reason', async () => {
+  vi.useFakeTimers();
+  const events: TermEvent[] = [];
+  const refuse = (ws: FakeWS) => { ws.open(); ws.push({ t: 'need', need: 'approve-token', m: 'needs the operator: pair' }); (ws.onclose as unknown as (e: { code: number }) => void)({ code: 4403 }); };
+  let answer = true;
+  const askNeed = vi.fn(async () => answer);
+  const deps = { WebSocket: FakeWS as unknown as typeof WebSocket, location: { protocol: 'http:', host: 'x' }, askNeed };
+  openTermSocket('_example', { event: (e) => events.push(e) }, deps);
+  refuse(FakeWS.all[0]);
+  expect(askNeed).toHaveBeenCalledWith('approve-token', 'needs the operator: pair');
+  await vi.advanceTimersByTimeAsync(0);
+  expect(FakeWS.all).toHaveLength(2);                 // paired: straight back, no backoff wait
+
+  answer = false;
+  refuse(FakeWS.all[1]);
+  await vi.advanceTimersByTimeAsync(60000);
+  expect(FakeWS.all).toHaveLength(2);                 // declined: no retry at all
+  expect(events.at(-1)).toEqual({ t: 'err', m: 'needs the operator: pair' });
+  expect(askNeed).toHaveBeenCalledTimes(2);
+});

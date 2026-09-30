@@ -80,15 +80,18 @@ const CSP = [
 // Append-only audit of mutating API calls: who, what, which bot, the outcome.
 const AUDIT_LOG = path.join(bots.BOTCORP_HOME, 'state', 'cockpit-audit.jsonl');
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+function audit(row) {
+  const line = JSON.stringify({ ts: new Date().toISOString(), ...row });
+  fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true })
+    .then(() => fsp.appendFile(AUDIT_LOG, line + '\n'))
+    .catch((e) => console.error(`[cockpit] audit write failed: ${e.message}`));
+}
 function auditOnClose(req, res) {
   const p = req.path.slice(0, 200);
   const bot = /^\/api\/bots\/([^/]+)/.exec(p)?.[1] || null;
   res.on('close', () => {
     // res.locals.audit: what a route adds (a chat send: its inbox id, never its text)
-    const line = JSON.stringify({ ts: new Date().toISOString(), identity: req.identity, method: req.method, path: p, bot, result: res.writableFinished ? res.statusCode : 'aborted', ...res.locals.audit });
-    fsp.mkdir(path.dirname(AUDIT_LOG), { recursive: true })
-      .then(() => fsp.appendFile(AUDIT_LOG, line + '\n'))
-      .catch((e) => console.error(`[cockpit] audit write failed: ${e.message}`));
+    audit({ identity: req.identity, method: req.method, path: p, bot, result: res.writableFinished ? res.statusCode : 'aborted', ...res.locals.audit });
   });
 }
 
@@ -293,12 +296,16 @@ if (APPROVE_TOKEN) {
   } catch (e) { console.log(`[cockpit] could not write ${APPROVE_TOKEN_FILE}: ${e.message}`); }
 }
 // A browser paired once (operator-pair.mjs) carries the operator cookie instead of the token.
-function operatorGate(req, res) {
+function isOperator(req) {
   if (!APPROVE_TOKEN) return true;
   if (operatorPair.deviceOf(bots.STATE_DIR, req.headers.cookie)) return true;
   const got = String(req.headers['x-approve-token'] || '');
-  if (got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN))) return true;
-  res.status(403).json({ error: 'needs the operator: pair this browser once (`botcorp cockpit pair` in your terminal, then enter the code), or the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)', need: 'approve-token' });
+  return got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN));
+}
+const NEEDS_OPERATOR = 'needs the operator: pair this browser once (`botcorp cockpit pair` in your terminal, then enter the code), or the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)';
+function operatorGate(req, res) {
+  if (isOperator(req)) return true;
+  res.status(403).json({ error: NEEDS_OPERATOR, need: 'approve-token' });
   return false;
 }
 
@@ -667,6 +674,19 @@ server.on('upgrade', async (req, socket, head) => {
   if (!m) return reject(404, 'Not Found');
   const bot = await bots.getBot(m[1]).catch(() => null);
   if (!bot) return reject(404, 'Not Found');
+  // The terminal types into the session and answers its permission prompts: the
+  // operator only, like every other write. A browser cannot read an HTTP refusal
+  // of an upgrade, so the socket opens, says what it needs (the page offers
+  // pairing) and closes with 4403. Keystrokes are never audited, the attach is.
+  const row = { identity, method: 'WS', path: `/term/${bot.name}`, bot: bot.name };
+  if (!isOperator(req)) {
+    audit({ ...row, result: 403 });
+    return wss.handleUpgrade(req, socket, head, (ws) => {
+      ws.on('error', () => {});
+      try { ws.send(JSON.stringify({ t: 'need', need: 'approve-token', m: NEEDS_OPERATOR })); ws.close(4403, 'needs the operator'); } catch {}
+    });
+  }
+  audit({ ...row, result: 'attached' });
   wss.handleUpgrade(req, socket, head, (ws) => { bridge(bot, ws).catch(() => { try { ws.close(); } catch {} }); });
 });
 

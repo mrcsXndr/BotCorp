@@ -29,6 +29,11 @@ export function setNeedHandler(fn: NeedHandler | null): () => void {
   return () => { if (needHandler === fn) needHandler = null; };
 }
 
+// The same handler for a caller that is not a fetch: the terminal socket, refused with 4403.
+export function askNeed(need: string, message: string): Promise<boolean> {
+  return needHandler ? needHandler(need, message) : Promise.resolve(false);
+}
+
 type Json = Record<string, unknown>;
 // The message a failed call shows: the route's `error`, else the CLI's err/out
 // (lifecycle and decision routes answer {ok:false, code, out, err}), else the status.

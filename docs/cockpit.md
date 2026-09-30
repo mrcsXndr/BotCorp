@@ -105,8 +105,10 @@ bot, result}`, where `path` has no query string, `bot` is the `/api/bots/<name>`
 segment or `null`, and `result` is the HTTP status (`aborted` if the client
 hung up). Bodies are never recorded, so a vault value or a passphrase cannot
 reach it. A chat send adds `inbox_id`, the id of the queued message, never its
-text. A request refused before identification (a bad Host or Origin, no
-valid JWT) is not logged.
+text. Every `/term/<bot>` attach adds `{method: "WS", path: "/term/<bot>",
+result: "attached"}` (or `result: 403` when refused, see below); keystrokes
+are never recorded. A request refused before identification (a bad Host or
+Origin, no valid JWT) is not logged.
 
 Caps: `express.json` 8 MB (413 above), paste files 8 MB decoded and 10 per
 minute per session, WS input frames 1 MB (dropped with `{t:'err'}`, both in the
@@ -261,6 +263,12 @@ Access remains the remote path.
   from the transcript by byte cursor every 1.5 s), so the client polls nothing
   per bot; only the bot list and the attention list (`/api/attention`) poll,
   every 5 s each.
+- The socket types into the session and answers its permission prompts, so
+  it is operator-gated like every write (v0.9.3): a paired browser's operator
+  cookie, the approval token (`X-Approve-Token`, for a non-browser client) or
+  Cloudflare Access. Without one the server opens the socket, sends
+  `{t:'need', need:'approve-token'}` and closes it with code 4403; the page
+  then offers pairing once instead of reconnecting.
 - Reconnect with backoff (1 s doubling to 15 s) whenever the socket drops
   while the bot stays selected. A pty exit shows "Session exited with code N.
   Restart it?" with a Restart button.
