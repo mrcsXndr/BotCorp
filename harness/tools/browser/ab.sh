@@ -54,6 +54,21 @@ if [ -n "${BOT_NAME:-}" ]; then
 fi
 mkdir -p "$AB_DIR" 2>/dev/null || true
 
+# LOCKOUT GUARD: this Chrome once locked the operator out of Windows. On start-up
+# Chrome calls LogonUser with an EMPTY password to test for a blank OS password,
+# unless the profile's Local State caches that the password hasn't changed.
+# agent-browser's default fresh temp profile per launch re-ran that check on every
+# launch, one failed logon each. So: one persistent profile inside this bot's
+# agent-browser dir (the janitor still sees it as the bot's own), seeded before
+# every call by ab_profile_seed.py, fail-closed; and no ambient Windows auth to
+# any server.
+AB_PROFILE_DIR="$AB_DIR/profile"
+command -v cygpath >/dev/null 2>&1 && AB_PROFILE_DIR="$(cygpath -m "$AB_PROFILE_DIR")"
+export AGENT_BROWSER_PROFILE="${AGENT_BROWSER_PROFILE:-$AB_PROFILE_DIR}"
+export AGENT_BROWSER_ARGS="${AGENT_BROWSER_ARGS:+$AGENT_BROWSER_ARGS,}--auth-server-allowlist=none.invalid"
+PYTHONIOENCODING=utf-8 "$PY" "$TOOLS_DIR/browser/ab_profile_seed.py" "$AGENT_BROWSER_PROFILE" \
+  || { echo "ab.sh: profile seed failed; refusing to launch Chrome (it would attempt a Windows logon)" >&2; exit 1; }
+
 # Every browser op flows through here — stamp an activity heartbeat so the box
 # janitor (tools/infra/resource_monitor.ps1) can tell a LIVE session (fresh
 # stamp = spare it) from an ABANDONED pile (stale stamp = reap it). This closes
