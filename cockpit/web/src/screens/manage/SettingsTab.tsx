@@ -42,7 +42,7 @@ function SwitchRow({ def, cfg, save, queued }: { def: SettingDef; cfg: unknown; 
 }
 
 function ModelRow({ cfg, save, queued }: { cfg: unknown; save: Save; queued: boolean }) {
-  const tiers = useModels().data;
+  const tiers = useModels().data?.tiers;
   const cur = cfgGet(cfg, 'model');
   if (!tiers) return <Skeleton lines={1} />;
   return (

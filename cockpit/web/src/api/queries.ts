@@ -66,6 +66,17 @@ export const ROUTES = {
   chatLaunch: r('POST', '/api/chat/launch'),
   upload: r('POST', '/api/bots/:name/uploads'),
   uploadFile: r('GET', '/api/bots/:name/uploads/:file'),
+  helpers: r('GET', '/api/bots/:name/helpers'),
+  knowledge: r('GET', '/api/knowledge'),
+  knowledgeDoc: r('GET', '/api/knowledge/:doc'),
+  knowledgePut: r('PUT', '/api/knowledge/:doc'),
+  knowledgeDel: r('DELETE', '/api/knowledge/:doc'),
+  botKnowledge: r('GET', '/api/bots/:name/knowledge'),
+  botKnowledgeDoc: r('GET', '/api/bots/:name/knowledge/:doc'),
+  botKnowledgePut: r('PUT', '/api/bots/:name/knowledge/:doc'),
+  botKnowledgeDel: r('DELETE', '/api/bots/:name/knowledge/:doc'),
+  agents: r('GET', '/api/agents'),
+  agent: r('GET', '/api/bots/:name/agents/:id'),
 } as const;
 
 // ---- shapes (the fields the screens read) ------------------------------------------
@@ -74,13 +85,32 @@ export interface Bot extends Open {
   name: string; displayName: string; persona: string; model: string | null; kind: 'bg' | 'pty';
   running: boolean; phase: string | null; activity?: unknown; telegram: boolean; account: string | null; backups: string[];
   reviewBoard: { url: string | null; open: number | null; answered: number | null; sentAt: string | null } | null;
-  automations: { name: string; kind: string; trigger: unknown; enabled: boolean; secrets: string[] }[];
+  automations: { name: string; kind: string; trigger: unknown; enabled: boolean; secrets: string[]; description?: string }[];
   tools: number | null; yamlError?: string | null;
   /** harness.service: 'daemon' keeps it running (Pinned); 'manual' is a chat */
   service: string; startedAt: string | null;
   blocked: { needs: string; detail: string } | null; down: string | null;
 }
 export interface ModelTier { tier: string; id: string; name: string; effort: string | null }
+/** One model the pinned Claude Code offers (core/ccprobe.mjs); null = not probed. */
+export interface LiveModel {
+  value: string; resolvedModel: string; displayName: string; description: string; price: { input: number; output: number } | null;
+  supportsEffort: boolean; supportedEffortLevels: string[]; ultracodeAvailable: boolean | null; defaultEffort: string | null;
+}
+export interface Models { cc_version: string | null; tiers: ModelTier[]; models: LiveModel[]; error?: string }
+export interface Helpers {
+  autoFix: { on: boolean; everyMin: number; model: string | null; writes: string; reads: string; fed: boolean; lastRun: string | null };
+  debrief: { on: boolean; everyHours: number; model: string | null; writes: string; lastRun: string | null };
+}
+export interface KnowledgeRow { id: string; file: string; bytes: number; tokens: number; sha256: string; updated_at: string }
+export interface KnowledgeList { scope: 'global' | 'bot'; bot?: string | null; docs: KnowledgeRow[] }
+export interface KnowledgeDoc extends KnowledgeRow { content: string }
+export interface AgentRow {
+  id: string; name: string; type: string; model: string | null; state: 'running' | 'done' | 'done?' | 'ended'; status?: string | null;
+  startedAt: string | null; lastAt: string | null; progress: string | null; background: boolean; depth: number; parentId: string | null; workflow: string | null;
+}
+export interface BotAgents { bot: string; session: string | null; running: AgentRow[]; recent: AgentRow[]; workflows: { id: string; name: string; status: string; running: boolean; agents: string[] }[] }
+export interface AgentDetail { agent: AgentRow | null; turns: ChatTurn[]; cursor: number }
 export interface AccountView extends Open {
   id: string; label: string; plan: string; masked: string | null; state: 'ok' | 'limited' | 'failed' | 'no-token';
   fiveHour: { pct?: number; na?: string } | null; sevenDay: { pct?: number; na?: string } | null;
@@ -115,6 +145,8 @@ export const qk = {
   cc: () => ['cockpit', 'cc'] as const,
   accounts: () => ['cockpit', 'accounts'] as const,
   chatRecent: () => ['cockpit', 'chat-recent'] as const,
+  knowledge: () => ['cockpit', 'knowledge'] as const,
+  agents: () => ['cockpit', 'agents'] as const,
 };
 
 const url = (route: { p: string }, params?: Record<string, string>) => fill(route.p, params);
@@ -147,7 +179,12 @@ export const useApprovals = () => useRead<Approvals>(qk.approvals(), ROUTES.appr
 export const useUpdates = () => useRead<Open & { installed: string | null; releases: Open[] }>(qk.updates(), ROUTES.updates);
 export const useCc = () => useRead<Open>(qk.cc(), ROUTES.cc);
 export const useAccounts = () => useRead<Open & { accounts: AccountView[]; bots: Open[] }>(qk.accounts(), ROUTES.accounts);
-export const useModels = () => useRead<ModelTier[]>(['cockpit', 'models'], ROUTES.models);
+export const useModels = () => useRead<Models>(['cockpit', 'models'], ROUTES.models);
+// "All bots" docs; one doc is read when the editor opens it.
+export const useKnowledge = () => useRead<KnowledgeList>(qk.knowledge(), ROUTES.knowledge);
+export const useKnowledgeDoc = (doc: string | null) => useRead<KnowledgeDoc>([...qk.knowledge(), doc], ROUTES.knowledgeDoc, { doc: doc || '' }, { enabled: !!doc });
+// Every running bot's running subagents, for the sidebar.
+export const useAgents = () => useRead<BotAgents[]>(qk.agents(), ROUTES.agents, undefined, { refetchInterval: 5000 });
 export const useChatRecent = () => useRead<Open[]>(qk.chatRecent(), ROUTES.chatRecent);
 export const usePairDevices = () => useRead<PairDevices>(qk.pairDevices(), ROUTES.pairDevices);
 export const useSecretsAudit = (bot: string | null = null, limit = 100) =>
@@ -171,6 +208,13 @@ export const useSecrets = (name: string) => useRead<Open>(qk.botPart(name, 'secr
 export const useSecretsLock = (name: string) => useRead<Open>(qk.botPart(name, 'secrets-lock'), ROUTES.secretsLock, { name }, { enabled: !!name });
 export const useBotSecretsAudit = (name: string, limit = 100) =>
   useRead<Open[]>(qk.botPart(name, 'secrets-audit', limit), ROUTES.botSecretsAudit, { name }, { enabled: !!name, search: `?limit=${limit}` });
+export const useHelpers = (name: string) => useRead<Helpers>(qk.botPart(name, 'helpers'), ROUTES.helpers, { name }, { enabled: !!name });
+export const useBotKnowledge = (name: string) => useRead<KnowledgeList>(qk.botPart(name, 'knowledge'), ROUTES.botKnowledge, { name }, { enabled: !!name });
+export const useBotKnowledgeDoc = (name: string, doc: string | null) =>
+  useRead<KnowledgeDoc>(qk.botPart(name, 'knowledge', doc), ROUTES.botKnowledgeDoc, { name, doc: doc || '' }, { enabled: !!name && !!doc });
+// One subagent's turns, read-only; polled while it runs.
+export const useAgent = (name: string, id: string, poll: boolean) =>
+  useRead<AgentDetail>(qk.botPart(name, 'agent', id), ROUTES.agent, { name, id }, { enabled: !!name && !!id, refetchInterval: poll ? 5000 : false });
 // An uploaded image (operator-gated), for a thumbnail: the caller makes the object URL.
 export const useUploadFile = (name: string, file: string) =>
   useQuery<Blob>({ queryKey: qk.botPart(name, 'upload', file), queryFn: ({ signal }) => request<Blob>('GET', url(ROUTES.uploadFile, { name, file }), { signal, as: 'blob' }), enabled: !!name && !!file, staleTime: Infinity });
@@ -220,7 +264,16 @@ export const useBotAccounts = () => useWrite(
   ({ name }) => [...botKeys(name), qk.usage(), qk.accounts()]);
 export const useConfigSet = () => useWrite(
   ({ name, path, value }: { name: string; path: string; value: unknown }) => post<ConfigSetResult>(url(ROUTES.configSet, { name }), { path, value }),
-  ({ name }) => [qk.botPart(name, 'config'), qk.botPart(name, 'inventory'), qk.bot(name), qk.approvals(), qk.attention()]);
+  ({ name }) => [qk.botPart(name, 'config'), qk.botPart(name, 'inventory'), qk.botPart(name, 'automations'), qk.bot(name), qk.approvals(), qk.attention()]);
+// A knowledge doc: `bot` null = "All bots" (the operator's). ifMatch is the
+// sha256 the editor read; a doc changed since is a 409.
+export const useKnowledgeSave = () => useWrite(
+  ({ bot, doc, content, ifMatch }: { bot: string | null; doc: string; content: string; ifMatch?: string | null }) =>
+    put<CliResult & { id: string; created: boolean; sha256: string }>(bot ? url(ROUTES.botKnowledgePut, { name: bot, doc }) : url(ROUTES.knowledgePut, { doc }), { content, ifMatch: ifMatch || null }),
+  ({ bot }) => [bot ? qk.botPart(bot, 'knowledge') : qk.knowledge()]);
+export const useKnowledgeRemove = () => useWrite(
+  ({ bot, doc }: { bot: string | null; doc: string }) => del<CliResult>(bot ? url(ROUTES.botKnowledgeDel, { name: bot, doc }) : url(ROUTES.knowledgeDel, { doc })),
+  ({ bot }) => [bot ? qk.botPart(bot, 'knowledge') : qk.knowledge()]);
 export const useTgPair = () => useWrite(
   ({ name, senderId }: { name: string; senderId: string }) => post<Open>(url(ROUTES.tgPair, { name }), { senderId }),
   ({ name }) => [qk.botPart(name, 'pairing'), qk.attention()]);

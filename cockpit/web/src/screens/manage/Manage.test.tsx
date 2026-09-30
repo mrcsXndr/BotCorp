@@ -15,7 +15,7 @@ const ACCOUNTS = { accounts: [
   { id: 'studio', label: 'Studio', plan: '', masked: '****St01', state: 'ok', fiveHour: null, sevenDay: null },
   { id: 'spare', label: 'Spare', plan: '', masked: '****Sp02', state: 'ok', fiveHour: null, sevenDay: null },
 ], bots: [] };
-const MODELS = [{ tier: 'top', id: 'claude-opus-5-5', name: 'Opus 5.5', effort: 'high' }, { tier: 'workhorse', id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', effort: 'medium' }];
+const MODELS = { cc_version: null, tiers: [{ tier: 'top', id: 'claude-opus-5-5', name: 'Opus 5.5', effort: 'high' }, { tier: 'workhorse', id: 'claude-sonnet-5-5', name: 'Sonnet 5.5', effort: 'medium' }], models: [], error: 'no pin' };
 
 type Call = { method: string; url: string; body: unknown };
 const calls: Call[] = [];

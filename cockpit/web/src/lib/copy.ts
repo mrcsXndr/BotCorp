@@ -19,6 +19,7 @@ export const COPY = {
     secrets: 'Secrets',
     automations: 'Automations',
     tools: 'Tools',
+    knowledge: 'Knowledge',
     chat: 'Chat',
     terminal: 'Terminal',
   },
@@ -35,6 +36,8 @@ export const COPY = {
     addAccount: 'Add account',
     pairBrowser: 'Pair browser',
     help: 'Help',
+    knowledge: 'Knowledge',
+    newDoc: 'New doc',
   },
   // buttons: 3 words, verb first
   button: {
@@ -89,6 +92,13 @@ export const COPY = {
     rollback: 'Roll back',
     cancelRequest: 'Cancel request',
     revoke: 'Revoke',
+    edit: 'Edit',
+    preview: 'Preview',
+    newDoc: 'New doc',
+    deleteDoc: 'Delete doc',
+    editIn: 'Edit in Settings',
+    editDescription: 'Edit {name}',
+    createDoc: 'Create doc',
   },
   // row labels, section names, landmark and control names: 3 words
   row: {
@@ -199,6 +209,41 @@ export const COPY = {
     thisBrowser: 'This browser',
     pairingCode: 'Enter pairing code',
     unknownBrowser: 'A browser',
+    // model, effort, ultracode
+    effort: 'Effort',
+    tierDefault: 'Tier default',
+    ultracode: 'Ultracode',
+    tiers: 'Tiers',
+    liveModels: 'Claude Code {version}',
+    // the background helpers' facts
+    everyMin: 'Every {n} min',
+    everyHours: 'Every {n} h',
+    writesTo: 'Writes {file}',
+    lastRun: 'Last run {ago}',
+    notRunYet: 'Not run yet',
+    // knowledge
+    allBots: 'All bots',
+    thisBot: 'This bot',
+    docName: 'Doc name',
+    docRule: 'Lowercase, digits, hyphens',
+    tokensEst: '~{n} tokens',
+    edited: 'edited {ago}',
+    docText: 'Doc text',
+    total: 'Total',
+    // descriptions
+    description: 'Description',
+    // an approval, explained
+    who: 'Who',
+    change: 'Change',
+    why: 'Why',
+    onApprove: 'Approve →',
+    onDecline: 'Decline →',
+    when: 'When',
+    exactChange: 'Exact change',
+    // subagents
+    subagents: 'Subagents',
+    recentAgents: 'Last 10 finished',
+    agentOf: '{bot} subagent',
   },
   // status words: 4 words
   status: {
@@ -225,6 +270,14 @@ export const COPY = {
     paused: 'Paused',
     alwaysOn: 'Always on',
     missing: 'Missing on disk',
+    restartToApply: 'Restart to apply',
+    nothingFeeds: 'Nothing feeds it',
+    loadsNextStart: 'Loads at next start',
+    readOnlyHere: 'Read-only here',
+    running: 'Running',
+    done: 'Done',
+    doneMaybe: 'Probably done',
+    tooBig: 'Over 20k tokens',
   },
   // empty states: 4 words
   empty: {
@@ -244,6 +297,10 @@ export const COPY = {
     noToolList: 'No tool list',
     nobodyWaiting: 'Nobody waiting',
     nothingToRegister: 'Nothing to register',
+    noDocs: 'No docs yet',
+    noAgents: 'No subagents running',
+    noAgent: 'No such subagent',
+    pickDoc: 'Pick a doc',
   },
   // toasts: 6 words
   toast: {
@@ -276,6 +333,9 @@ export const COPY = {
     requestCancelled: 'Request cancelled',
     browserPaired: 'Browser paired',
     browserRevoked: 'Browser revoked',
+    docSaved: '{doc} saved',
+    docDeleted: '{doc} deleted',
+    docConflict: 'Changed elsewhere. Reloaded it.',
   },
   // Inbox items and the attention banner: 12 words
   inbox: {
@@ -291,6 +351,7 @@ export const COPY = {
     tellWhy: 'Tell the bot why',
     keepOpen: 'Keep it open',
     linkLine: 'Puts each bot on its own named account.',
+    adminBot: '{bot} (admin bot)',
   },
   // what kind of thing an Inbox item is: 4 words
   kind: {
@@ -326,6 +387,8 @@ export const COPY = {
     admin: 'An admin bot may run operator-only commands. Every one is logged, and changes still wait for you.',
     lock: 'The vault opens only after you enter the passphrase, once per start.',
     context: 'The share of the window used before the chat is compacted.',
+    autoFix: "Starts a background run to fix new alerts or file a card. No Telegram unless critical; uses your plan's limit.",
+    debrief: "After a session, a background run notes it in the session log. No Telegram; uses your plan's limit.",
   },
   // confirms (§7): a title of 5 words, a consequence of 10, a verb button of 3
   confirm: {
@@ -344,6 +407,8 @@ export const COPY = {
     replaceSecret: { title: 'Replace {key}?', body: 'The old value is gone.', verb: 'Replace secret' },
     revoke: { title: 'Revoke this browser?', body: 'It must pair again.', verb: 'Revoke' },
     link: { title: 'Link accounts?', body: 'Bots switch to their account at next start.', verb: 'Link accounts' },
+    ultracode: { title: 'Turn on Ultracode?', body: 'Workflows on every task. Uses much more of the limit.', verb: 'Turn on' },
+    deleteDoc: { title: 'Delete {doc}?', body: 'It stops loading at the next start.', verb: 'Delete doc' },
   },
 } as const;
 

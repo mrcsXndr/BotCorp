@@ -52,9 +52,9 @@ test('no banned term; setup-token only inside a tooltip', () => {
   expect(hits).toEqual([]);
 });
 
-test('the ? tooltips are the five complex things only', () => {
+test('the ? tooltips are the complex things only (v0.9.9: the two background helpers joined)', () => {
   const keys = Object.keys(COPY.tooltip).sort();
-  expect(keys.every((k) => ['admin', 'backups', 'context', 'lock', 'setupToken'].includes(k))).toBe(true);
+  expect(keys.every((k) => ['admin', 'autoFix', 'backups', 'context', 'debrief', 'lock', 'setupToken'].includes(k))).toBe(true);
 });
 
 test('t fills slots and leaves an unknown one visible', () => {
