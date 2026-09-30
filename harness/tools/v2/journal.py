@@ -21,7 +21,9 @@ followed by ## sections per kind:
   ## Hypotheses
   ## Actions
 
-Each entry is a single line bullet prefixed with `- [HH:MM:SS]`.
+Each entry is a single line bullet prefixed with `- [YYYY-MM-DD HH:MM:SS]` (UTC).
+Journals written before that carry `- [HH:MM:SS]`; every reader (timeline.py,
+recall.py, precompact_extract.py, the session-start hook) accepts both.
 
 CLI
 ---
@@ -73,8 +75,9 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _now_hms() -> str:
-    return datetime.now(timezone.utc).strftime("%H:%M:%S")
+def _now_stamp() -> str:
+    # dated: a session outlives a day, and a bare time-of-day reads as ambiguous
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _journal_path(session_id: str) -> Path:
@@ -194,7 +197,7 @@ def cmd_append(session_id: str, kind: str, text: str) -> int:
         cmd_new(session_id)
 
     bare = text.strip()
-    entry = f"- [{_now_hms()}] {bare}"
+    entry = f"- [{_now_stamp()}] {bare}"
 
     # Route the read-modify-write through safe_write.safe_replace so the whole
     # transform runs atomically under an exclusive file lock against the

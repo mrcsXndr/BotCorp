@@ -8,7 +8,8 @@ session found/decided without re-reading 17 journals into context.
 What it indexes
 ---------------
 Every journal entry in memory/sessions/*/journal.md — one FTS row per
-`- [HH:MM:SS] <text>` bullet, tagged with its kind (from the enclosing
+`- [YYYY-MM-DD HH:MM:SS] <text>` bullet (`- [HH:MM:SS]` in older journals),
+tagged with its kind (from the enclosing
 `## Section` header), session_id, timestamp, source path, and a sequence
 number so we can reconstruct surrounding context. Promoted cross-session
 timelines under memory/timelines/*.md are indexed too (kind=timeline).
@@ -115,7 +116,7 @@ SECTION_TO_KIND = {
     "Actions": "action",
 }
 
-ENTRY_RE = re.compile(r"^-\s+\[(\d{2}:\d{2}:\d{2})\]\s+(.*)$")
+ENTRY_RE = re.compile(r"^-\s+\[((?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})\]\s+(.*)$")  # dated or time-only
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 PLACEHOLDER = "_(none yet)_"
 
@@ -304,9 +305,9 @@ def _parse_timeline(text: str, session_fallback: str) -> list[dict]:
         if not s.startswith("- "):
             continue
         body = s[2:].strip()
-        # strip a leading [HH:MM] / [HH:MM:SS] timestamp if present
+        # strip a leading [HH:MM] / [HH:MM:SS] / [YYYY-MM-DD HH:MM:SS] timestamp if present
         ts = None
-        m = re.match(r"^\[(\d{2}:\d{2}(?::\d{2})?)\]\s*(.*)$", body)
+        m = re.match(r"^\[((?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}(?::\d{2})?)\]\s*(.*)$", body)
         if m:
             ts, body = m.group(1), m.group(2).strip()
         if not body or body == PLACEHOLDER:

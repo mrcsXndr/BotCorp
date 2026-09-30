@@ -64,7 +64,7 @@ SECTION_TO_KIND = {
 }
 DURABLE_KINDS = {"decision", "finding"}
 
-ENTRY_RE = re.compile(r"^-\s+\[(\d{2}:\d{2}:\d{2})\]\s+(.*)$")
+ENTRY_RE = re.compile(r"^-\s+\[((?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2})\]\s+(.*)$")  # dated or time-only
 SECTION_RE = re.compile(r"^##\s+(.+?)\s*$")
 PLACEHOLDER = "_(none yet)_"
 

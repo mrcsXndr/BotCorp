@@ -95,12 +95,12 @@ def timeline_payload(p: Path):
 
 
 def journal_payload(p: Path):
-    """Tail of a journal that has real `- [HH:MM:SS] ...` entries."""
+    """Tail of a journal that has real `- [YYYY-MM-DD HH:MM:SS] ...` entries (or old `- [HH:MM:SS]`)."""
     try:
         lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return None
-    entry = re.compile(r"^- \[\d{2}:\d{2}:\d{2}\] (.+)$")
+    entry = re.compile(r"^- \[(?:\d{4}-\d{2}-\d{2} )?\d{2}:\d{2}:\d{2}\] (.+)$")
     bullets = [ln for ln in lines if entry.match(ln.strip()) and entry.match(ln.strip()).group(1).strip() not in PLACEHOLDERS]
     if not bullets:
         return None
