@@ -815,27 +815,18 @@ function Invoke-BotTick {
     # time limit kills the tick, not its detached children) and can only be
     # killed under the task's own token. Any session-0 pwsh/powershell older
     # than 10 min whose command line names THIS bot's folder, is not the owner
-    # shell, not our ancestry, and has no claude.exe child -> tree killed,
-    # through the ownership guard (the folder match is what makes it ours;
-    # protect.json still wins).
+    # shell, not our ancestry, has no claude.exe child and runs under no
+    # claude.exe (Get-StrayShells) -> tree killed, through the ownership guard
+    # (the folder match is what makes it ours; protect.json still wins).
     try {
         # ($wp, not $p: PowerShell variable names are case-insensitive and $P is the paths table)
         $all = Get-CimInstance Win32_Process -ErrorAction Stop
         $byPid = @{}; foreach ($wp in $all) { $byPid[[int]$wp.ProcessId] = $wp }
         $anc = @(); $cur = [int]$PID
         while ($cur -gt 0 -and $byPid.ContainsKey($cur) -and $anc.Count -lt 20) { $anc += $cur; $cur = [int]$byPid[$cur].ParentProcessId }
-        $claudeParents = @($all | Where-Object { $_.Name -eq 'claude.exe' } | ForEach-Object { [int]$_.ParentProcessId })
-        $needle = [regex]::Escape((Join-Path $BotsDir $Bot))
-        foreach ($wp in $all) {
-            if ($wp.SessionId -ne 0 -or $wp.Name -notin @('pwsh.exe', 'powershell.exe')) { continue }
-            $ppid = [int]$wp.ProcessId
-            if ($ppid -eq $shellPid -or $anc -contains $ppid -or $claudeParents -contains $ppid) { continue }
-            if ("$($wp.CommandLine)" -notmatch $needle) { continue }
-            if (-not $wp.CreationDate) { continue }
-            $ageMin = ((Get-Date) - $wp.CreationDate).TotalMinutes
-            if ($ageMin -le 10) { continue }
-            if ($DryRun) { Write-DaemonLog "DRYRUN would kill stray session-0 shell pid $ppid (age $([int]$ageMin)m)" -Bot $Bot; continue }
-            [void](Stop-BotProcessTree -ProcId $ppid -Bot $Bot -Why "stray session-0 shell, age $([int]$ageMin)m, no claude child")
+        foreach ($s in (Get-StrayShells -All $all -BotDir (Join-Path $BotsDir $Bot) -ShellPid $shellPid -Ancestry $anc)) {
+            if ($DryRun) { Write-DaemonLog "DRYRUN would kill stray session-0 shell pid $($s.Pid) (age $([int]$s.AgeMin)m)" -Bot $Bot; continue }
+            [void](Stop-BotProcessTree -ProcId $s.Pid -Bot $Bot -Why "stray session-0 shell, age $([int]$s.AgeMin)m, no claude child")
         }
     } catch { Write-DaemonLog "stray sweep failed (fail-open): $($_.Exception.Message)" -Bot $Bot }
 

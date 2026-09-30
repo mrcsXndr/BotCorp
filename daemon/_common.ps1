@@ -166,6 +166,10 @@ function Get-ProtectedList {
     return @{ Pids = $pids; Patterns = $pats }
 }
 
+# A bot folder named in a command line ends at a separator, quote, space or the
+# end: bots\x never matches bots\x-mirror (D9).
+$script:BotDirEnd = '(?=[\\/"''\s]|$)'
+
 function Get-ProcessOwnerRecord {
     # Returns @{ Ours; Protected; Bot; Reason; Name; CmdHead } for a pid.
     # Ours = recorded in a state file or command line under bots/<known bot>.
@@ -200,7 +204,7 @@ function Get-ProcessOwnerRecord {
                     try { if (($pty.PSObject.Properties.Name -contains $k) -and $null -ne $pty.$k -and ([int]$pty.$k -eq $ProcId)) { $rec.Ours = $true; $rec.Bot = $b; $rec.Reason = "state/$b.pty.json $k"; return $rec } } catch {}
                 }
             }
-            if ($cmd -and ($cmd -match [regex]::Escape((Join-Path $script:BotsDir $b)))) { $rec.Ours = $true; $rec.Bot = $b; $rec.Reason = "command line names bots\$b"; return $rec }
+            if ($cmd -and ($cmd -match ([regex]::Escape((Join-Path $script:BotsDir $b)) + $script:BotDirEnd))) { $rec.Ours = $true; $rec.Bot = $b; $rec.Reason = "command line names bots\$b"; return $rec }
         }
         $d = Read-JsonFile -Path (Join-Path $script:StateDir 'daemon.json')
         try { if ($d -and $d.cockpit_pid -and ([int]$d.cockpit_pid -eq $ProcId)) { $rec.Ours = $true; $rec.Reason = 'state/daemon.json cockpit_pid'; return $rec } } catch {}
@@ -208,6 +212,35 @@ function Get-ProcessOwnerRecord {
         try { if ($o -and $o.pid -and ([int]$o.pid -eq $ProcId)) { $rec.Ours = $true; $rec.Reason = 'state/otel.json pid'; return $rec } } catch {}
     } catch { $rec.Reason = "owner lookup failed: $($_.Exception.Message)" }
     return $rec
+}
+
+function Get-StrayShells {
+    # The tick's session-0 stray sweep pick, from one Win32_Process listing:
+    # pwsh/powershell in $SessionId older than $MinAgeMin whose command line
+    # names $BotDir as a whole folder, that is not $ShellPid, not in $Ancestry,
+    # not a claude.exe parent (a launcher) and not under any claude.exe (a live
+    # session's tool call, D9). -> @(@{ Pid; AgeMin })
+    param([object[]]$All, [Parameter(Mandatory)][string]$BotDir, [int]$ShellPid = 0, [int[]]$Ancestry = @(), [int]$SessionId = 0, [double]$MinAgeMin = 10)
+    $byPid = @{}; foreach ($wp in $All) { $byPid[[int]$wp.ProcessId] = $wp }
+    $claudeParents = @($All | Where-Object { $_.Name -eq 'claude.exe' } | ForEach-Object { [int]$_.ParentProcessId })
+    $needle = [regex]::Escape($BotDir) + $script:BotDirEnd
+    $out = @()
+    foreach ($wp in $All) {
+        if ($wp.SessionId -ne $SessionId -or $wp.Name -notin @('pwsh.exe', 'powershell.exe')) { continue }
+        $id = [int]$wp.ProcessId
+        if ($id -eq $ShellPid -or $Ancestry -contains $id -or $claudeParents -contains $id) { continue }
+        if ("$($wp.CommandLine)" -notmatch $needle) { continue }
+        $underClaude = $false; $cur = [int]$wp.ParentProcessId
+        for ($i = 0; $i -lt 20 -and $cur -gt 0 -and $byPid.ContainsKey($cur); $i++) {
+            if ($byPid[$cur].Name -eq 'claude.exe') { $underClaude = $true; break }
+            $cur = [int]$byPid[$cur].ParentProcessId
+        }
+        if ($underClaude -or -not $wp.CreationDate) { continue }
+        $ageMin = ((Get-Date) - $wp.CreationDate).TotalMinutes
+        if ($ageMin -le $MinAgeMin) { continue }
+        $out += @{ Pid = $id; AgeMin = $ageMin }
+    }
+    return ,$out
 }
 
 function Stop-BotProcessTree {
