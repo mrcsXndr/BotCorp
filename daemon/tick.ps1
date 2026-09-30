@@ -403,6 +403,27 @@ function Invoke-UsageResume {
     return $false
 }
 
+function Invoke-UsageWarn {
+    # usage_monitor.py warn: ONE alerts.log pre-warning per 5h/7d window at 98%
+    # (its WARN_PCT), keyed on the window's reset, so triage decides what the
+    # operator sees. Cheap: the statusline's status.json is read here and python
+    # runs only when a window is at the line; usage_monitor owns freshness and dedupe.
+    param([string]$Bot, $Cfg, [hashtable]$Paths, [switch]$AsDryRun)
+    try {
+        $um = Join-Path $Harness 'tools\v2\usage_monitor.py'
+        if (-not (Test-Path $um)) { return }
+        $s = Read-JsonFile -Path (Join-Path (Join-Path $Paths.ConfigDir 'botcorp') 'status.json')
+        if (-not $s -or -not $s.rate_limits) { return }
+        $hot = $false
+        foreach ($k in @('five_hour', 'seven_day')) { try { if ($s.rate_limits.$k -and [double]$s.rate_limits.$k.used_percentage -ge 98) { $hot = $true } } catch {} }
+        if (-not $hot) { return }
+        $a = @($um, 'warn'); if ($AsDryRun) { $a += '--dry-run' }
+        $r = Invoke-Bounded -Exe $pyExe -Arguments $a -TimeoutSec 60 -Label 'usage_warn' -Capture -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
+        $last = ''; try { $last = (($r.Output -split "`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1) } catch {}
+        if ($last -match '^WARN') { Write-DaemonLog "usage_warn: $($last.Trim())" -Bot $Bot -Quiet }
+    } catch { Write-DaemonLog "usage_warn: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+}
+
 function Invoke-AlertTriage {
     # alert_triage.py scan every BOT_TRIAGE_EVERY_MIN (30): classifies new
     # alerts.log lines and spawns ONE detached headless fix-or-card run. The
@@ -874,7 +895,10 @@ function Invoke-BotTick {
 
     # --- isolated per-bot ticks (never gate the liveness decision) ----------------
     $resumeWanted = $false
-    if (Test-BotModule $cfg 'usage_resume') { $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun }
+    if (Test-BotModule $cfg 'usage_resume') {
+        Invoke-UsageWarn -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun
+        $resumeWanted = Invoke-UsageResume -Bot $Bot -Cfg $cfg -Paths $P -Alive $alive -ClaudePid $claudePid -ShellPid $shellPid -AsDryRun:$DryRun
+    }
     if (Test-BotModule $cfg 'alert_triage') { Invoke-AlertTriage -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
     $ccRoll = $false; $acctRoll = $false; $recover = $false; $switch = $false
     $foRes = @{ Why = ''; Kind = ''; Wanted = $null }

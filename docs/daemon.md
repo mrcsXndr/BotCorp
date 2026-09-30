@@ -446,8 +446,9 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                                     without secrets, a restart would throw away the ones the live session holds)
   guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
                         hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
-  every tick            usage_resume: usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
-                                 (not wired yet: usage_monitor.py warn, the once-per-window 98% --alert)
+  every tick            usage_resume: usage_monitor.py warn when <config>/botcorp/status.json shows a window
+                                 at 98% (one --alert per window, into alerts.log), then
+                                 usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
                         alert_triage: alert_triage.py scan [--session-busy] every BOT_TRIAGE_EVERY_MIN (30)
   only when the decision is still none (a down, paused, locked or restarting bot skips all of these):
                         cc roll: bg bot running a Claude Code that is not the pin, Get-CcRollAction roll

@@ -34,10 +34,9 @@ Behaviour:
     statusline's <config_home>/botcorp/status.json is at WARN_PCT (98%) or
     more, send ONE `tg_send.py --alert` per window (keyed on that window's
     reset instant, with limit_window's tolerance), so alert triage decides
-    what the operator sees. Prints WARN <window> <pct> or OK. Meant for the
-    daemon tick; not wired yet (tick.ps1 changes wait for the next release):
-    `python <harness>/tools/v2/usage_monitor.py warn`, once per tick, next to
-    `--resume-check` in Invoke-UsageResume.
+    what the operator sees. Prints WARN <window> <pct> or OK. The daemon tick
+    runs it (tick.ps1 Invoke-UsageWarn, module usage_resume) once per tick,
+    only when status.json shows a window at WARN_PCT.
 
 STRICTLY FAIL-OPEN: any exception -> log to stderr + exit 0. Never breaks the tick.
 """
