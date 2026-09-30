@@ -82,7 +82,7 @@ export const DEFAULTS = {
       alert_triage: false, hub: false, janitor: true /* | 'report' */,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true, review_board: false,
-      timeline_summary: false, auto_roll: false,
+      timeline_summary: false, auto_roll: false, session_summarize: true,
     },
     roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context
     skills: 'all',

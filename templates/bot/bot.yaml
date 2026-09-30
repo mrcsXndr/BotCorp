@@ -47,6 +47,7 @@ harness:
     telemetry: true               # OpenTelemetry export to the local sink (subagent/usage observability)
     review_board: false           # ONE permanent private review Artifact the bot keeps adding to (skill review-artifact); linked in the cockpit header
     timeline_summary: false       # hourly daemon job: LLM-distil a session timeline a hook left structural, with the vault token (real spend)
+    session_summarize: true       # the session-summarize Stop hook: a disk snapshot per turn in memory/sessions/<stamp>.md
     auto_roll: false              # the daemon rolls a FRESH session at a declared breakpoint once the context passes roll_tokens (below)
   roll_tokens: 500000             # auto_roll's threshold: the last turn's context tokens (status.json)
   skills: all                     # or a list; the rest are hidden via disabledSkills in the generated settings
