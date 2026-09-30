@@ -16,6 +16,7 @@ automations:
     max_per_day: 12                    # 0 / absent = unlimited
     idle_gated: true                   # only while this bot's session is idle (same gate as every restart)
     critical: false                    # true = keeps running while the bot's Claude account is usage-blocked
+    verify: {fresh: memory/triage.md, max_age_min: 30}   # optional, kind: command only: see Records
     enabled: true                      # `botcorp automations pause <bot> <name>` flips this
   - name: incident-watch
     trigger: {interval_min: 5}
@@ -127,7 +128,9 @@ skips `max_per_day`. `-DryRun` logs what would run.
   `<BotCorp>/harness` and `${BOTCORP}` the checkout root.
 - env = the bot env (`BOT_HOME`, `BOT_NAME`, `BOT_MODULES`, `BOTCORP_HOME`,
   `CLAUDE_CONFIG_DIR`, `CLAUDE_PLUGIN_ROOT`, `PYTHONIOENCODING`) plus
-  `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, and every key listed in
+  `BOT_AUTOMATION=<name>`, `BOT_RUN_ID=<run id>`, `BOT_TG_SCHEDULED=1` (so a
+  `tg_send.py` inside `integrations.telegram.quiet` goes to alerts.log
+  instead of the phone), and every key listed in
   `secrets:` decrypted in-process from the bot's DPAPI vault and injected as
   `<KEY>` (env names are case-insensitive on Windows; `hub_token` ->
   `HUB_TOKEN`; `oauth_token` also as `CLAUDE_CODE_OAUTH_TOKEN`, the session's
@@ -159,6 +162,14 @@ what the cockpit and the hub show), else the last non-empty line, 200 chars.
 `exit` is the command's exit code, `124` on timeout, `127` when it could not be
 launched.
 
+Exit 0 alone is not success when the entry has `verify: {fresh: <file>,
+max_age_min: N}` (the file relative to the bot folder, or absolute): after a
+run that exited 0 the file must exist and be at most N minutes old. The
+record carries `verify: ok` or `verify: miss: <missing | M min old>`, and a
+miss appends one line to the bot's `memory/metrics/alerts.log`, which alert
+triage reads. A failure streak reaching 3 appends ONE alerts.log line for
+that streak; a success re-arms it (`streak_alerted` in the state below).
+
 A prompt automation's record also carries `result`: `sent`,
 `failed: <why>`, or `skipped: <reason>`. A skip writes a record with
 `exit: null` and `log: null`. The daily rollup and the hub leave skips out,
@@ -171,7 +182,8 @@ Per-automation state lives in `<rt>/state/<bot>/automations.json`:
 `{at, streak, gap_min, next_due}`), `runs_today` / `runs_today_date`,
 `last_ok`, `last_start`, `last_end`, `last_exit`, `last_run_id`,
 `last_summary`, `running_run_id` / `running_pid` while a run is in progress,
-`last_skip` (why it was last skipped), `last_result` (prompt automations). Health for the cockpit and `hub_push`
+`last_skip` (why it was last skipped), `last_result` (prompt automations),
+`streak_alerted` (when the current failure streak was reported). Health for the cockpit and `hub_push`
 (`name, last_ok_age_s, failure_streak, runs_today`) is read from here.
 
 Retention: per-automation logs are kept 14 days or 50 MB (oldest deleted

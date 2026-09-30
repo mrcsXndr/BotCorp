@@ -99,6 +99,7 @@ automations: []                   # per-bot jobs run by the ONE daemon (docs/aut
 #    max_per_day: 12
 #    idle_gated: true                    # only when this bot's session is idle
 #    critical: false                     # true = keeps running while the account is usage-blocked
+#    verify: {fresh: memory/report.md, max_age_min: 30}   # exit 0 must also leave this file fresh, else one alerts.log line
 #    enabled: true
 
 # tools:                          # OPTIONAL capability registry; absent = off. Every executable under tools/ and

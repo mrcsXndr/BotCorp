@@ -178,6 +178,18 @@ function Add-RunRecord {
     } finally { if ($have) { try { $mx.ReleaseMutex() } catch {} }; try { $mx.Dispose() } catch {} }
 }
 
+# One line in the bot's memory/metrics/alerts.log (tg_send.py --alert's format:
+# a local ISO stamp, a tab, the text): alert triage reads it, nothing is pushed.
+function Add-AlertLine {
+    param([string]$Text)
+    try {
+        $f = Join-Path (Join-Path $P.BotHome 'memory\metrics') 'alerts.log'
+        $d = Split-Path $f -Parent
+        if (-not (Test-Path $d)) { New-Item -ItemType Directory -Force -Path $d | Out-Null }
+        [System.IO.File]::AppendAllText($f, "$((Get-Date).ToString('yyyy-MM-ddTHH:mm:ss'))`t$Text`n", [System.Text.UTF8Encoding]::new($false))
+    } catch { Log "alerts.log append failed: $($_.Exception.Message)" }
+}
+
 function Get-NextDueAfterSuccess {
     param($A, [datetime]$T)
     $trig = $A.trigger
@@ -230,6 +242,8 @@ function Invoke-AutomationJob {
         CLAUDE_CONFIG_DIR = $P.ConfigDir; CLAUDE_PLUGIN_ROOT = $Harness; PYTHONIOENCODING = 'utf-8'
         BOT_MODULES = (@($jcfg._modules) -join ','); BOT_AUTOMATION = $name; BOT_RUN_ID = $runId
         GIT_TERMINAL_PROMPT = '0'; GCM_INTERACTIVE = 'never'
+        # a scheduled send: tg_send.py holds it in alerts.log inside integrations.telegram.quiet
+        BOT_TG_SCHEDULED = '1'
     }
     # Python for the job: BOT_PYTHON, and its folder (+ Scripts) first on PATH so
     # a bare `python` never reaches the Store stub (exit 49).
@@ -315,6 +329,21 @@ function Invoke-AutomationJob {
         if ($exit -eq 0) { $result = 'sent' } elseif ($result -notmatch '^failed') { $result = "failed: $result" }
         $rec['result'] = $result
     }
+    # verify: {fresh, max_age_min}: exit 0 is not success unless the file the job
+    # exists to write is fresh. A miss is one alerts.log line per run.
+    if ($exit -eq 0 -and -not $isPrompt -and $a.verify -and "$($a.verify.fresh)") {
+        $vf = "$($a.verify.fresh)"
+        if (-not [IO.Path]::IsPathRooted($vf)) { $vf = Join-Path $P.BotHome $vf }
+        $maxAge = Num $a.verify.max_age_min 60
+        $age = $null; try { if (Test-Path -LiteralPath $vf -PathType Leaf) { $age = ((Get-Date) - (Get-Item -LiteralPath $vf).LastWriteTime).TotalMinutes } } catch {}
+        if ($null -ne $age -and $age -le $maxAge) { $rec['verify'] = 'ok' }
+        else {
+            $why = $(if ($null -eq $age) { 'missing' } else { "$([Math]::Round($age, 1)) min old" })
+            $rec['verify'] = "miss: $why"
+            Add-AlertLine "automation $name verify FAILED after run ${runId}: $($a.verify.fresh) is $why (max_age_min $maxAge)"
+            Log "run $name ${runId}: verify miss, $($a.verify.fresh) is $why"
+        }
+    }
     Add-RunRecord $rec
 
     Use-AutoState {
@@ -325,7 +354,7 @@ function Invoke-AutomationJob {
         $e['running_run_id'] = $null; $e['running_pid'] = $null; $e['running_since'] = $null
         if ($isPrompt) { $e['last_result'] = $result }
         if ($exit -eq 0) {
-            $e['failure_streak'] = 0; $e['last_ok'] = ToIso $end; $e['backoff_min'] = $null
+            $e['failure_streak'] = 0; $e['last_ok'] = ToIso $end; $e['backoff_min'] = $null; $e['streak_alerted'] = $null
             $e['next_due'] = Get-NextDueAfterSuccess -A $a -T $end
         } elseif ($isPrompt) {
             # No backoff for a prompt: a retry would type it again, late. The next fire is the next chance.
@@ -342,6 +371,11 @@ function Invoke-AutomationJob {
             $hist += [ordered]@{ at = (ToIso $end); streak = $streak; gap_min = $gap; next_due = (ToIso $nd) }
             if ($hist.Count -gt 10) { $hist = @($hist | Select-Object -Last 10) }
             $e['backoff_history'] = $hist
+        }
+        # ONE alerts.log line per failure streak, at its third failure; a success re-arms it
+        if ($exit -ne 0 -and [int](Num $e['failure_streak'] 0) -ge 3 -and -not $e['streak_alerted']) {
+            Add-AlertLine "automation $name FAILED $($e['failure_streak']) runs in a row (last exit $exit, run $runId): $summary"
+            $e['streak_alerted'] = ToIso $end
         }
     }
     Log "run $name $runId exit=$exit ${durationS}s: $summary" -Quiet

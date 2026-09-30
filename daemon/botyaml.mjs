@@ -261,6 +261,16 @@ export function validate(cfg) {
     }
     const t = a.trigger || {};
     if (!t.cron && !t.interval_min && !t.event) errs.push(`automations[${i}].trigger: cron | interval_min | event required`);
+    // verify: {fresh: <file, relative to the bot folder or absolute>, max_age_min: N}: after a
+    // run that exited 0 the file must be at most N minutes old, else one alerts.log line
+    if (a.verify !== undefined) {
+      const v = a.verify;
+      if (kind === 'prompt') errs.push(`automations[${i}].verify: only for kind: command (a prompt's effect lands after the run)`);
+      else if (!isObj(v) || typeof v.fresh !== 'string' || !v.fresh.trim() || !(typeof v.max_age_min === 'number' && v.max_age_min > 0)
+        || Object.keys(v).some((k) => !['fresh', 'max_age_min'].includes(k))) {
+        errs.push(`automations[${i}].verify: {fresh: <file path>, max_age_min: <minutes > 0>} (got ${JSON.stringify(v)})`);
+      }
+    }
     if (a.secrets !== undefined) {
       const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
       const extra = (Array.isArray(a.secrets) ? a.secrets.map(String) : [String(a.secrets)]).filter((k) => !declared.has(k));
