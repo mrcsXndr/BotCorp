@@ -3,6 +3,17 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.1
+
+A bot whose TDL is written as bullets now starts with its backlog.
+
+- **Fixed:** the session-start hook read only `### ` items under `## Open` in
+  `memory/TDL.md`. A TDL written as top-level bullets (`- **title** ...`) reached
+  the session as nothing at all. Each
+  top-level bullet is now an item: its bold title (at most 72 characters) is
+  the headline, and bullets marked `[DONE]`, `[DONE <date>]`, `[resolved]`,
+  `[superseded ...]` or `[ANSWERED]` are left out.
+
 ## v0.9.0
 
 A new cockpit: four places, labels instead of prose, and nothing dangerous one

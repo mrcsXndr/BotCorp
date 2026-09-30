@@ -104,6 +104,28 @@ def test_small_bot_block_is_unchanged_but_for_real_newlines(tmp_path, bot_home):
     assert with_lessons == ctx + "\n\n## Harness lessons (index)\n" + lessons
 
 
+def test_a_bullet_style_tdl_reaches_the_session(tmp_path, bot_home):
+    # A TDL of top-level "- **title**" bullets with indented detail and no ###
+    # items. Before v0.9.1 its whole Open section was dropped.
+    tdl = ["# TDL", "", "## Open", ""]
+    for i in range(40):
+        tdl += [f"- **[WAITING-operator: keys / PAT / prod] 2026-09-{i % 28 + 1:02d} — bullet item {i:02d}, a long title.** " + "b" * 200,
+                f"  - detail for {i:02d} " + "d" * 300, "  - NEXT: step " + "n" * 100]
+    tdl += ["- **[DONE] 2026-09-26 — finished thing.** gone", "  - done detail",
+            "- **[DONE 2026-09-28 12:48Z] dated finished thing.**", "- **[superseded by the line above] stale thing.**",
+            "- **[DONE-ish] 2026-09-25 — half-done thing.**", "", "## Inherited at cutoff", "", "- old item", "## Done"]
+    (bot_home / "memory" / "TDL.md").write_text("\n".join(tdl) + "\n", encoding="utf-8")
+    ctx = context(tmp_path, bot_home, "s1")
+    assert u16(ctx) <= LIMIT, u16(ctx)
+    assert "## Open TDL (persistent backlog" in ctx
+    heads = [ln for ln in ctx.splitlines() if ln.startswith("### [WAITING-operator")]
+    assert len(heads) == 40, len(heads)                      # every open item's headline, cut to 72 chars
+    assert all(len(h) <= 4 + 72 for h in heads)
+    assert "bullet item 39" in ctx
+    assert "finished thing" not in ctx and "stale thing" not in ctx and "old item" not in ctx
+    assert "half-done thing" in ctx
+
+
 def test_assembler_hard_stops_when_the_fixed_lines_overrun(tmp_path):
     fields = ["", "", "", "s9", "/j.md", "/t.md", "[memory: " + "z" * 12000 + "]", "", "", "", "### one", "", ""]
     r = subprocess.run([sys.executable, str(ASSEMBLER), str(tmp_path), str(tmp_path)], input="\0".join(fields).encode("utf-8"),

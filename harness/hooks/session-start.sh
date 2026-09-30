@@ -226,6 +226,24 @@ for ln in m.group(1).splitlines():
     elif blocks:
         blocks[-1][1].append(ln)
 if not blocks:
+    # A TDL written as top-level bullets ("- **title** ..." with indented
+    # detail under each) has no ### items: each column-0 bullet is an item,
+    # rendered as a ### header (its bold title, at most 72 chars, so ~40 items
+    # fit the TDL budget) and the rest of the bullet line as its first note.
+    # A bullet marked [DONE], [DONE <date>], [resolved], [superseded ...] or
+    # [ANSWERED] is finished and left out ([DONE-ish] and the like stay).
+    for ln in m.group(1).splitlines():
+        if ln.startswith("- "):
+            item = ln[2:].strip()
+            bold = re.match(r"\*\*(.+?)\*\*\s*(.*)", item)
+            title, rest = (bold.group(1), bold.group(2)) if bold else (item, "")
+            done = re.match(r"\[(DONE[\] ,]|resolved\]|RESOLVED\]|superseded|ANSWERED\])", title)
+            title = title if len(title) <= 72 else title[:71].rstrip() + "…"
+            blocks.append([None if done else "### " + title, [rest] if rest else []])
+        elif blocks:
+            blocks[-1][1].append(ln)
+    blocks = [b for b in blocks if b[0]]
+if not blocks:
     sys.exit(0)
 out = [f"(condensed: {len(blocks)} items — header + latest status line each; "
        f"full detail per item lives in memory/TDL.md, Read it before working an item)"]
