@@ -158,6 +158,26 @@ function Use-AutoState {
     finally { if ($have) { try { $mx.ReleaseMutex() } catch {} }; try { $mx.Dispose() } catch {} }
 }
 
+# runs.jsonl is appended by every waiter of this bot and read by the cockpit and
+# the rollup: one writer at a time (a per-bot mutex), and a sharing violation
+# from a reader is retried with a short backoff (about 8 s in all) instead of
+# dropping the record. The last resort keeps the whole record in the daemon log.
+function Add-RunRecord {
+    param($Rec)
+    $line = ($Rec | ConvertTo-Json -Compress -Depth 3) + [Environment]::NewLine
+    $mx = New-Object System.Threading.Mutex($false, "Global\BotCorpRuns-$Bot")
+    $have = $false
+    try { $have = $mx.WaitOne(15000) } catch [System.Threading.AbandonedMutexException] { $have = $true } catch {}
+    try {
+        $err = ''
+        for ($i = 1; $i -le 20; $i++) {
+            try { [System.IO.File]::AppendAllText($RunsFile, $line, [System.Text.UTF8Encoding]::new($false)); return }
+            catch { $err = $_.Exception.Message; Start-Sleep -Milliseconds ([Math]::Min(50 * $i, 500)) }
+        }
+        Log "runs.jsonl append failed after 20 tries ($err); the record: $($line.Trim())"
+    } finally { if ($have) { try { $mx.ReleaseMutex() } catch {} }; try { $mx.Dispose() } catch {} }
+}
+
 function Get-NextDueAfterSuccess {
     param($A, [datetime]$T)
     $trig = $A.trigger
@@ -295,7 +315,7 @@ function Invoke-AutomationJob {
         if ($exit -eq 0) { $result = 'sent' } elseif ($result -notmatch '^failed') { $result = "failed: $result" }
         $rec['result'] = $result
     }
-    try { ($rec | ConvertTo-Json -Compress -Depth 3) | Out-File -FilePath $RunsFile -Append -Encoding utf8 } catch { Log "runs.jsonl append failed: $($_.Exception.Message)" }
+    Add-RunRecord $rec
 
     Use-AutoState {
         param($st)
@@ -419,7 +439,7 @@ if ($autos.Count -gt 0 -or $RunNow) {
                     $result = "skipped: $why"
                     $skipId = $now.ToString('yyyyMMdd-HHmmss') + '-' + ('{0:x4}' -f (Get-Random -Maximum 65535))
                     $rec = [ordered]@{ automation = $name; run_id = $skipId; start = (ToIso $now); end = (ToIso $now); exit = $null; duration_s = 0; summary = $result; log = $null; result = $result }
-                    try { ($rec | ConvertTo-Json -Compress -Depth 3) | Out-File -FilePath $RunsFile -Append -Encoding utf8 } catch { Log "runs.jsonl append failed: $($_.Exception.Message)" }
+                    Add-RunRecord $rec
                     $e['last_result'] = $result; $e['last_skip'] = $why
                     $e['next_due'] = Get-NextDueAfterSuccess -A $a -T $now
                     if ($eventName) { try { Remove-Item (Join-Path $EventsDir "$eventName.queue") -Force -ErrorAction SilentlyContinue } catch {} }
