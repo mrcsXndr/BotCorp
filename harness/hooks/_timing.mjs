@@ -6,6 +6,8 @@
 // creates it every tick), so a retired bot or a hand run leaves no debris.
 // Bounded: once the file passes MAX_BYTES it is cut to the last KEEP lines,
 // once per few thousand runs, never a rewrite per run.
+// BOTCORP_HOOK_PROBE=1 (the doctor's own guard probe) records nothing, so a
+// synthetic block never shows up as a bot's guard-pre rc=2.
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -17,7 +19,7 @@ const MAX_BYTES = 256 * 1024;
 
 export function recordTiming(hook, ms, rc, timedOut = false, env = process.env) {
   try {
-    if (!env.BOT_NAME) return;
+    if (!env.BOT_NAME || env.BOTCORP_HOOK_PROBE === '1') return;
     const dir = path.join(env.BOTCORP_HOME || path.join(os.homedir(), '.botcorp'), 'state', env.BOT_NAME);
     if (!fs.existsSync(dir)) return;
     const file = path.join(dir, TIMING_FILE);

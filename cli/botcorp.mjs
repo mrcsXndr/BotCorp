@@ -274,7 +274,7 @@ function vaultIsolationCheck(bot) {
   if (!registered) return { level: 'FAIL', detail: 'harness/hooks/hooks.json does not register hooks/guard.mjs pre for Read|...|Bash' };
   const sibling = path.join(botHome(bot === 'other-bot' ? 'another-bot' : 'other-bot'), '.vault', 'secrets.json');
   const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Read', tool_input: { file_path: sibling } });
-  const r = run(process.execPath, [path.join(ROOT, 'harness', 'hooks', 'guard.mjs'), 'pre'], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness') } });
+  const r = run(process.execPath, [path.join(ROOT, 'harness', 'hooks', 'guard.mjs'), 'pre'], { stdin: payload, timeoutMs: 30_000, env: { BOT_HOME: botHome(bot), BOT_NAME: bot, CLAUDE_PLUGIN_ROOT: path.join(ROOT, 'harness'), BOTCORP_HOOK_PROBE: '1' } });
   if (r.code === 2 && /BLOCKED/.test(r.err)) return { level: 'PASS', detail: 'vault-guard blocks a Read of a sibling .vault (exit 2)' };
   return { level: 'FAIL', detail: `vault-guard did NOT block a sibling .vault read (exit ${r.code}${r.timedOut ? ', timed out' : ''}): ${(r.err || r.out).trim().split(/\r?\n/)[0].slice(0, 120)}` };
 }

@@ -156,6 +156,17 @@ def test_guard_records_its_entry_points_only(tmp_path):
     assert [x["hook"] for x in recs] == ["guard-pre"] and recs[0]["rc"] == 0
 
 
+@pytest.mark.skipif(os.name != "nt" or shutil.which("node") is None, reason="the doctor's vault probe runs on Windows only")
+def test_the_doctor_vault_probe_is_not_recorded(box):  # noqa: F811
+    # QA r4 live N3: the probe's synthetic block showed up as the bot's guard-pre rc=2
+    rt, bots, env = box
+    (rt / "state" / "t").mkdir(parents=True, exist_ok=True)
+    r = cli(env, "doctor", "--no-tg-probe", "--no-accounts", "--json", timeout=300)
+    rows = {c["name"]: c for c in json.loads(r.stdout)}
+    assert rows["t: vault isolation"]["level"] == "PASS", rows.get("t: vault isolation")
+    assert [x for x in _lines(rt) if x["hook"] == "guard-pre"] == []
+
+
 def _verdict(lines, now):
     js = (f"import {{ hookTimeouts, hookTimingVerdict }} from '{LIB}';"
           f"import fs from 'node:fs';"
