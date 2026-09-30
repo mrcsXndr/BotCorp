@@ -82,6 +82,7 @@ export const DEFAULTS = {
       alert_triage: false, hub: false, janitor: true /* | 'report' */,
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true, review_board: false,
+      timeline_summary: false,
     },
     skills: 'all',
     agents: 'all',

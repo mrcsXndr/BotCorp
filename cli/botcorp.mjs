@@ -1988,6 +1988,7 @@ const MODULE_DESC = {
   sound: 'play a sound on Stop',
   telemetry: 'OpenTelemetry export to the local sink (subagent/usage observability)',
   review_board: 'one permanent private review Artifact the bot keeps adding to; linked in the cockpit header',
+  timeline_summary: 'hourly daemon job: LLM-distil a timeline a hook left structural, with the vault token (real spend)',
 };
 // Modules a bot configures rather than just switches on: shown once, under integrations.
 const INTEGRATION_MODULES = ['telegram', 'board', 'hub'];

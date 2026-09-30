@@ -15,6 +15,7 @@ timeline build <session_id>                # LLM-distilled (default, Opus)
 timeline build <session_id> --structural   # cheap structural extraction
 timeline read <session_id>
 timeline distill <since>                   # cross-session, e.g. "2026-W18"
+timeline summarize-stale [<session_id>]    # the daemon's timeline-summary job
 """
 from __future__ import annotations
 
@@ -280,6 +281,27 @@ def cmd_build(session_id: str, structural_only: bool = False) -> int:
     return _llm_distill(session_id)
 
 
+def cmd_summarize_stale(session_id: str) -> int:
+    """The daemon's timeline-summary job (module timeline_summary): distill the
+    session's timeline when it is missing or structural. Hooks have no Claude
+    credentials and fall back to structural; the daemon runs this with the
+    vault token. 0 = distilled or nothing to do; 1 = the distill fell back, so
+    the job's failure streak (and its one alerts.log line) sees it."""
+    jp, tp = _journal_path(session_id), _timeline_path(session_id)
+    if not jp.exists():
+        print(f"SUMMARY: no journal for session {session_id}; nothing to do")
+        return 0
+    if tp.exists() and "phase: 1-structural" not in tp.read_text(encoding="utf-8")[:600]:
+        print(f"SUMMARY: timeline of {session_id} is already distilled; nothing to do")
+        return 0
+    _llm_distill(session_id)
+    if tp.exists() and "phase: 1-structural" not in tp.read_text(encoding="utf-8")[:600]:
+        print(f"SUMMARY: distilled the timeline of {session_id} ({DISTILL_MODEL})")
+        return 0
+    print(f"SUMMARY: distill fell back to structural for {session_id} (the reason is on stderr above)")
+    return 1
+
+
 def cmd_read(session_id: str) -> int:
     tp = _timeline_path(session_id)
     if not tp.exists():
@@ -362,6 +384,7 @@ Usage:
   timeline.py build <session_id> --structural   # fast structural extraction
   timeline.py read <session_id>
   timeline.py distill <since>                   # cross-session, e.g. "2026-W18"
+  timeline.py summarize-stale [<session_id>]    # distill only a missing/structural timeline (the daemon job)
 
 Env:
   BOT_DISTILL_MODEL    (default: claude-opus-4-8)
@@ -382,6 +405,8 @@ def main(argv: list[str]) -> int:
         return cmd_build(resolve_session_id(argv[2]), structural_only=structural)
     if cmd == "read" and len(argv) >= 3:
         return cmd_read(resolve_session_id(argv[2]))
+    if cmd == "summarize-stale":
+        return cmd_summarize_stale(resolve_session_id(argv[2] if len(argv) >= 3 else None))
     if cmd == "distill" and len(argv) >= 3:
         return cmd_distill(argv[2])
     print(USAGE, file=sys.stderr)

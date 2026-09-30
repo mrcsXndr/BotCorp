@@ -190,6 +190,28 @@ function Add-AlertLine {
     } catch { Log "alerts.log append failed: $($_.Exception.Message)" }
 }
 
+# Built-in automations: a harness module that runs as a job of this bot, with
+# the same schedule, account-aware vault token, timeout, records and failure
+# alerts as a bot.yaml entry. Defined here, never in bot.yaml (a job file only
+# names one); a bot.yaml entry of the same name wins.
+#   timeline_summary -> timeline-summary: every 60 min, `timeline.py
+#     summarize-stale` distills the current session's timeline when a hook left
+#     it structural (hooks get no Claude credentials; this run gets oauth_token).
+#     The model is the workhorse tier of harness/models.json.
+function Get-BuiltinAutomations {
+    param($Cfg)
+    $out = @()
+    if (@($Cfg._modules) -contains 'timeline_summary') {
+        $cmd = '${PY} "${HARNESS}\tools\v2\timeline.py" summarize-stale'
+        $model = ''; try { $model = "$((Get-Content -Raw -LiteralPath (Join-Path $Harness 'models.json') | ConvertFrom-Json).tiers.workhorse.id)" } catch {}
+        if ($model -match '^[a-z0-9][a-z0-9.-]*$') { $cmd = "set BOT_DISTILL_MODEL=$model&& $cmd" }
+        $out += [pscustomobject]@{ name = 'timeline-summary'; module = 'timeline_summary'; trigger = [pscustomobject]@{ interval_min = 60 }
+            command = $cmd; secrets = @(@($Cfg.secrets) | Where-Object { "$_" -eq 'oauth_token' }); timeout_min = 6 }
+    }
+    $declared = @(@($Cfg.automations) | Where-Object { $_ -and $_.name } | ForEach-Object { "$($_.name)" })
+    return @($out | Where-Object { $declared -notcontains $_.name })
+}
+
 function Get-NextDueAfterSuccess {
     param($A, [datetime]$T)
     $trig = $A.trigger
@@ -227,7 +249,7 @@ function Invoke-AutomationJob {
     # from bot.yaml's entry of that name, and so does the account; no entry, no run.
     $name = "$($job.automation.name)"; $runId = "$($job.run_id)"; $logPath = "$($job.log)"
     $jcfg = Get-BotConfig -Bot $Bot
-    $a = $(if ($jcfg -and $name) { @($jcfg.automations | Where-Object { $_ -and "$($_.name)" -eq $name }) | Select-Object -First 1 })
+    $a = $(if ($jcfg -and $name) { @(@($jcfg.automations) + @(Get-BuiltinAutomations $jcfg) | Where-Object { $_ -and "$($_.name)" -eq $name }) | Select-Object -First 1 })
     if (-not $a) { Log "job $JobFile names automation '$name', which bot.yaml does not declare - refused"; return }
     if ($job.fake_now -and -not $env:BOTCORP_FAKE_NOW) { $env:BOTCORP_FAKE_NOW = "$($job.fake_now)" }
     $timeoutMin = Num $a.timeout_min 20
@@ -390,7 +412,7 @@ if ($ExecJob) {
 # --- scheduler -----------------------------------------------------------------------
 $cfg = Get-BotConfig -Bot $Bot
 if (-not $cfg) { exit 0 }
-$autos = @($cfg.automations | Where-Object { $_ -and $_.name })
+$autos = @(@($cfg.automations | Where-Object { $_ -and $_.name }) + @(Get-BuiltinAutomations $cfg))
 $now = Get-DaemonNow
 $today = $now.ToString('yyyy-MM-dd')
 $blocked = Test-BotAccountBlocked -Bot $Bot

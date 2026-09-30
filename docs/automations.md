@@ -34,6 +34,17 @@ automations:
 `command` entry must not have `prompt:`. `bot.yaml` validation rejects both
 mixes.
 
+## Built-in automations (harness modules)
+
+A module can bring its own job. It runs exactly like a `bot.yaml` entry
+(schedule, account-aware vault token, timeout, `runs.jsonl`, failure alerts)
+but is defined in `daemon/automations.ps1` (`Get-BuiltinAutomations`), not in
+`bot.yaml`; a `bot.yaml` entry of the same name replaces it.
+
+| module | job | what it does |
+|---|---|---|
+| `timeline_summary` | `timeline-summary`, every 60 min, `secrets: [oauth_token]`, 6 min | `timeline.py summarize-stale`: LLM-distils the current session's timeline when it is missing or structural. Hooks get no Claude credentials, so every hook-built timeline is structural; this run has the vault token. Model: the workhorse tier of `harness/models.json`. Exit 1 when the distill fell back, so three misses in a row reach alerts.log. |
+
 ## Prompt automations (`kind: prompt`)
 
 A prompt automation puts one prompt into the bot's running Claude Code session

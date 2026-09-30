@@ -352,6 +352,7 @@ export const MODULE_TEXT = {
   sound: 'Plays a sound on Stop.',
   telemetry: 'OpenTelemetry export to the local sink (usage and subagent observability).',
   review_board: 'One private review Artifact the bot keeps adding to, linked in the cockpit header.',
+  timeline_summary: 'An hourly daemon job that LLM-distils a timeline a hook left structural (real spend).',
 };
 const LOCKED_HOOKS = { 'vault-guard': 'keeps every session out of the vaults', 'operator-guard': 'keeps operator-only verbs away from bots' };
 // Plugin marketplaces with a known owner; any other marketplace is named as it is.
