@@ -144,6 +144,34 @@ it('with two entries: up is off on the first, down on the last, the second is a 
   expect(off('Remove Studio')).toBe(false);
 });
 
+it('a Telegram change asks first: nothing is written until the verb, and Cancel writes nothing', async () => {
+  serve({ 'GET /api/bots/example/pairing': [200, { present: true, dmPolicy: 'pairing', allowFrom: [], pending: [{ senderId: '4242', ageS: 30 }] }],
+    'POST /api/bots/example/pair': [200, { ok: true }] });
+  mount('telegram');
+  await userEvent.click(await screen.findByRole('radio', { name: 'Only listed' }));
+  let dialog = await confirmDialog();
+  expect(within(dialog).getByText('A wrong setting can cut it off.')).toBeTruthy();
+  expect(writes()).toEqual([]);
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(document.querySelector('.sheet [role=alertdialog]')).toBeNull());
+  expect(writes()).toEqual([]);
+  await userEvent.click(screen.getByRole('radio', { name: 'Only listed' }));
+  dialog = await confirmDialog();
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Change Telegram' }));
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'integrations.telegram.dm_policy', value: 'allowlist' }]]));
+});
+
+it('Pair asks first, then pairs the sender', async () => {
+  serve({ 'GET /api/bots/example/pairing': [200, { present: true, dmPolicy: 'pairing', allowFrom: [], pending: [{ senderId: '4242', ageS: 30 }] }],
+    'POST /api/bots/example/pair': [200, { ok: true }] });
+  mount('telegram');
+  await userEvent.click(await screen.findByRole('button', { name: 'Pair' }));
+  const dialog = await confirmDialog();
+  expect(writes()).toEqual([]);
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Pair sender' }));
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/pair', { senderId: '4242' }]]));
+});
+
 it('Secrets shows names and never a masked value', async () => {
   serve({ 'GET /api/bots/example/secrets': [200, [{ key: 'oauth_token', masked: '****PgAA', updatedAt: '2026-09-29T10:00:00Z' }, { key: 'hub_token', masked: '····abcd' }]],
     'GET /api/bots/example/secrets/lock': [200, { mode: 'none', locked: false }] });

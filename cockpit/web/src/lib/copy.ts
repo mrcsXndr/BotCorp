@@ -333,6 +333,8 @@ export const COPY = {
     fresh: { title: 'Restart {bot} fresh?', body: 'Starts a new conversation.', verb: 'Restart fresh' },
     stop: { title: 'Stop {bot}?', body: 'Telegram stops until you start it.', verb: 'Stop {bot}' },
     archive: { title: 'Archive {bot}?', body: 'Moves it out of the list.', verb: 'Archive chat' },
+    telegram: { title: 'Change Telegram?', body: 'A wrong setting can cut it off.', verb: 'Change Telegram' },
+    pairSender: { title: 'Pair this sender?', body: 'They can message the bot.', verb: 'Pair sender' },
     removeAccount: { title: 'Remove {account}?', body: 'Its token leaves the vault.', verb: 'Remove account' },
     chain: { title: "Save {bot}'s backups?", body: 'Used in order when a limit hits.', verb: 'Save backups' },
     primary: { title: 'Switch {bot} to {account}?', body: 'Keeps the conversation.', verb: 'Switch account' },
