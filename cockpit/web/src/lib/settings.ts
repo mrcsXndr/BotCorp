@@ -41,7 +41,7 @@ export const SETTINGS: SettingDef[] = [
   { id: 'taskBoard', section: 'main', kind: 'project', label: 'taskBoard' },
   { id: 'reviewBoard', section: 'main', kind: 'switch', label: 'reviewBoard', path: 'harness.modules.review_board', on: true, off: false },
   { id: 'admin', section: 'advanced', kind: 'switch', label: 'adminBot', path: 'role', on: 'admin', off: null, hint: 'admin' },
-  { id: 'adminNotify', section: 'advanced', kind: 'switch', label: 'tellMe', path: 'admin_notify', on: true, off: false, when: (c) => cfgGet(c, 'role') === 'admin' },
+  { id: 'adminNotify', section: 'advanced', kind: 'switch', label: 'tellMe', path: 'harness.admin_notify', on: true, off: false, when: (c) => cfgGet(c, 'role') === 'admin' },
   { id: 'autoFix', section: 'advanced', kind: 'switch', label: 'autoFix', path: 'harness.modules.alert_triage', on: true, off: false },
   { id: 'debrief', section: 'advanced', kind: 'switch', label: 'debrief', path: 'harness.modules.debrief', on: true, off: false },
   { id: 'hub', section: 'advanced', kind: 'text', label: 'hubUrl', path: 'integrations.hub.url',

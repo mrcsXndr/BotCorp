@@ -10,7 +10,7 @@ import { ManageScreen } from './ManageScreen';
 import { MotionRoot, ToastRegion } from '../../ui';
 
 const BOT = { name: 'example', displayName: 'example', persona: 'p', model: 'top', kind: 'bg', running: false, phase: 'stopped', telegram: true, account: 'studio', backups: [], service: 'daemon', automations: [], tools: null };
-const CONFIG = { config: { persona: 'A plain bot.', model: 'top', harness: { service: 'daemon', modules: { telegram: true, board: false, review_board: false }, disable: [] }, integrations: { board: { owner: null, number: null, type: 'user' }, telegram: { dm_policy: 'pairing' } }, role: null, failover_notify: false }, set: [] };
+const CONFIG = { config: { persona: 'A plain bot.', model: 'top', harness: { service: 'daemon', modules: { telegram: true, board: false, review_board: false }, disable: [], failover_notify: false }, integrations: { board: { owner: null, number: null, type: 'user' }, telegram: { dm_policy: 'pairing' } }, role: null }, set: [] };
 const ACCOUNTS = { accounts: [
   { id: 'studio', label: 'Studio', plan: '', masked: '****St01', state: 'ok', fiveHour: null, sevenDay: null },
   { id: 'spare', label: 'Spare', plan: '', masked: '****Sp02', state: 'ok', fiveHour: null, sevenDay: null },
@@ -87,6 +87,13 @@ it('a pasted project link writes owner, number and type, then turns the board on
     ['POST', '/api/bots/example/config', { path: 'integrations.board.type', value: 'user' }],
     ['POST', '/api/bots/example/config', { path: 'harness.modules.board', value: true }],
   ]);
+});
+
+it('the failover notify switch posts harness.failover_notify', async () => {
+  serve();
+  mount('settings');
+  await userEvent.click(await screen.findByRole('switch', { name: 'Notify on Telegram' }));
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'harness.failover_notify', value: true }]]));
 });
 
 it('a link that is not a project writes nothing and says why', async () => {

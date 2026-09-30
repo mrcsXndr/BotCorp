@@ -85,8 +85,8 @@ export function SettingsTab({ bot }: { bot: Bot }) {
       return (
         <Group key={d.id} title={<ChainTitle />}>
           <ChainEditor bot={bot} accounts={accounts} />
-          {bot.telegram && <SwitchRow def={{ id: 'failover', section: 'main', kind: 'switch', label: 'tellMe', path: 'failover_notify', on: true, off: false }}
-            cfg={cfg} save={save} queued={queuedOf(['failover_notify'])} />}
+          {bot.telegram && <SwitchRow def={{ id: 'failover', section: 'main', kind: 'switch', label: 'tellMe', path: 'harness.failover_notify', on: true, off: false }}
+            cfg={cfg} save={save} queued={queuedOf(['harness.failover_notify'])} />}
         </Group>
       );
     }
