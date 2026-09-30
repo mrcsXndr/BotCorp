@@ -43,7 +43,7 @@ export const RELEASES: { installed: Release & { pin: string }; available: Releas
       tag: 'v0.9.0', date: 'today', actions: ['apply', 'skip'],
       summary: 'A new cockpit: readable on the phone, one-tap approvals, a Tools tab per bot.',
       notes: [
-        { title: 'New cockpit', body: 'A bottom bar with Bots, Inbox, Accounts and Settings. The classic UI stays at /classic for one release.' },
+        { title: 'New cockpit', body: 'A bottom bar with Bots, Inbox, Accounts and Settings.' },
         { title: 'Approvals in one tap', body: 'Approve fires at once under Cloudflare Access; loopback installs pair a browser once.' },
         { title: 'Tools tab', body: 'Every harness, own and third-party tool per bot, with a switch, or the reason when it is locked.' },
       ],

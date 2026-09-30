@@ -1,6 +1,6 @@
 // Attachments: the upload rules (core/attach.mjs), the composer's early checks
-// and the sent-turn parsing (public/cards.js, evaluated verbatim), the chips
-// (public/inbox.js, on a DOM that refuses innerHTML), then a real cockpit on a
+// and the sent-turn parsing (web/src/lib/cards.ts, imported as is), the chips
+// (web/src/lib/inbox.ts, on a DOM that refuses innerHTML), then a real cockpit on a
 // free port: the operator gate, the allow-list, the size cap, a `../` name that
 // stays inside, the served thumbnail, and /send naming the file after the text.
 // Run: node --test cockpit/tests/
@@ -11,7 +11,6 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as attach from '../../core/attach.mjs';
@@ -21,15 +20,9 @@ const SERVER = path.join(HERE, '..', 'server.mjs');
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-attach-test-'));
 const PNG = Buffer.from('89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082', 'hex');
 
-const cards = {};
-vm.createContext(cards);
-vm.runInContext(fs.readFileSync(path.join(HERE, '..', 'public', 'cards.js'), 'utf-8'), cards);
-const { attachView, splitAttached, ATTACH_EXT, ATTACH_MAX } = cards.CockpitCards;
-const ib = {};
-vm.createContext(ib);
-vm.runInContext(fs.readFileSync(path.join(HERE, '..', 'public', 'inbox.js'), 'utf-8'), ib);
-const { chip, sentBubble } = ib.CockpitInbox;
-const plain = (o) => JSON.parse(JSON.stringify(o));   // across the vm realm
+const { attachView, splitAttached, ATTACH_EXT, ATTACH_MAX } = await import('../web/src/lib/cards.ts');
+const { chip, sentBubble } = await import('../web/src/lib/inbox.ts');
+const plain = (o) => JSON.parse(JSON.stringify(o));
 
 // ---- the rules -----------------------------------------------------------------------
 test('safeName: the last segment, reduced to safe characters; refused types throw', () => {

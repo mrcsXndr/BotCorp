@@ -1,6 +1,6 @@
 // The header's review-board link (harness.modules.review_board): getBot reads
 // the bot-written <bot>/.botcorp/review-board.json only with the module on and
-// passes only a private claude.ai artifact link; cards.js boardLink turns that
+// passes only a private claude.ai artifact link; cards.ts boardLink turns that
 // into the link, the muted "no board yet", or nothing. Run: node --test cockpit/tests/*.test.mjs
 
 import { test } from 'node:test';
@@ -8,19 +8,13 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'cockpit-board-test-'));
 process.env.BOTCORP_HOME = path.join(TMP, 'rt');
 process.env.BOTCORP_BOTS_DIR = path.join(TMP, 'bots');
 const { getBot } = await import('../bots.mjs');
 
-const sandbox = {};
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(HERE, '..', 'public', 'cards.js'), 'utf-8'), sandbox);
-const { boardLink } = sandbox.CockpitCards;
+const { boardLink } = await import('../web/src/lib/cards.ts');
 const plain = (o) => JSON.parse(JSON.stringify(o));
 
 const URL = 'https://claude.ai/code/artifact/0a1b2c3d-4e5f-6789-abcd-ef0123456789';
@@ -69,13 +63,4 @@ test('a hostile record never becomes a link or a count', async () => {
   assert.equal(boardLink(b.reviewBoard).count, '');
   // the client refuses a bad URL on its own too
   assert.equal(boardLink({ url: 'javascript:alert(1)', open: 1 }).none, true);
-});
-
-test('the header markup starts hidden and opens the board in a new tab without an opener', () => {
-  const html = fs.readFileSync(path.join(HERE, '..', 'public', 'index.html'), 'utf-8');
-  const link = /<a [^>]*id="hBoard"[^>]*>/.exec(html)?.[0] || '';
-  assert.match(link, /\bhidden\b/);
-  assert.match(link, /target="_blank"/);
-  assert.match(link, /rel="noopener noreferrer"/);
-  assert.match(/<span [^>]*id="hBoardNone"[^>]*>/.exec(html)?.[0] || '', /\bhidden\b/);
 });

@@ -1,8 +1,7 @@
 // The decisions behind the cockpit's cards, kept free of the DOM: which
 // lifecycle buttons a bot gets, how a pending approval reads to a person, the
 // context bar, the account name, the tools line, attachments, the review-board
-// link. A 1:1 port of cockpit/public/cards.js, which the classic UI keeps until
-// v0.9.1; src/lib/parity.test.ts runs both on the same inputs.
+// link. cockpit/tests/*.test.mjs import this file as is (Node strips the types).
 
 export const fmtTok = (n: number): string => (n >= 1e6 ? `${+(n / 1e6).toFixed(n % 1e6 ? 1 : 0)}M` : n >= 1000 ? `${Math.round(n / 1000)}k` : String(n));
 

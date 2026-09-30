@@ -3,7 +3,7 @@
 // (core/inbox.mjs). Everything here is built with createElement +
 // textContent, never innerHTML: the text is whatever the operator pasted, and
 // a status detail can quote the session (a blocked session's `needs`).
-// A 1:1 port of cockpit/public/inbox.js; src/lib/parity.test.ts runs both.
+// cockpit/tests/*.test.mjs import this file as is (Node strips the types).
 
 export const STATUSES = ['sending', 'queued', 'held', 'delivered', 'expired', 'failed'] as const;
 export type InboxStatus = (typeof STATUSES)[number];

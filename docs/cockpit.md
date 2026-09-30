@@ -35,7 +35,7 @@ Two things it deliberately does NOT do:
 | `history.mjs` / `chat.mjs` | read-only over Claude Code transcripts (see the caveat below) |
 | `engine.mjs` | `GET /api/engine/version`: `botcorp.json` version + `git rev-parse --short HEAD` (`server.mjs` adds `exposure: loopback\|access`) |
 | `updates.mjs` | reads `<BOTCORP_HOME>/state/updates.json` for the Releases panel; Apply/Skip go through the CLI (`update --apply\|--skip <tag>`) |
-| `public/` | the page: vanilla JS + xterm.js, no build step, no external requests |
+| `web/` | the page: a React SPA (Vite, TypeScript); the built `web/dist` is committed and is all the server serves. The classic `public/` page and `/classic` were removed in v0.9.3 |
 
 Machine runtime lives under `BOTCORP_HOME` (default `~/.botcorp`): `state/`,
 `logs/`, `access.json`. Bots live under `<BotCorp>/bots/<name>/` (= `BOT_HOME`),
@@ -221,7 +221,7 @@ never spawns a session itself, attached or not.
 | New chat: recent folders | `GET /api/chat/recent` reads `<BOTCORP_HOME>/state/chat-recent.json` |
 | New chat: launch | `POST /api/chat/launch {account, generic, cwd}` -> `chat --account <id> --generic` or `chat --account <id> --cwd <path>` |
 | Version | `botcorp.json` + `git rev-parse --short HEAD` + `exposure: loopback\|access` |
-| Favicon | `public/favicon.svg`, linked from `index.html` and `guide.html` |
+| Favicon | `web/public/favicon.svg` (built into `web/dist`), linked from `index.html` |
 
 CLI results come back as `{ok, code, out, err}`; `out`/`err` are truncated to
 4 KB and scrubbed of token shapes before they reach the browser.
@@ -281,14 +281,13 @@ Access remains the remote path.
 - Reconnect with backoff (1 s doubling to 15 s) whenever the socket drops
   while the bot stays selected. A pty exit shows "Session exited with code N.
   Restart it?" with a Restart button.
-- Key row: Esc, Ctrl+C, Ctrl+L, Mode, Tab, Enter, arrows, +file. The Mode key
-  sends `\x1b[Z` (Shift+Tab); `MODE_KEY_SEQ` at the top of `app.js` is the one
-  constant to flip to `\x1bm` (Alt+M) if ConPTY does not deliver Shift+Tab.
+- Key row: Esc, Ctrl+C, Ctrl+L, Shift+Tab (the mode key, `\x1b[Z`), Tab,
+  Enter, arrows, +file (`web/src/screens/bot/TerminalView.tsx`).
 - The chat box does not type into the socket: it queues the message in the
   bot's inbox (`botcorp send`, see `docs/cli.md`), which types it once the
   session is idle. Each sent message shows a status line under it (sending,
   queued, held, delivered, expired, not delivered, with the reason), rendered
-  with `textContent` only (`public/inbox.js`), like the message itself.
+  with `textContent` only (`web/src/lib/inbox.ts`), like the message itself.
 - A terminal paste containing a newline is sent as ONE bracketed paste
   (`\x1b[200~ ... \x1b[201~`), then `\r`.
 - Attachments (`core/attach.mjs`): the chat's paperclip, a paste (Ctrl/Cmd+V

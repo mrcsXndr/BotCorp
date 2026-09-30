@@ -1,20 +1,12 @@
-// The cockpit's card decisions (public/cards.js, evaluated verbatim): the
+// The cockpit's card decisions (web/src/lib/cards.ts, imported as is): the
 // lifecycle buttons per bot kind, how a pending approval reads, the context
 // bar, the account name. Run: node --test cockpit/tests/
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import path from 'node:path';
-import vm from 'node:vm';
-import { fileURLToPath } from 'node:url';
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const sandbox = {};
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(HERE, '..', 'public', 'cards.js'), 'utf-8'), sandbox);
-const { lifecycleButtons, approvalView, contextBar, accountName, toolsLine } = sandbox.CockpitCards;
-const plain = (o) => JSON.parse(JSON.stringify(o));   // across the vm realm
+const { lifecycleButtons, approvalView, contextBar, accountName, toolsLine } = await import('../web/src/lib/cards.ts');
+const plain = (o) => JSON.parse(JSON.stringify(o));
 
 test('tools line: MCP tools read as plain words, repeats collapse', () => {
   assert.equal(toolsLine(['mcp__plugin_telegram_telegram__reply']), 'Telegram reply');
@@ -76,6 +68,14 @@ test('approval: every widening path the CLI queues names what it widens', () => 
   assert.equal(approvalView(row('model', '', { requested_by: 'operator:someone' })).asker, 'Queued by someone');
 });
 
+test('the attention bar names an approval the way its card does', async () => {
+  const { attentionItems } = await import('../attention.mjs');
+  for (const r of [row('harness.modules.remote_control', 'enables Remote Control'), row('model', 'widening'), row('model', '')]) {
+    const [item] = attentionItems({ approvals: [r] });
+    assert.equal(item.text, `demo asks: ${approvalView(r).title}`);
+  }
+});
+
 test('context bar: used over the compaction ceiling, clamped, levelled; nothing invented', () => {
   assert.deepEqual(plain(contextBar({ used: 180000, window: 400000, pct: 45, source: 'x' })), { pct: 45, level: '', label: '180k / 400k' });
   assert.equal(contextBar({ used: 320000, window: 400000, pct: 80 }).level, 'warn');
@@ -112,8 +112,8 @@ test('account: a failover marks the name as a backup; failback and recover only 
   assert.equal(accountName({ na: 'no status yet' }, accounts, null, 'failover').name, 'n/a');
 });
 
-test('config field: enums, booleans, numbers, text; lists and other pages read-only', () => {
-  const { configField, configRows, configText } = sandbox.CockpitCards;
+test('config field: enums, booleans, numbers, text; lists and other pages read-only', async () => {
+  const { configField, configRows, configText } = await import('../web/src/lib/cards.ts');
   assert.deepEqual(plain(configField('permissions', 'default')), { kind: 'enum', options: ['bypass', 'default'] });
   assert.deepEqual(plain(configField('effort', 'turbo')).options.slice(-1), ['turbo'], 'an unknown current value stays selectable');
   assert.deepEqual(plain(configField('role', null)).options, [null, 'admin']);
@@ -136,8 +136,8 @@ test('config field: enums, booleans, numbers, text; lists and other pages read-o
   assert.equal(configText(false), 'false');
 });
 
-test('auth url: only a sign-in link raises the login bar; an artifact, chat or share link never does', () => {
-  const { authUrl } = sandbox.CockpitCards;
+test('auth url: only a sign-in link raises the login bar; an artifact, chat or share link never does', async () => {
+  const { authUrl } = await import('../web/src/lib/cards.ts');
   const login = 'https://claude.ai/oauth/authorize?code=true&client_id=9d1c250a&response_type=code&state=abc';
   const google = 'https://accounts.google.com/o/oauth2/v2/auth?client_id=1&scope=email';
   assert.equal(authUrl('Published: https://claude.ai/code/artifact/0a1b2c3d-4e5f-6789-abcd-ef0123456789'), null, 'an artifact link: no bar');
@@ -153,8 +153,8 @@ test('auth url: only a sign-in link raises the login bar; an artifact, chat or s
   assert.equal(authUrl(''), null);
 });
 
-test('chain line: empty without backups; the chain in order, and where it is after a failover', () => {
-  const { chainLine } = sandbox.CockpitCards;
+test('chain line: empty without backups; the chain in order, and where it is after a failover', async () => {
+  const { chainLine } = await import('../web/src/lib/cards.ts');
   assert.equal(chainLine({ backups: [] }), '');
   assert.equal(chainLine(null), '');
   assert.equal(chainLine({ account_wanted: 'main', backups: ['acc1', 'acc2'] }), 'chain: main → acc1 → acc2');

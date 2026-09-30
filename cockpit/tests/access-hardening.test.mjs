@@ -103,8 +103,14 @@ test('loopback: strict CSP on the page; one audit line per mutating call, no bod
   assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)[^>]*>/i, 'no inline <script> in index.html');
   assert.doesNotMatch(html, /\son[a-z]+\s*=/i, 'no inline on* handler in index.html');
   const cookie = page.headers.get('set-cookie').split(';')[0];
+  // the classic UI is gone (v0.9.3): nothing serves it any more
+  for (const f of ['/classic', '/app.js', '/guide.html', '/vendor/xterm/xterm.js']) {
+    assert.equal((await fetch(`${base}${f}`, { headers: { cookie } })).status, 404, f);
+  }
 
-  for (const f of ['/theme.js', '/app.js']) {
+  const bundle = /<script [^>]*src="(\/assets\/[^"]+\.js)"/.exec(html)?.[1];
+  assert.ok(bundle, 'the page loads the SPA bundle');
+  for (const f of ['/theme.js', bundle]) {
     const r = await fetch(`${base}${f}`, { headers: { cookie } });
     assert.equal(r.status, 200, f);
     assert.match(r.headers.get('content-type'), /javascript/, f);

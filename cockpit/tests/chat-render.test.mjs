@@ -1,5 +1,5 @@
-// Cockpit chat rendering: the markdown renderer the page ships (public/md.js,
-// evaluated verbatim), channel-message parsing end to end through chatState,
+// Cockpit chat rendering: the markdown renderer the page ships (web/src/lib/md.ts,
+// imported as is: Node strips the types), channel-message parsing end to end through chatState,
 // and the status chips (chatstatus.mjs). Run: node --test cockpit/tests/
 //
 // The XSS checks are proven load-bearing: every payload must also FAIL the
@@ -12,7 +12,6 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import vm from 'node:vm';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -27,10 +26,7 @@ const { parseChannelText, parseTaskNotifications, chatState, tgSendTexts, curren
 const { summarizeStatus, chatStatus } = await import('../chatstatus.mjs');
 const { ccProjectSlug } = await import('../bots.mjs');
 
-const sandbox = {};
-vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(path.join(COCKPIT, 'public', 'md.js'), 'utf-8'), sandbox);
-const { renderMarkdown } = sandbox.CockpitMarkdown;
+const { renderMarkdown } = await import('../web/src/lib/md.ts');
 
 // ---- the safety property ------------------------------------------------------
 // Escaped text never contains a raw '<', so every '<' in the output is markup
@@ -297,7 +293,7 @@ test('parseTaskNotifications: summary, status, usage, result; never the path or 
   assert.equal(parseTaskNotifications('no notification'), null);
 });
 
-test('task card result: renders through md.js and stays safe', () => {
+test('task card result: renders through md.ts and stays safe', () => {
   for (const p of PAYLOADS) {
     const [c] = parseTaskNotifications(`<task-notification><status>completed</status><summary>${p}</summary><result>${p}\n\n**ok** [x](javascript:alert(1))</result></task-notification>`);
     assertSafe(renderMarkdown(c.result));
@@ -447,7 +443,7 @@ test('statusline.js records the session effort in status.json', () => {
   assert.deepEqual(st.effort, { level: 'xhigh' });
 });
 
-// ---- the composer's sent messages (public/inbox.js) ---------------------------------------
+// ---- the composer's sent messages (web/src/lib/inbox.ts) ----------------------------------
 // A DOM that refuses innerHTML: a renderer that parses markup at all fails here.
 function stubDoc() {
   const make = (tag) => {
@@ -462,10 +458,7 @@ function stubDoc() {
 // What the browser would serialize the stub tree to.
 const escHtml = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 const serialize = (n) => `<${n.tagName}${n.className ? ` class="${escHtml(n.className)}"` : ''}>${escHtml(n.text)}${n.children.map(serialize).join('')}</${n.tagName}>`;
-const ib = {};
-vm.createContext(ib);
-vm.runInContext(fs.readFileSync(path.join(COCKPIT, 'public', 'inbox.js'), 'utf-8'), ib);
-const { sentBubble, setStatus } = ib.CockpitInbox;
+const { sentBubble, setStatus } = await import('../web/src/lib/inbox.ts');
 
 test('a sent message and its status render every payload as text', () => {
   for (const p of PAYLOADS) {

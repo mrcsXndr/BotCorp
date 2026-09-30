@@ -33,8 +33,7 @@ export default defineConfig({
       'Content-Security-Policy': "default-src 'self'; script-src 'self'; object-src 'none'; base-uri 'none'; connect-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'",
     },
   },
-  // tests read files beside the SPA (?raw): src/lib/parity.test.ts the classic
-  // cockpit/public/*.js, src/api/queries.test.ts the routes in cockpit/server.mjs
+  // tests read files beside the SPA (?raw): src/api/queries.test.ts the routes in cockpit/server.mjs
   server: { fs: { allow: ['..'] } },
   test: {
     environment: 'jsdom',

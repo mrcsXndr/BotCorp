@@ -5,7 +5,7 @@
 // scheme-checked href. Raw HTML in the input is shown as text, never parsed.
 // Subset: headings, bold/italic, inline code, fenced code, lists (nested by
 // indent), blockquote, links (http/https/mailto), tables, rules.
-// A 1:1 port of cockpit/public/md.js; src/lib/parity.test.ts runs both.
+// cockpit/tests/chat-render.test.mjs imports this file as is (Node strips the types).
 
 const MAX_INPUT = 200000;
 const MAX_DEPTH = 8;

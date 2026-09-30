@@ -12,7 +12,7 @@ import { ApiError, fill, post, request, setNeedHandler } from './http';
 test('ROUTES matches the routes server.mjs declares, one to one', () => {
   const declared = [...serverSrc.matchAll(/^app\.(get|post|put|delete|patch)\('([^']+)'/gm)]
     .map((m) => `${m[1].toUpperCase()} ${m[2]}`)
-    .filter((r) => r !== 'GET /healthz' && r !== 'GET /classic');
+    .filter((r) => r !== 'GET /healthz');
   const ours = Object.values(ROUTES).map((r) => `${r.m} ${r.p}`);
   expect(declared.length).toBeGreaterThan(40);   // the scan itself found the table
   expect([...ours].sort()).toEqual([...declared].sort());
