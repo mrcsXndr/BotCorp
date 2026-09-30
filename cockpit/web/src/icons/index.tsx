@@ -41,6 +41,10 @@ const ICONS16 = {
   plus: <path d="M8 3.4v9.2M3.4 8h9.2" />,
   tray: <><path d="M2.5 8.6l1.7-5.1h7.6l1.7 5.1" /><path className={S} d="M2.5 8.6h3.4l.8 1.6h2.6l.8-1.6h3.4v4.4h-11z" /></>,
   newbot: <><path className={S} d="M2.6 3.2l2.5.5v8.6l-2.5.5z" /><path d="M11 4.6v6.8M7.6 8h6.8" /></>,
+  // v0.9.9: knowledge docs, inline edits, subagents
+  doc: <><path d="M3.8 2.5h5.4l3 3v8h-8.4z" /><path className={S} d="M9.2 2.5l3 3h-3z" /><path d="M6 8.4h4M6 11h4" /></>,
+  pen: <><path d="M10.6 2.9l2.5 2.5-6.6 6.6-2.5-2.5z" /><path className={S} d="M4 9.5l2.5 2.5-3.3.8z" /></>,
+  agent: <><path d="M3 2.5h3.4v3.4H3z" /><path d="M4.7 5.9v4.3h3.6" /><path className={S} d="M8.3 8.2h5v4h-5z" /></>,
 } satisfies Record<string, ReactNode>;
 
 // The five nav marks. "bots" is the bot list itself: three rows, the top one

@@ -74,6 +74,72 @@ it('the model is a picker over /api/models: its names, and no model input', asyn
   await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'model', value: 'workhorse' }]]));
 });
 
+const LIVE = {
+  cc_version: '2.1.285', tiers: MODELS.tiers,
+  models: [
+    { value: 'default', resolvedModel: 'claude-opus-5-5', displayName: 'Default', description: '', price: null, supportsEffort: true, supportedEffortLevels: ['low', 'high'], ultracodeAvailable: true, defaultEffort: 'high' },
+    { value: 'opus', resolvedModel: 'claude-opus-5-5', displayName: 'Opus', description: '', price: { input: 4, output: 20 }, supportsEffort: true, supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], ultracodeAvailable: true, defaultEffort: 'high' },
+    { value: 'haiku', resolvedModel: 'claude-haiku-4-5-20251001', displayName: 'Haiku', description: '', price: { input: 1, output: 5 }, supportsEffort: false, supportedEffortLevels: [], ultracodeAvailable: false, defaultEffort: null },
+  ],
+};
+
+it('v0.9.9: the live list follows the tiers with its price; a live pick saves the resolved id', async () => {
+  serve({ 'GET /api/models': [200, LIVE] });
+  mount('settings');
+  await userEvent.click(await screen.findByRole('button', { name: /Model/ }));
+  const options = await screen.findAllByRole('option');
+  expect(options.map((o) => o.textContent)).toEqual(['Opus 5.5', 'Sonnet 5.5', 'Opus$4/$20', 'Haiku$1/$5']);
+  expect(screen.getByText('Claude Code 2.1.285')).toBeTruthy();
+  await userEvent.click(options[3]);
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'model', value: 'claude-haiku-4-5-20251001' }]]));
+});
+
+it("v0.9.9: effort lists the model's own levels after Tier default; ultracode asks first", async () => {
+  serve({ 'GET /api/models': [200, LIVE] });
+  mount('settings');
+  await userEvent.click(await screen.findByRole('button', { name: /Effort/ }));
+  expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual(['Tier default', 'low', 'medium', 'high', 'xhigh', 'max']);
+  await userEvent.click(screen.getByRole('option', { name: 'max' }));
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'effort', value: 'max' }]]));
+  calls.length = 0;
+  await userEvent.click(screen.getByRole('switch', { name: 'Ultracode' }));
+  const dialog = await confirmDialog();
+  expect(within(dialog).getByText('Workflows on every task. Uses much more of the limit.')).toBeTruthy();
+  expect(writes()).toEqual([]);
+  await userEvent.click(within(dialog).getByRole('button', { name: 'Turn on' }));
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'ultracode', value: true }]]));
+});
+
+it('v0.9.9: no effort row and no ultracode on a model without them', async () => {
+  serve({ 'GET /api/models': [200, LIVE], 'GET /api/bots/example/config': [200, { ...CONFIG, config: { ...CONFIG.config, model: 'haiku' } }] });
+  mount('settings');
+  await screen.findByRole('button', { name: /Model/ });
+  expect(screen.queryByRole('button', { name: /Effort/ })).toBeNull();
+  expect(screen.queryByRole('switch', { name: 'Ultracode' })).toBeNull();
+});
+
+it('v0.9.9: "Restart to apply" when the running session reads another model', async () => {
+  serve({ 'GET /api/models': [200, LIVE], 'GET /api/bots': [200, [{ ...BOT, running: true }]],
+    'GET /api/usage': [200, { at: '', accounts: [], bots: [{ bot: 'example', model: { name: 'Sonnet', id: 'claude-sonnet-5-5', source: 'the session (status.json)' }, effort: null }] }] });
+  mount('settings');
+  expect(await screen.findByText('Restart to apply')).toBeTruthy();
+});
+
+it('v0.9.9: auto-fix and the debrief say what they do, and warn when nothing feeds auto-fix', async () => {
+  serve({ 'GET /api/bots/example/helpers': [200, {
+    autoFix: { on: true, everyMin: 30, model: 'claude-sonnet-5-5', writes: 'fixes on this box, or a card', reads: 'memory/metrics/alerts.log', fed: false, lastRun: null },
+    debrief: { on: false, everyHours: 6, model: 'claude-sonnet-5-5', writes: 'context/session-log.md', lastRun: null } }] });
+  mount('settings');
+  await userEvent.click(await screen.findByRole('button', { name: 'Advanced' }));
+  const fix = await waitFor(() => { const e = document.querySelector<HTMLElement>('[data-helper=autoFix]'); if (!e) throw new Error('no helper'); return e; });
+  expect(within(fix).getByText('Fixes what its monitors find, or files a card.')).toBeTruthy();
+  expect([...fix.querySelectorAll('[data-chip]')].map((c) => c.textContent)).toEqual(['Every 30 min', 'Sonnet 5.5', 'fixes on this box, or a card', 'Not run yet', 'Nothing feeds it']);
+  const deb = document.querySelector<HTMLElement>('[data-helper=debrief]')!;
+  expect(within(deb).getByText('Writes context/session-log.md')).toBeTruthy();
+  expect(within(deb).queryByText('Nothing feeds it')).toBeNull();
+  expect(screen.getByRole('button', { name: 'Auto-fix help' })).toBeTruthy();
+});
+
 it('a pasted project link writes owner, number and type, then turns the board on', async () => {
   serve();
   mount('settings');

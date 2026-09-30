@@ -1,6 +1,7 @@
 import { expect, test } from 'vitest';
 import {
-  SETTINGS, autoStatus, boardWrites, chainBody, chainOf, moveItem, parseProjectLink, projectLinkOf, tierKey, toolWrite, triggerText, type ToolItem,
+  SETTINGS, autoStatus, boardWrites, chainBody, chainOf, effortChoices, liveModelOf, liveOptions, modelKey, moveItem, needsRestart, parseProjectLink, projectLinkOf,
+  resolvedId, tierKey, toolWrite, triggerText, type ToolItem,
 } from './settings';
 
 test('a pasted project link becomes owner, number and type', () => {
@@ -33,6 +34,30 @@ test('a model is a tier by name or by its id', () => {
   expect(tierKey('top', tiers)).toBe('top');
   expect(tierKey('claude-sonnet-5-5', tiers)).toBe('workhorse');
   expect(tierKey('claude-something-else', tiers)).toBeNull();
+});
+
+test('v0.9.9: a live model by alias or id; effort choices; restart only on a session reading', () => {
+  const tiers = [{ tier: 'top', id: 'claude-opus-5-5' }];
+  const live = [
+    { value: 'default', resolvedModel: 'claude-opus-5-5', supportedEffortLevels: ['low'], ultracodeAvailable: true },
+    { value: 'opus', resolvedModel: 'claude-opus-5-5', supportedEffortLevels: ['low', 'max'], ultracodeAvailable: true },
+    { value: 'haiku', resolvedModel: 'claude-haiku-4-5', supportedEffortLevels: [], ultracodeAvailable: false },
+  ];
+  expect(liveOptions(live).map((m) => m.value)).toEqual(['opus', 'haiku']);
+  expect(modelKey('top', tiers, live)).toBe('top');
+  expect(modelKey('claude-haiku-4-5', tiers, live)).toBe('live:haiku');
+  expect(modelKey('nope', tiers, live)).toBeNull();
+  expect(resolvedId('top', tiers, live)).toBe('claude-opus-5-5');
+  expect(resolvedId('haiku', tiers, live)).toBe('claude-haiku-4-5');
+  expect(liveModelOf('top', tiers, live)!.value).toBe('opus');
+  expect(effortChoices(['low', 'max'], null)).toEqual(['', 'low', 'max']);
+  expect(effortChoices([], 'high')).toEqual(['', 'high']);
+  const session = 'the session (status.json)';
+  expect(needsRestart({ model: { id: 'claude-opus-5-5[1m]', source: session } }, { model: 'claude-opus-5-5', effort: null })).toBe(false);
+  expect(needsRestart({ model: { id: 'claude-sonnet-5-5', source: session } }, { model: 'claude-opus-5-5', effort: null })).toBe(true);
+  expect(needsRestart({ model: { id: 'claude-sonnet-5-5', source: 'bot.yaml (no session reading yet)' } }, { model: 'claude-opus-5-5', effort: null })).toBe(false);
+  expect(needsRestart({ effort: { level: 'high', source: session } }, { model: null, effort: 'max' })).toBe(true);
+  expect(needsRestart(null, { model: 'x', effort: 'max' })).toBe(false);
 });
 
 test('the chain is the primary then the backups, capped at 6, and one POST body', () => {

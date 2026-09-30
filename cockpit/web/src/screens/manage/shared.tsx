@@ -2,6 +2,7 @@ import { useCallback, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useApprovals, useConfigSet } from '../../api/queries';
 import { toast } from '../../ui';
+import { Icon, type IconName } from '../../icons';
 import { COPY } from '../../lib/copy';
 import type { ConfigValue, Write } from '../../lib/settings';
 
@@ -23,6 +24,16 @@ export function QueuedMark() {
     <Link to="/inbox" data-queued className="text-sm font-semibold text-warn no-underline outline-none hover:underline focus-visible:outline-2 focus-visible:outline-accent">
       {COPY.status.waiting}
     </Link>
+  );
+}
+
+/** A quiet fact chip: an icon and a few words (cadence, model, a file, a time). */
+export function Chip({ icon, tone = 'plain', mono, children }: { icon?: IconName; tone?: 'plain' | 'warn'; mono?: boolean; children: ReactNode }) {
+  return (
+    <span data-chip className={`inline-flex items-center gap-1.5 max-w-full px-2 py-0.5 rounded-xs text-sm ${tone === 'warn' ? 'bg-task text-warn font-semibold' : 'bg-task text-text-2'}`}>
+      {icon && <Icon name={icon} size={14} className="flex-none" />}
+      <span className={`truncate ${mono ? 'num' : ''}`}>{children}</span>
+    </span>
   );
 }
 

@@ -27,7 +27,9 @@ export interface SettingDef {
   on?: ConfigValue;
   off?: ConfigValue;
   /** a COPY.tooltip key: the ? beside the label (only the complex things) */
-  hint?: 'admin' | 'backups';
+  hint?: 'admin' | 'backups' | 'autoFix' | 'debrief';
+  /** a background helper: its facts (GET /helpers) under the switch */
+  detail?: 'autoFix' | 'debrief';
   /** shown only when this returns true (given the effective config and the bot) */
   when?: (cfg: unknown, bot: { telegram: boolean }) => boolean;
   also?: (value: string) => Write[];
@@ -42,8 +44,8 @@ export const SETTINGS: SettingDef[] = [
   { id: 'reviewBoard', section: 'main', kind: 'switch', label: 'reviewBoard', path: 'harness.modules.review_board', on: true, off: false },
   { id: 'admin', section: 'advanced', kind: 'switch', label: 'adminBot', path: 'role', on: 'admin', off: null, hint: 'admin' },
   { id: 'adminNotify', section: 'advanced', kind: 'switch', label: 'tellMe', path: 'harness.admin_notify', on: true, off: false, when: (c) => cfgGet(c, 'role') === 'admin' },
-  { id: 'autoFix', section: 'advanced', kind: 'switch', label: 'autoFix', path: 'harness.modules.alert_triage', on: true, off: false },
-  { id: 'debrief', section: 'advanced', kind: 'switch', label: 'debrief', path: 'harness.modules.debrief', on: true, off: false },
+  { id: 'autoFix', section: 'advanced', kind: 'switch', label: 'autoFix', path: 'harness.modules.alert_triage', on: true, off: false, hint: 'autoFix', detail: 'autoFix' },
+  { id: 'debrief', section: 'advanced', kind: 'switch', label: 'debrief', path: 'harness.modules.debrief', on: true, off: false, hint: 'debrief', detail: 'debrief' },
   { id: 'hub', section: 'advanced', kind: 'text', label: 'hubUrl', path: 'integrations.hub.url',
     also: (v) => [{ path: 'harness.modules.hub', value: !!v }] },
   { id: 'backupRepo', section: 'advanced', kind: 'text', label: 'backupRepo', path: 'backup.git_remote' },
@@ -77,6 +79,48 @@ export function boardWrites(link: ProjectLink | null): Write[] {
 export function tierKey(model: unknown, tiers: readonly { tier: string; id: string }[]): string | null {
   return tiers.find((t) => t.tier === model || t.id === model)?.tier ?? null;
 }
+
+// ---- the live list (what the pinned Claude Code offers) -------------------------------
+// A tier is picked by its name; a live model by `live:<value>` and saved as its
+// resolved id. CC's own "default" entry is left out: it is one of the others.
+export interface LiveModelLike { value: string; resolvedModel: string; supportedEffortLevels: string[]; ultracodeAvailable: boolean | null }
+export const liveOptions = <T extends LiveModelLike>(models: readonly T[]): T[] => models.filter((m) => m.value !== 'default');
+export function modelKey(model: unknown, tiers: readonly { tier: string; id: string }[], live: readonly LiveModelLike[]): string | null {
+  const tier = tierKey(model, tiers);
+  if (tier) return tier;
+  const m = liveOptions(live).find((x) => x.value === model || x.resolvedModel === model);
+  return m ? `live:${m.value}` : null;
+}
+// The model id a configured value runs as: a tier's id, a live alias's resolved id, else itself.
+export function resolvedId(model: unknown, tiers: readonly { tier: string; id: string }[], live: readonly LiveModelLike[]): string | null {
+  if (model == null || model === '') return null;
+  const t = tiers.find((x) => x.tier === model || x.id === model);
+  if (t) return t.id;
+  const m = live.find((x) => x.value === model || x.resolvedModel === model);
+  return m ? m.resolvedModel : String(model);
+}
+// The live entry for a configured value, for its effort levels and ultracode.
+export function liveModelOf<T extends LiveModelLike>(model: unknown, tiers: readonly { tier: string; id: string }[], live: readonly T[]): T | null {
+  const id = resolvedId(model, tiers, live);
+  return id ? liveOptions(live).find((m) => m.resolvedModel === id || m.value === id) ?? null : null;
+}
+// The effort choices: "" (the tier default) first, then the model's own levels;
+// a saved level the model does not list stays so it can be seen and changed.
+export function effortChoices(levels: readonly string[], current: unknown): string[] {
+  const cur = typeof current === 'string' && current ? [current] : [];
+  return ['', ...new Set([...levels, ...cur])];
+}
+// "Restart to apply": the session's own reading differs from the saved value.
+// Only a reading from the session counts; `[1m]`-style suffixes are ignored.
+export function needsRestart(live: { model?: { id?: string | null; source?: string } | null; effort?: { level?: string; source?: string } | null } | null | undefined,
+  want: { model: string | null; effort: string | null }): boolean {
+  const fromSession = (s?: string) => typeof s === 'string' && s.startsWith('the session');
+  const bare = (id: string) => id.replace(/\[[^\]]*\]$/, '');
+  if (live?.model?.id && fromSession(live.model.source) && want.model && bare(live.model.id) !== bare(want.model)) return true;
+  if (live?.effort?.level && fromSession(live.effort.source) && want.effort && live.effort.level !== want.effort) return true;
+  return false;
+}
+export const priceText = (p: { input: number; output: number } | null): string => (p ? `$${p.input}/$${p.output}` : '');
 
 // ---- the account chain: [primary, ...backups], at most 6 -----------------------------
 export const CHAIN_MAX = 6;
