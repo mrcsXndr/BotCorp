@@ -27,6 +27,15 @@ versions follow SemVer.
   operator-guard hook).
 - **Fixed:** the account token check sent a masked token (`****`) to Claude
   Code, so a live check could only fail; it now reads the real token in-process.
+- **New bot / new chat on an account.** `botcorp new --account <id>` runs the
+  bot on a registered account from the start (operator only, the token check
+  first, no oauth prompt); `new --service manual|daemon` (manual = a chat the
+  daemon never cold-starts). `POST /api/bots {name?, persona?, account,
+  telegram?, service}` (operator gate) creates without launching; an unnamed
+  chat is `chat-MMDD-HHMM`.
+- **Archive a chat:** `botcorp archive <bot>` (operator only) stops it and moves
+  its folder to `<BOTCORP_HOME>/archive/<name>-<stamp>/`; a `service: daemon`
+  bot exits 2. `POST /api/bots/:name/archive`.
 
 ## v0.8.4
 

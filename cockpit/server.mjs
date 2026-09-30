@@ -181,6 +181,49 @@ app.post('/api/bots/:name/start', withBot((req, res, bot) => lifecycle(res, ['st
 app.post('/api/bots/:name/stop', withBot((_req, res, bot) => lifecycle(res, ['stop', bot.name])));
 app.post('/api/bots/:name/restart', withBot((req, res, bot) => lifecycle(res, ['restart', bot.name, ...(req.body?.fresh ? ['--fresh'] : [])])));
 
+// New bot / New chat (`botcorp new --yes --no-launch`): always on a registered
+// account, never with a typed token. A chat is service: manual, named
+// chat-MMDD-HHMM when unnamed. A Telegram token follows through PUT
+// /secrets/telegram, then POST /start: creating never launches.
+const PERSONA_RE = /^[^\r\n\0]{1,300}$/;
+function chatName() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `chat-${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`;
+}
+app.post('/api/bots', wrap(async (req, res) => {
+  const { name, persona, account, telegram, service } = req.body || {};
+  if (!['daemon', 'manual'].includes(service)) return res.status(400).json({ error: 'service: daemon (keep running) or manual (a chat)' });
+  if (typeof account !== 'string' || !bots.NAME_RE.test(account)) return res.status(400).json({ error: 'account: a registered account id' });
+  if (!(name === undefined || name === null || name === '' || (typeof name === 'string' && bots.NAME_RE.test(name)))) return res.status(400).json({ error: 'name: lowercase letters, digits and hyphens, at most 32' });
+  if (!(persona === undefined || persona === null || persona === '' || (typeof persona === 'string' && PERSONA_RE.test(persona)))) return res.status(400).json({ error: 'persona: one line, at most 300 characters' });
+  if (!(telegram === undefined || typeof telegram === 'boolean')) return res.status(400).json({ error: 'telegram: true or false' });
+  if (!operatorGate(req, res)) return;
+  let bot = name || (service === 'manual' ? chatName() : '');
+  if (bot && !name) {
+    const taken = new Set((await bots.listBots()).map((b) => b.name));
+    for (let n = 2; taken.has(bot); n++) bot = `${chatName()}-${n}`;
+  }
+  const args = ['new', '--yes', '--no-launch', '--service', service, '--account', account];
+  if (bot) args.push('--name', bot);
+  if (persona) args.push('--persona', persona);
+  if (telegram) args.push('--telegram');
+  res.locals.audit = { action: 'new', account, service, ...(bot ? { new_bot: bot } : {}) };
+  const r = await runCli(args, { timeoutMs: 600_000 });
+  attention.invalidate();
+  const made = /^created .*[\\/]([a-z0-9][a-z0-9-]{0,31})[\\/]bot\.yaml$/m.exec(r.out);
+  // exit 2: the account is unknown, has no token or failed its token check
+  res.status(r.code === 0 ? 200 : r.code === 2 ? 409 : 502).json({ ok: r.code === 0, name: made ? made[1] : bot || null, code: r.code, out: r.out, err: r.err });
+}));
+// Archive a chat (`botcorp archive`): its folder moves to <rt>/archive; a pinned bot is refused (409).
+app.post('/api/bots/:name/archive', withBot(async (req, res, bot) => {
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { action: 'archive' };
+  const r = await runCli(['archive', bot.name], { timeoutMs: 120_000 });
+  attention.invalidate();
+  res.status(r.code === 0 ? 200 : r.code === 2 ? 409 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+
 app.get('/api/bots/:name/sessions', withBot(async (_req, res, bot) => res.json(await history.listSessions(bot.configDir, bot.home))));
 app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
   const after = Math.max(0, parseInt(req.query.after, 10) || 0);
@@ -476,6 +519,7 @@ app.get('/api/accounts', wrap(async (_req, res) => res.json(await attention.acco
 // `accounts add` on stdin: never argv, never a log (auditOnClose records the
 // path, the method and the id only; the CLI's reply carries the last 4).
 const ACCOUNT_TEXT_RE = /^[^\r\n\0]{0,64}$/;
+// `plan` in the body is ignored: the CLI detects the plan (accounts add --plan stays a CLI-only override).
 app.post('/api/accounts', wrap(async (req, res) => {
   const { id, label, token } = req.body || {};
   if (!bots.NAME_RE.test(id || '')) return res.status(400).json({ error: 'id: lowercase letters, digits and hyphens, at most 32' });
@@ -500,6 +544,30 @@ app.delete('/api/accounts/:id', wrap(async (req, res) => {
   if (r.code === 2) return res.status(409).json({ ok: false, code: r.code, error: (r.err || r.out).trim() });
   res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
 }));
+// Rename an account: the label only (`accounts rename`).
+app.patch('/api/accounts/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  const label = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
+  if (!bots.NAME_RE.test(id)) return res.status(400).json({ error: 'bad account id' });
+  if (!label || !ACCOUNT_TEXT_RE.test(label)) return res.status(400).json({ error: 'label: one line, 1 to 64 characters' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { account: id, action: 'rename' };
+  const r = await runCli(['accounts', 'rename', id, '--label', label, '--by', req.identity]);
+  attention.invalidate();
+  if (r.code === 2) return res.status(404).json({ ok: false, code: r.code, error: 'no such account' });
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+// The account_unlinked item's Link: every bot's own token becomes an account and the bot is set to it (`accounts seed --link`).
+app.post('/api/accounts/link', wrap(async (req, res) => {
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { action: 'link' };
+  const r = await runCli(['accounts', 'seed', '--link', '--json', '--by', req.identity], { timeoutMs: 180_000 });
+  attention.invalidate();
+  let result = null;
+  try { result = JSON.parse(r.out); } catch {}
+  if (r.code !== 0 || !result) return res.status(502).json({ ok: false, code: r.code, err: r.err || r.out });
+  res.json({ ok: true, ...result });
+}));
 app.get('/api/chat/recent', wrap(async (_req, res) => res.json(await chatLaunch.listRecent())));
 app.post('/api/chat/launch', wrap((req, res) => {
   const { account, generic, cwd } = req.body || {};
@@ -518,7 +586,6 @@ app.post('/api/chat/launch', wrap((req, res) => {
 
 // Attachments (composer, terminal paste/drop, +file): one file per request, the
 // raw bytes as the body, its name in X-File-Name. Operator-gated (a bot must not
-// `plan` in the body is ignored: the CLI detects the plan (accounts add --plan stays a CLI-only override).
 // fill its own folder through here); an allow-listed type, at most 20 MB, kept
 // under the bot's own <bot>/.botcorp/uploads (core/attach.mjs). 10/min per session.
 const uploadHits = new Map();   // cookie -> [ts]
@@ -544,30 +611,6 @@ app.post('/api/bots/:name/uploads', gated, (req, res, next) => rawBody(req, res,
   const dir = attach.uploadsDir(bot.home);
   await fsp.mkdir(dir, { recursive: true });
   await fsp.writeFile(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }).catch(() => {});
-// Rename an account: the label only (`accounts rename`).
-app.patch('/api/accounts/:id', wrap(async (req, res) => {
-  const { id } = req.params;
-  const label = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
-  if (!bots.NAME_RE.test(id)) return res.status(400).json({ error: 'bad account id' });
-  if (!label || !ACCOUNT_TEXT_RE.test(label)) return res.status(400).json({ error: 'label: one line, 1 to 64 characters' });
-  if (!operatorGate(req, res)) return;
-  res.locals.audit = { account: id, action: 'rename' };
-  const r = await runCli(['accounts', 'rename', id, '--label', label, '--by', req.identity]);
-  attention.invalidate();
-  if (r.code === 2) return res.status(404).json({ ok: false, code: r.code, error: 'no such account' });
-  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
-}));
-// The account_unlinked item's Link: every bot's own token becomes an account and the bot is set to it (`accounts seed --link`).
-app.post('/api/accounts/link', wrap(async (req, res) => {
-  if (!operatorGate(req, res)) return;
-  res.locals.audit = { action: 'link' };
-  const r = await runCli(['accounts', 'seed', '--link', '--json', '--by', req.identity], { timeoutMs: 180_000 });
-  attention.invalidate();
-  let result = null;
-  try { result = JSON.parse(r.out); } catch {}
-  if (r.code !== 0 || !result) return res.status(502).json({ ok: false, code: r.code, err: r.err || r.out });
-  res.json({ ok: true, ...result });
-}));
   let file = path.join(dir, stored);
   for (let n = 2; ; n++) {
     try { await fsp.writeFile(file, req.body, { flag: 'wx' }); break; } catch (e) {

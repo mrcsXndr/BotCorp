@@ -56,7 +56,7 @@ const {
 const { scanTools, listExecutables, retireFiles, covers, isGlob, registryRows, nextRegistryDays, cleanStreak, toolInventory } = await import('./tools.mjs');
 const operatorPair = await import('../cockpit/operator-pair.mjs');
 
-const VALUE_FLAGS = new Set(['name', 'persona', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
+const VALUE_FLAGS = new Set(['name', 'persona', 'service', 'as', 'topic', 'lesson', 'requested-by', 'telegram-owner', 'modules', 'no-modules', 'out', 'team', 'aud', 'apply', 'skip', 'rollback', 'cancel', 'deny', 'config-dir', 'label', 'plan', 'account', 'cwd', 'tail', 'files', 'manifest', 'source', 'ttl', 'to', 'by', 'reason', 'file', 'path', 'kind', 'purpose', 'secrets', 'proposal', 'days']);
 const OWNER_RE = /^[0-9]{5,12}$/;   // a Telegram user id
 const COCKPIT_PORT = Number(process.env.COCKPIT_PORT || process.env.PORT || 4477);
 
@@ -2097,6 +2097,21 @@ async function cmdNew({ flags }) {
   const persona = flags.persona ? String(flags.persona) : DEFAULTS.persona;
   const interactive = !!process.stdin.isTTY && !flags.yes;
   let rc = 0;
+  // --service manual = a chat: the cockpit or the CLI starts it, the daemon never cold-starts it
+  const service = flags.service === undefined ? DEFAULTS.harness.service : String(flags.service);
+  if (!['daemon', 'manual'].includes(service)) usage(`new: --service daemon | manual (got '${service}')`);
+  // --account: the bot runs on a registered account's token from the start (no oauth
+  // prompt). Choosing an account for a bot is the operator's (as `accounts use`).
+  const account = flags.account === undefined ? '' : String(flags.account);
+  if (flags.account !== undefined) {
+    const who = requireOperator('new --account', { admin: true, target: `${name} ${account}` });
+    if (!NAME_RE.test(account)) usage(`new: --account <id> (a registered account; botcorp accounts list)`);
+    const list = accountsListJson();
+    if (!list.ok) fail(list.err);
+    const row = list.rows.find((r) => r.id === account);
+    if (!row || !row.masked) fail(`new: no account '${account}' with a token (botcorp accounts list)`, 2);
+    tokenCheckOrFail(row, who, 'new --account');
+  }
 
   // 0. the catalogue: checklist on a terminal, flags otherwise
   const lists = catalogueLists();
@@ -2119,7 +2134,10 @@ async function cmdNew({ flags }) {
   // 1. minimal bot.yaml: everything else comes from DEFAULTS at load time.
   fs.mkdirSync(botHome(name), { recursive: true });
   const header = '# bot.yaml - the only harness file this bot edits (via `botcorp config set`).\n# Every key and its default: templates/bot/bot.yaml. Tokens never go here (botcorp secrets).\n';
-  writeTextAtomic(botYamlPath(name), header + dumpYaml(yamlFromSelection(name, persona, sel, lists, owner, backupRemote)));
+  const doc = yamlFromSelection(name, persona, sel, lists, owner, backupRemote);
+  if (service !== DEFAULTS.harness.service) doc.harness.service = service;
+  if (account) doc.account = account;
+  writeTextAtomic(botYamlPath(name), header + dumpYaml(doc));
   out(`created ${botYamlPath(name)}`);
 
   // 2. generated + bot-owned files, config home (a plain folder: no git init)
@@ -2131,14 +2149,15 @@ async function cmdNew({ flags }) {
   } catch {}
   seedClaudeJson(name);
 
-  // 3. the ONE token a bot needs to start
+  // 3. the ONE token a bot needs to start (none with --account: the account's)
   let oauth = '';
-  if (flags['oauth-stdin']) oauth = readStdinAll().trim();
+  if (account) out(`oauth: runs on account ${account} (botcorp accounts use ${name} <id> to change it)`);
+  else if (flags['oauth-stdin']) oauth = readStdinAll().trim();
   else oauth = await promptHidden(`OAuth token for ${name} (from \`claude setup-token\`; hidden, blank to skip): `);
   if (oauth) {
     const c = secretsSet(name, 'oauth', oauth);
     if (c !== 0) { rc = c; out(`oauth: vault write failed (exit ${c}); re-enter with: botcorp secrets set ${name} oauth`); }
-  } else out(`oauth: none given; the bot refuses to launch until: botcorp secrets set ${name} oauth (or a /login in its config home)`);
+  } else if (!account) out(`oauth: none given; the bot refuses to launch until: botcorp secrets set ${name} oauth (or a /login in its config home)`);
 
   // 4. optional Telegram
   if (telegram) {
@@ -2168,6 +2187,33 @@ async function cmdNew({ flags }) {
   out(`  config:    botcorp config set ${name} <path> <value>   (widening changes wait in: botcorp approve ${name} --list)`);
   out(`  move it:   botcorp export ${name}   ->   botcorp import <zip> on the other machine (tokens re-entered there)`);
   return rc;
+}
+
+// `archive <bot>` (operator only): a chat (harness.service: manual) leaves the
+// bot list. It is stopped if it runs, then its whole folder (config home and
+// vault included) moves to <rt>/archive/<name>-<stamp>/; nothing is deleted.
+// A pinned bot (service: daemon) is refused, exit 2.
+async function cmdArchive({ pos }) {
+  requireOperator('archive');
+  const bot = requireBot(pos[1]);
+  let cfg;
+  try { cfg = loadBotYaml(botYamlPath(bot)); } catch (e) { fail(`archive: ${e.message}`); }
+  if (cfg.harness.service !== 'manual') fail(`archive: ${bot} is kept running by the daemon (harness.service: ${cfg.harness.service}); only a chat (service: manual) is archived`, 2);
+  const st = botState(bot);
+  const running = sessionKind(bot) === 'bg' ? !!(st.bg_id && pidAlive(Number(st.claude_pid))) : !!ptyLive(bot);
+  if (running) stopBot(bot);
+  let dest = path.join(BOTCORP_HOME, 'archive', `${bot}-${stamp()}`);
+  for (let n = 2; fs.existsSync(dest); n++) dest = path.join(BOTCORP_HOME, 'archive', `${bot}-${stamp()}-${n}`);
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  try { fs.renameSync(botHome(bot), dest); }
+  catch (e) {
+    if (e.code !== 'EXDEV') fail(`archive: could not move ${botHome(bot)}: ${e.message}`);
+    fs.cpSync(botHome(bot), dest, { recursive: true });
+    fs.rmSync(botHome(bot), { recursive: true, force: true });
+  }
+  try { fs.unlinkSync(pausedPath(bot)); } catch {}
+  out(`archived ${bot} -> ${dest}`);
+  return 0;
 }
 
 // ---- export / import (a bot folder is a plain folder; the zip is how it moves) --------------
@@ -3040,6 +3086,8 @@ async function accountTokenChecks(add) {
   for (const a of list.rows) {
     const c = checkAccountToken(a);
     add(c.level, `account ${a.id}: token`, c.detail, 'accounts');
+    const e = a.fp && (readJson(path.join(STATE_DIR, 'account-checks.json')) || {})[a.fp];
+    if (!e || !e.plan_at || Date.now() - Date.parse(e.plan_at) >= ACCOUNT_CHECK_TTL_MS) await detectPlan(a);
   }
 }
 
@@ -3086,8 +3134,6 @@ async function cmdDoctor({ flags }) {
     const wtl = gitPath ? run(gitPath, ['-C', ROOT, 'worktree', 'list', '--porcelain'], { timeoutMs: 15_000 }) : null;
     const wtv = worktreeLinksVerdict(wtl && wtl.code === 0 ? wtl.out : '');
     add(wtv.level, 'worktree node_modules', wtv.detail);
-    const e = a.fp && (readJson(path.join(STATE_DIR, 'account-checks.json')) || {})[a.fp];
-    if (!e || !e.plan_at || Date.now() - Date.parse(e.plan_at) >= ACCOUNT_CHECK_TTL_MS) await detectPlan(a);
 
     // harness
     const pj = readJson(path.join(ROOT, 'harness', '.claude-plugin', 'plugin.json'));
@@ -3366,6 +3412,8 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
 
   new [--name <slug>] [--persona "..."] [--telegram] [--telegram-owner <id>] [--modules a,b] [--no-modules c]
       [--yes] [--oauth-stdin] [--no-launch] [--no-plugin-install]      (a terminal without --yes shows the catalogue checklist)
+      [--service daemon|manual] [--account <id>]                      (manual = a chat the daemon never starts; --account: operator, no oauth prompt)
+  archive <bot>                                                         (operator: a chat's folder moves to <BOTCORP_HOME>/archive; a daemon bot exits 2)
   export <bot> [--out <zip>] [--list] [--include-state] | import <zip> [--as <name>]
   backup <bot> [--dry-run]                                              (needs backup.git_remote in bot.yaml)
   adopt <path> --as <name> [--dry-run] [--config-dir <old CLAUDE_CONFIG_DIR>]   (copies; no repo, no token, no .env)
@@ -3424,7 +3472,7 @@ exit codes: 0 ok, 1 error, 2 usage, 3 duplicate Telegram token / operator-only v
 env: BOTCORP_HOME (runtime root, default ~/.botcorp), COCKPIT_PORT (default 4477), CLOUDFLARE_API_TOKEN (doctor, integrations.cloudflare)`;
 
 const COMMANDS = {
-  new: cmdNew, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
+  new: cmdNew, archive: cmdArchive, export: cmdExport, import: cmdImport, backup: cmdBackup, adopt: cmdAdopt,
   accounts: cmdAccounts, chat: cmdChat, attach: cmdAttach, tray: cmdTray,
   sync: cmdSync,
   secrets: cmdSecrets, pair: cmdPair, config: cmdConfig, approve: cmdApprove, reject: cmdReject, approvals: cmdApprovals, tools: cmdTools,
