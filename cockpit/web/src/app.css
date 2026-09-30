@@ -77,6 +77,7 @@
 
 @layer base {
   html { -webkit-text-size-adjust: 100%; }
+  html[data-shell="app"], html[data-shell="app"] body { height: 100%; overflow: hidden; overscroll-behavior: none; }
   body {
     margin: 0;
     background: var(--bg);

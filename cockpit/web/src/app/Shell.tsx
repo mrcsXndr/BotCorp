@@ -46,7 +46,7 @@ export function AttentionBanner({ className = '' }: { className?: string }) {
 
 function Sidebar() {
   return (
-    <aside className="h-dvh overflow-y-auto overscroll-contain bg-side flex flex-col gap-3 px-2 pt-3 pb-3">
+    <aside className="relative h-dvh overflow-y-auto overscroll-contain bg-side flex flex-col gap-3 px-2 pt-3 pb-3">
       <VersionCard />
       <div className="px-1"><MainActions stacked /></div>
       <div className="flex flex-col gap-2">
@@ -66,16 +66,21 @@ export function Shell() {
   const [sheet, setSheet] = useState<NewKind | null>(null);
   // the display face picked at the design gate (the kit may have switched it)
   useEffect(() => { document.documentElement.dataset.face = 'apfel'; }, []);
+  // the shell owns the one scroll container; the page itself never scrolls
+  useEffect(() => {
+    document.documentElement.dataset.shell = 'app';
+    return () => { delete document.documentElement.dataset.shell; };
+  }, []);
   return (
     <NewSheetContext.Provider value={setSheet}>
       {wide ? (
         <div className="h-dvh grid grid-cols-[256px_minmax(0,1fr)]">
           <Sidebar />
-          <main className="min-w-0 h-dvh overflow-y-auto"><Outlet /></main>
+          <main className="relative min-w-0 h-dvh overflow-y-auto overscroll-contain"><Outlet /></main>
         </div>
       ) : (
-        <div className={onBot ? '' : 'min-h-dvh pb-[calc(var(--nav-h)+env(safe-area-inset-bottom))]'}>
-          <main className="min-w-0"><Outlet /></main>
+        <div className="h-dvh">
+          <main className={`relative min-w-0 h-full overflow-y-auto overscroll-contain ${onBot ? '' : 'pb-[calc(var(--nav-h)+env(safe-area-inset-bottom))]'}`}><Outlet /></main>
           {!onBot && <NavBar />}
         </div>
       )}

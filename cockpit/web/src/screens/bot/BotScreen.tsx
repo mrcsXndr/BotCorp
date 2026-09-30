@@ -116,7 +116,7 @@ function BotBody({ bot }: { bot: Bot }) {
   };
 
   return (
-    <div className="h-dvh flex flex-col">
+    <div className="h-full flex flex-col">
       <BotHeader bot={bot} status={state.status} view={view} onView={setView} onAction={onAction} onStart={() => run('start')} starting={lifecycle.isPending} />
       {(state.auth.shown || state.session === 'exited') && (
         <div className="flex-none flex flex-col gap-2 px-4 pt-2">
