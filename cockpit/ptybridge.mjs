@@ -25,53 +25,66 @@ const STATUS_TICK_MS = 5000;
 function send(ws, obj) { try { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {} }
 
 export async function bridge(bot, browser, { chat = true } = {}) {
-  let ep = await ptyEndpoint(bot.name);
-  // a live bg session has no pty-host of its own: start the attach host the
-  // inbox shares (it exits on its own once no client is left)
-  if (!ep && bot.kind === 'bg' && bot.running) {
-    const r = await attachHost(bot.name, 'bg');
-    if (r.err) send(browser, { t: 'err', m: r.err });
-    ep = r.ep || null;
-  }
   let upstream = null;
+  let closed = false;
   let chatTimer = null;
   let chatCursor = 0;
   let chatFile = null;
   let chatBusy = false;
   let statusTimer = null;
   let lastStatus = '';
+  const early = [];   // input/resize frames sent before the pty-host socket is open
 
   const closeAll = () => {
+    closed = true;
     if (chatTimer) { clearInterval(chatTimer); chatTimer = null; }
     if (statusTimer) { clearInterval(statusTimer); statusTimer = null; }
     try { upstream?.close(); } catch {}
     try { browser.close(); } catch {}
   };
+  const toUpstream = (frame) => {
+    if (upstream && upstream.readyState === 1) upstream.send(frame);
+    else if (!closed && early.length < 64) early.push(frame);
+  };
 
-  if (!ep) {
-    send(browser, { t: 'stopped' });
-  } else {
-    upstream = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * MAX_INPUT_FRAME });
-    upstream.on('message', (raw) => { try { if (browser.readyState === 1) browser.send(raw.toString()); } catch {} });
-    upstream.on('close', () => { send(browser, { t: 'detached' }); closeAll(); });
-    upstream.on('error', (e) => { send(browser, { t: 'err', m: `pty-host: ${e.message}` }); });
-  }
-
+  // Listeners before the first await: ws emits 'error' (a frame over maxPayload,
+  // a bad opcode) on a socket with no listener as an uncaught exception, which
+  // killed the cockpit; frames in that window were dropped.
   browser.on('message', (raw) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch { return; }
     if (msg.t === 'i') {
       if (typeof msg.d !== 'string') return;
       if (msg.d.length > MAX_INPUT_FRAME) { send(browser, { t: 'err', m: 'input frame over 1 MB dropped' }); return; }
-      if (upstream && upstream.readyState === 1) upstream.send(JSON.stringify({ t: 'i', d: msg.d }));
+      toUpstream(JSON.stringify({ t: 'i', d: msg.d }));
     } else if (msg.t === 'r') {
-      if (upstream && upstream.readyState === 1) upstream.send(JSON.stringify({ t: 'r', cols: msg.cols, rows: msg.rows }));
+      toUpstream(JSON.stringify({ t: 'r', cols: msg.cols, rows: msg.rows }));
     } else if (msg.t === 'chat-reset') {
       chatCursor = 0; chatFile = null;
     }
   });
   browser.on('close', closeAll);
   browser.on('error', closeAll);
+
+  let ep = await ptyEndpoint(bot.name);
+  // a live bg session has no pty-host of its own: start the attach host the
+  // inbox shares (it exits on its own once no client is left)
+  if (!closed && !ep && bot.kind === 'bg' && bot.running) {
+    const r = await attachHost(bot.name, 'bg');
+    if (r.err) send(browser, { t: 'err', m: r.err });
+    ep = r.ep || null;
+  }
+  if (closed) return;
+
+  if (!ep) {
+    send(browser, { t: 'stopped' });
+  } else {
+    upstream = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * MAX_INPUT_FRAME });
+    upstream.on('open', () => { for (const f of early.splice(0)) upstream.send(f); });
+    upstream.on('message', (raw) => { try { if (browser.readyState === 1) browser.send(raw.toString()); } catch {} });
+    upstream.on('close', () => { send(browser, { t: 'detached' }); closeAll(); });
+    upstream.on('error', (e) => { send(browser, { t: 'err', m: `pty-host: ${e.message}` }); });
+  }
 
   if (chat) {
     const tick = async () => {

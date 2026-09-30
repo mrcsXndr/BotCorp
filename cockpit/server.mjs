@@ -645,10 +645,18 @@ app.use((err, _req, res, _next) => {
 });
 
 // ---- server + WS ---------------------------------------------------------------
+// Last resort: one bad socket or a rejected promise nothing awaited is logged,
+// and the cockpit keeps serving every other client.
+process.on('uncaughtException', (e) => console.error(`[cockpit] uncaught (kept serving): ${e && e.stack || e}`));
+process.on('unhandledRejection', (e) => console.error(`[cockpit] unhandled rejection (kept serving): ${e && e.stack || e}`));
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
 
 server.on('upgrade', async (req, socket, head) => {
+  // Node drops its own socket error listener before 'upgrade': a client reset
+  // while this handler awaits was an uncaught ECONNRESET that killed the cockpit.
+  socket.on('error', () => socket.destroy());
   // Same gates as HTTP: WebSockets are not covered by the same-origin policy.
   const reject = (code, text) => { try { socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`); } catch {} socket.destroy(); };
   if (!gateOk(req)) return reject(403, 'Forbidden');

@@ -249,6 +249,9 @@ function host(a) {
 
   const token = crypto.randomBytes(24).toString('hex');
   const wss = new WebSocketServer({ host: '127.0.0.1', port: 0, maxPayload: 2 * MAX_INPUT_FRAME });
+  // Last resort once the pty is up: this process owns it, so one bad event is logged, never fatal.
+  process.on('uncaughtException', (e) => console.error(`pty-host: uncaught (kept running): ${e && e.stack || e}`));
+  process.on('unhandledRejection', (e) => console.error(`pty-host: unhandled rejection (kept running): ${e && e.stack || e}`));
 
   wss.on('connection', (ws, req) => {
     let ok = false;
@@ -257,6 +260,9 @@ function host(a) {
       const t = u.searchParams.get('token') || '';
       ok = t.length === token.length && crypto.timingSafeEqual(Buffer.from(t), Buffer.from(token));
     } catch {}
+    // A protocol error (a frame over maxPayload, a bad opcode) on a socket with
+    // no listener threw and killed this host, and with it the bot's pty.
+    ws.on('error', () => { clients.delete(ws); try { ws.terminate(); } catch {} });
     if (!ok) { try { ws.close(4401, 'bad token'); } catch {} return; }
     clients.add(ws);
     send(ws, { t: 'hello', pid: process.pid, ptyPid: p.pid, startedAt, mode: a.mode });
