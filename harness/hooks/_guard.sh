@@ -46,6 +46,17 @@ if [ -z "${BOT_HOME:-}" ]; then
   if [ -n "${CLAUDE_PROJECT_DIR:-}" ]; then BOT_HOME="$CLAUDE_PROJECT_DIR"; else BOT_HOME="$PWD"; fi
 fi
 export BOT_HOME
+# A retired bot (tools/_paths.py bot_retired): BOT_NAME has no folder under
+# bots/ while this hook runs from inside bots/. Nothing to do, and every
+# state/<bot>.json, state/<bot>/ or logs/<bot>/ write would come back as debris.
+_bots="${BOTCORP_BOTS_DIR:-$HARNESS/../bots}"
+if [ -n "${BOT_NAME:-}" ] && [ ! -d "$_bots/$BOT_NAME" ]; then
+  _home_fwd="${BOT_HOME//\\//}"
+  _parent="$(cd "${_home_fwd%/*}" 2>/dev/null && pwd -P)"
+  if [ -n "$_parent" ] && [ "$_parent" = "$(cd "${_bots//\\//}" 2>/dev/null && pwd -P)" ]; then exit 0; fi
+  unset _home_fwd _parent
+fi
+unset _bots
 cd "$BOT_HOME" 2>/dev/null || exit 0
 
 PY=""

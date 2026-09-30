@@ -49,7 +49,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _paths import instance_root, config_home, runtime_root, bot_name, module_enabled  # noqa: E402
+from _paths import instance_root, config_home, runtime_root, bot_name, bot_retired, module_enabled  # noqa: E402
 
 # Pricing per MILLION tokens (USD). Only used by the legacy transcript-parse
 # fallback — a metered (telemetry) row carries CC's own `cost_usd`.
@@ -446,6 +446,9 @@ def _session_id_from_stdin() -> str:
 
 def main(argv: list[str]) -> int:
     try:
+        if bot_retired():
+            print(f"[cost_meter] bot {bot_name()} has no folder under bots/; nothing written", file=sys.stderr)
+            return 0
         if len(argv) >= 2 and argv[1] == "--rollup":
             return rollup_last_days()
 

@@ -57,6 +57,31 @@ def bot_name() -> str:
     return os.environ.get("BOT_NAME") or instance_root().name
 
 
+def bots_dir() -> Path:
+    """BOTCORP_BOTS_DIR > <BotCorp>/bots (core/paths.mjs botsDir)."""
+    v = os.environ.get("BOTCORP_BOTS_DIR")
+    return Path(v).resolve() if v else botcorp_root() / "bots"
+
+
+def bot_retired() -> bool:
+    """True when BOT_NAME names a bot whose folder is gone from bots/ while this
+    process runs from inside bots/ (a live session of a removed bot, or a tool
+    run with another bot's folder as its cwd). Its per-bot runtime state
+    (state/<bot>.json, state/<bot>/, logs/<bot>/) must not be written then: it
+    would come back as debris of a retired bot. Outside a bots/ folder (a test,
+    a standalone checkout) nothing is judged retired."""
+    name = os.environ.get("BOT_NAME")
+    if not name:
+        return False
+    bots = bots_dir()
+    if (bots / name).is_dir():
+        return False
+    try:
+        return instance_root().parent == bots.resolve()
+    except OSError:
+        return False
+
+
 def modules() -> set[str]:
     """Enabled harness modules, from BOT_MODULES (comma-separated). The
     launcher derives it from bot.yaml harness.modules; unset = all on, so a
