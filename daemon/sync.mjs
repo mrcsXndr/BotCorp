@@ -53,7 +53,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { loadBotYaml, validate, resolveContextWindow } from './botyaml.mjs';
+import { loadBotYaml, validate, resolveContextWindow, resolveModel } from './botyaml.mjs';
 import { botHome as botHomeOf } from '../core/paths.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -121,8 +121,9 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
       ? { allow: ['Edit(*)', 'Write(*)', 'Bash(*)', 'Read(*)', 'Glob(*)', 'Grep(*)', 'WebFetch(*)', 'WebSearch(*)', 'Agent(*)', 'Skill(*)'],
           deny: ['AskUserQuestion', 'ExitPlanMode'], defaultMode: 'bypassPermissions' }
       : { deny: ['AskUserQuestion', 'ExitPlanMode'], defaultMode: 'default' },
-    model: cfg.model,
-    effortLevel: cfg.effort,
+    // a tier (harness/models.json) -> its id, and its effort unless bot.yaml sets one (none for tiny: the key is left out)
+    model: resolveModel(cfg.model).id,
+    effortLevel: cfg.effort ?? resolveModel(cfg.model).effort ?? undefined,
     statusLine: { type: 'command', command: `"${fwd(nodeExe)}" "${statusline}"` },
     autoMemoryDirectory: fwd(path.join(botHome, 'memory', 'auto')),
     autoContinueAtUsageLimit: true,

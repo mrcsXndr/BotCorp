@@ -11,8 +11,8 @@
 name: bot-1                       # slug: [a-z0-9][a-z0-9-]{0,31}; also the folder name
 persona: "Sharp, dry, loyal. Leads with action, never over-explains."
                                   # the generated CLAUDE.md persona block until the bot edits CLAUDE.md itself
-model: claude-opus-5-5            # -> generated settings.json "model"
-effort: high                      # low | medium | high | xhigh -> "effortLevel"
+model: top                        # a tier from harness/models.json (top | workhorse | tiny | hyper) or an explicit id -> settings.json "model"
+effort: null                      # null = the tier's effort (high for an explicit id) | low | medium | high | xhigh -> "effortLevel"
 permissions: bypass               # bypass | default (bypass = --dangerously-skip-permissions + AskUserQuestion/ExitPlanMode denied)
 
 harness:

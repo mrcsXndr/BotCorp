@@ -32,11 +32,23 @@ export function harnessAgentNames() {
   try { return fs.readdirSync(path.join(HARNESS_DIR, 'agents')).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort(); } catch { return []; }
 }
 
+// Model tiers (harness/models.json): bot.yaml `model` is a tier name or an
+// explicit model id; sync resolves a tier to its id, and to its effort when
+// `effort` is unset. An explicit id with no effort keeps the old default, high.
+export const MODEL_TIERS = (() => {
+  try { return JSON.parse(fs.readFileSync(path.join(HARNESS_DIR, 'models.json'), 'utf-8')).tiers || {}; } catch { return {}; }
+})();
+const EXPLICIT_MODEL_RE = /^(claude-[a-z0-9][a-z0-9.-]*|default|opus|sonnet|haiku|opusplan)(\[1m\])?$/;
+export function resolveModel(model) {
+  const t = typeof model === 'string' && Object.hasOwn(MODEL_TIERS, model) ? MODEL_TIERS[model] : null;
+  return t ? { id: t.id, effort: t.effort ?? null, tier: model } : { id: model, effort: 'high', tier: null };
+}
+
 export const DEFAULTS = {
   name: null,
   persona: 'A sharp, dry, loyal assistant: leads with action and never over-explains.',
-  model: 'claude-opus-5-5',
-  effort: 'high',
+  model: 'top',                     // a tier (top | workhorse | tiny | hyper) or an explicit id like claude-opus-5-5
+  effort: null,                     // null = the tier's effort (high for an explicit id)
   permissions: 'bypass',            // bypass | default
   harness: {
     channel: 'stable',              // stable | pinned
@@ -137,6 +149,7 @@ export function validate(cfg) {
   const errs = [];
   if (!NAME_RE.test(String(cfg.name || ''))) errs.push(`name: must match ${NAME_RE} (got ${JSON.stringify(cfg.name)})`);
   if (!['bypass', 'default'].includes(cfg.permissions)) errs.push(`permissions: bypass | default (got ${cfg.permissions})`);
+  if (!(typeof cfg.model === 'string' && (Object.hasOwn(MODEL_TIERS, cfg.model) || EXPLICIT_MODEL_RE.test(cfg.model)))) errs.push(`model: a tier (${Object.keys(MODEL_TIERS).join(' | ')}) or a model id like claude-opus-5-5 (got ${JSON.stringify(cfg.model)})`);
   // Claude only (locked 2026-09-24): there is no driver seam, so a `cli:` key is a mistake, not a choice.
   if ('cli' in cfg) errs.push(`cli: not a bot.yaml key (Claude Code is the only CLI; got ${JSON.stringify(cfg.cli)})`);
   // Any other unknown top-level key is a typo that would otherwise be silently ignored.
@@ -282,7 +295,7 @@ export const RESUME_PROMPT_DEFAULT = 'BotCorp restarted this background session 
 // Fable 5 family (and a `[1m]` id), 200k for Haiku; anything else is assumed 1M
 // (known: false says so). Claude Code caps the setting to the model's window.
 export function modelContextWindow(model) {
-  const m = String(model || '').toLowerCase();
+  const m = String(resolveModel(model).id || '').toLowerCase();
   if (/haiku/.test(m)) return { tokens: 200000, known: true };
   if (/^(claude-)?(opus|fable)(-5|$)/.test(m) || /\[1m\]$/.test(m)) return { tokens: 1000000, known: true };
   return { tokens: 1000000, known: false };

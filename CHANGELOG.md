@@ -36,6 +36,12 @@ versions follow SemVer.
 - **Archive a chat:** `botcorp archive <bot>` (operator only) stops it and moves
   its folder to `<BOTCORP_HOME>/archive/<name>-<stamp>/`; a `service: daemon`
   bot exits 2. `POST /api/bots/:name/archive`.
+- **Model tiers.** bot.yaml `model` takes a tier from `harness/models.json`
+  (`top | workhorse | tiny | hyper`) or an explicit model id; anything else
+  fails validation. The default is now `top` (today `claude-opus-5-5`) and
+  `effort` defaults to the tier's (an explicit id with no effort keeps
+  `high`). sync writes the resolved id and effort; `GET /api/models` lists the
+  tiers that are not opt-in.
 
 ## v0.8.4
 

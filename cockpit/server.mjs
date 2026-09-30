@@ -48,6 +48,7 @@ import { runCli, cliJson } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
 import * as attach from '../core/attach.mjs';
 import { ccStatus } from '../core/cc.mjs';
+import { MODEL_TIERS } from '../daemon/botyaml.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
 
@@ -170,6 +171,9 @@ app.get('/api/access/selftest', (req, res) => res.json({ verified: true, email: 
 app.get('/api/engine/version', wrap(async (_req, res) => res.json({ ...(await engine.engineVersion()), exposure: ACCESS ? 'access' : 'loopback' })));
 
 app.get('/api/bots', wrap(async (_req, res) => res.json(await bots.listBots())));
+// The model tiers a bot's Settings offers by name (harness/models.json); opt-in tiers are left out.
+app.get('/api/models', (_req, res) => res.json(Object.entries(MODEL_TIERS).filter(([, t]) => t && !t.opt_in)
+  .map(([tier, t]) => ({ tier, id: t.id, name: t.name, effort: t.effort ?? null }))));
 app.get('/api/bots/:name', withBot(async (_req, res, bot) => res.json(bot)));
 
 // Lifecycle goes through the CLI. The response is the CLI's outcome, scrubbed.
