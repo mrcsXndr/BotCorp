@@ -329,6 +329,10 @@ the DPAPI wrap and drops the operator wrap entirely - back to lock mode
 `none`. Calling `lock` again on an already-operator-locked vault re-locks it
 at once (drops the unlock cache) with no passphrase needed.
 
+`lock`, `unlock`, `migrate` and `acl` are operator verbs (v0.9.3): from a
+bot session they refuse with exit 3, except for an admin bot (audited, like
+`secrets set|delete`).
+
 **While locked:** `Get-VaultSecret` / `Set-VaultSecret` throw `vault: <bot>
 is locked` (audited `ok:false`); the daemon tick will not cold-start or
 restart the bot (`state/<bot>.json` `launch.phase: locked`, `daemon.log` logs `vault

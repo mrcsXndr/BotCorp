@@ -11,7 +11,7 @@ Conventions:
 - Exit codes: `0` ok, `1` error, `2` usage, `3` duplicate Telegram token, or
   an operator-only verb run from inside a bot session (`BOT_NAME` or
   `CLAUDECODE` in the env): `approve`, `reject`, `accounts add|remove|seed|use`,
-  `secrets set|delete` (for any bot), `pair <bot> <senderId>`, `cockpit
+  `secrets set|delete|acl|migrate|lock|unlock` (for any bot), `pair <bot> <senderId>`, `cockpit
   expose|unexpose`, `update --apply|--skip`, `cc rollback`, `secrets
   export-bundle`, and any verb given `--requested-by`. A bot also gets exit 3
   for `start|stop|restart` of any bot but its own. They change nothing when
@@ -1081,7 +1081,7 @@ One bot can be given more rights than the others: `role: admin` in its
 bot.yaml (default: no role). Such a bot may run these operator-only verbs:
 
 - `accounts add|remove|seed|use`
-- `secrets set|delete` (any bot's vault)
+- `secrets set|delete|acl|migrate|lock|unlock` (any bot's vault)
 - `approve` and `reject`
 - `pair <bot> <senderId>`
 - `update --apply|--skip`

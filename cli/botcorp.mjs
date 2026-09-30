@@ -175,7 +175,9 @@ async function cmdSecrets({ pos, flags }) {
     if (r.err.trim()) process.stderr.write(r.err.trim() + '\n');
     return r.code;
   }
-  if (action === 'set' || action === 'delete') requireOperator(`secrets ${action}`, { admin: true, target: `${bot}${key ? `/${key}` : ''}` });
+  // lock/unlock/migrate change who can open the vault (a bot's own passphrase
+  // on it would keep it from starting after a reboot); acl rewrites its ACL.
+  if (['set', 'delete', 'acl', 'migrate', 'lock', 'unlock'].includes(action)) requireOperator(`secrets ${action}`, { admin: true, target: `${bot}${key ? `/${key}` : ''}` });
   if (action === 'set') {
     if (!key) usage('secrets set <bot> <key>   (any key name, e.g. aws_secret_access_key; value on stdin, or a hidden prompt)');
     const value = await readSecretValue(`Value for ${bot}/${key} (hidden): `);
@@ -3461,10 +3463,10 @@ const HELP = `botcorp - operator CLI (docs/cli.md)
   approve <bot> <id|--all> [--by <who>] | approve <bot> --list [--json] | reject <bot> <id> [--by <who>] [--reason <text>]
       [--source cli|cockpit]
       (approve/reject are operator-only: they refuse, exit 3, with BOT_NAME or CLAUDECODE in the env; so do
-       accounts add|remove|seed|use, secrets set|delete, pair <id>, cockpit expose|unexpose|pair|unpair, update --apply|--skip|--rollback|--cancel,
+       accounts add|remove|seed|use, secrets set|delete|acl|migrate|lock|unlock, pair <id>, cockpit expose|unexpose|pair|unpair, update --apply|--skip|--rollback|--cancel,
        cc rollback and --requested-by; a decision on a bot's own request goes to that bot's inbox.
        An admin bot (bot.yaml role: admin, its launch id matching) may run approve/reject, accounts,
-       secrets set|delete, pair, update --apply|--skip|--rollback|--cancel and start/stop/restart of other bots, each line in
+       secrets set|delete|acl|migrate|lock|unlock, pair, update --apply|--skip|--rollback|--cancel and start/stop/restart of other bots, each line in
        state/admin-audit.jsonl; never a role change, a secret read, or cockpit expose|unexpose|pair|unpair)
   tools <bot> scan [--json] [--proposal <file>] | tools <bot> retire <name|path> [--by <who>]
   tools <bot> register --file <proposal> | --name <n> --path <p> --kind <cli|monitor|integration|lib> [--purpose <t>] [--secrets a,b]
