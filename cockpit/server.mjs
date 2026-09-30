@@ -48,6 +48,8 @@ import { runCli, cliJson } from './cli.mjs';
 import * as inbox from '../core/inbox.mjs';
 import * as attach from '../core/attach.mjs';
 import { ccStatus } from '../core/cc.mjs';
+import { ccModels } from '../core/ccprobe.mjs';
+import { listAgents, agentFile } from '../core/subagents.mjs';
 import { MODEL_TIERS } from '../daemon/botyaml.mjs';
 import { bridge } from './ptybridge.mjs';
 import { loadAccessConfig, AccessVerifier, SessionCookie } from './access.mjs';
@@ -176,9 +178,23 @@ app.get('/api/access/selftest', (req, res) => res.json({ verified: true, email: 
 app.get('/api/engine/version', wrap(async (_req, res) => res.json({ ...(await engine.engineVersion()), exposure: ACCESS ? 'access' : 'loopback' })));
 
 app.get('/api/bots', wrap(async (_req, res) => res.json(await bots.listBots())));
-// The model tiers a bot's Settings offers by name (harness/models.json); opt-in tiers are left out.
-app.get('/api/models', (_req, res) => res.json(Object.entries(MODEL_TIERS).filter(([, t]) => t && !t.opt_in)
-  .map(([tier, t]) => ({ tier, id: t.id, name: t.name, effort: t.effort ?? null }))));
+// A bot's Settings model picker: the tiers by name (harness/models.json; opt-in
+// tiers left out), then what the pinned Claude Code offers (core/ccprobe.mjs:
+// its models, effort levels, ultracode and price; [] with `error` when it cannot tell).
+let ccModelsInFlight = null;
+function liveModels() {
+  if (!ccModelsInFlight) ccModelsInFlight = ccModels({ pin: ccStatus().pinned }).finally(() => { ccModelsInFlight = null; });
+  return ccModelsInFlight;
+}
+app.get('/api/models', wrap(async (_req, res) => {
+  const live = await liveModels().catch((e) => ({ cc_version: null, models: [], error: String(e.message || e) }));
+  res.json({
+    cc_version: live.cc_version ?? null,
+    tiers: Object.entries(MODEL_TIERS).filter(([, t]) => t && !t.opt_in).map(([tier, t]) => ({ tier, id: t.id, name: t.name, effort: t.effort ?? null })),
+    models: live.models || [],
+    ...(live.error ? { error: live.error } : {}),
+  });
+}));
 app.get('/api/bots/:name', withBot(async (_req, res, bot) => res.json(bot)));
 
 // Lifecycle goes through the CLI. The response is the CLI's outcome, scrubbed.
@@ -268,6 +284,84 @@ app.get('/api/bots/:name/inbox', withBot(async (_req, res, bot) => {
 }));
 app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
   res.json({ declared: bot.automations, state: await bots.automationState(bot.name), ...(await bots.automationRuns(bot.name)) });
+}));
+
+// The two background helpers the Settings tab switches, as facts: auto-fix
+// (module alert_triage: the daemon's triage scan of memory/metrics/alerts.log)
+// and the debrief (module debrief: the Stop hook's headless run). Read-only.
+app.get('/api/bots/:name/helpers', withBot(async (_req, res, bot) => {
+  const mtime = async (f) => { try { return (await fsp.stat(f)).mtime.toISOString(); } catch { return null; } };
+  const workhorse = MODEL_TIERS.workhorse ? MODEL_TIERS.workhorse.id : null;
+  const every = Number(process.env.BOT_TRIAGE_EVERY_MIN) > 0 ? Number(process.env.BOT_TRIAGE_EVERY_MIN) : 30;
+  const gate = Number(process.env.BOT_DEBRIEF_GATE_HOURS) > 0 ? Number(process.env.BOT_DEBRIEF_GATE_HOURS) : 6;
+  const alertsLog = await mtime(path.join(bot.home, 'memory', 'metrics', 'alerts.log'));
+  res.json({
+    autoFix: { on: bot.modules.alert_triage === true, everyMin: every, model: workhorse, writes: 'fixes on this box, or a card', reads: 'memory/metrics/alerts.log',
+      fed: alertsLog !== null, lastRun: bot.state && typeof bot.state.triage_last_scan === 'string' ? bot.state.triage_last_scan : null },
+    debrief: { on: bot.modules.debrief === true, everyHours: gate, model: workhorse, writes: 'context/session-log.md',
+      lastRun: await mtime(path.join(bot.home, '.claude', '.debrief_last_ts')) },
+  });
+}));
+
+// ---- knowledge: the docs a bot loads (`botcorp knowledge`, cli/knowledge.mjs) ----
+// Reads and writes go through the CLI; a write carries the sha256 the editor
+// read (ifMatch) and is refused (409) when the doc changed since. "All bots"
+// docs are the operator's (the gate below, and the CLI refuses any bot).
+const DOC_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const SHA_RE = /^[0-9a-f]{64}$/;
+async function knowledgeRead(res, args) {
+  const r = await runCli(['knowledge', ...args, '--json'], { maxOut: 256 * 1024 });
+  if (r.code !== 0) return res.status(r.code === 1 ? 404 : r.code === 2 ? 400 : 502).json({ error: (r.err || r.out).trim().replace(/^botcorp: /, '') });
+  res.json(JSON.parse(r.out));
+}
+async function knowledgeWrite(req, res, action, scope) {
+  const { doc } = req.params;
+  if (!DOC_RE.test(doc)) return res.status(400).json({ error: 'doc: CLAUDE or a plain name (letters, digits, - and _)' });
+  const ifMatch = req.body?.ifMatch;
+  if (ifMatch !== undefined && ifMatch !== null && !(typeof ifMatch === 'string' && SHA_RE.test(ifMatch))) return res.status(400).json({ error: 'ifMatch: the sha256 the doc was read at' });
+  const content = req.body?.content;
+  if (action === 'set' && typeof content !== 'string') return res.status(400).json({ error: 'content: the doc text' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { knowledge: `${scope.join(' ')} ${doc}`.trim(), action };
+  const r = await runCli(['knowledge', action, ...scope, doc, '--json', ...(ifMatch ? ['--if-match', ifMatch] : [])], action === 'set' ? { stdin: content, timeoutMs: 180_000 } : { timeoutMs: 180_000 });
+  const err = (r.err || r.out).trim().replace(/^botcorp: /, '');
+  if (r.code !== 0) return res.status(r.code === 4 ? 409 : r.code === 2 ? 400 : r.code === 1 ? 404 : 502).json({ ok: false, code: r.code, error: err });
+  let body = {};
+  try { body = JSON.parse(r.out); } catch {}
+  res.json({ ok: true, ...body });
+}
+app.get('/api/knowledge', wrap((_req, res) => knowledgeRead(res, ['list', '--global'])));
+app.get('/api/knowledge/:doc', wrap((req, res) => (DOC_RE.test(req.params.doc) ? knowledgeRead(res, ['get', '--global', req.params.doc]) : res.status(400).json({ error: 'bad doc' }))));
+app.put('/api/knowledge/:doc', wrap((req, res) => knowledgeWrite(req, res, 'set', ['--global'])));
+app.delete('/api/knowledge/:doc', wrap((req, res) => knowledgeWrite(req, res, 'rm', ['--global'])));
+app.get('/api/bots/:name/knowledge', withBot((_req, res, bot) => knowledgeRead(res, ['list', bot.name])));
+app.get('/api/bots/:name/knowledge/:doc', withBot((req, res, bot) => (DOC_RE.test(req.params.doc) ? knowledgeRead(res, ['get', bot.name, req.params.doc]) : res.status(400).json({ error: 'bad doc' }))));
+app.put('/api/bots/:name/knowledge/:doc', withBot((req, res, bot) => knowledgeWrite(req, res, 'set', [bot.name])));
+app.delete('/api/bots/:name/knowledge/:doc', withBot((req, res, bot) => knowledgeWrite(req, res, 'rm', [bot.name])));
+
+// ---- subagents: what each bot's live session runs (core/subagents.mjs) ----------
+// The sidebar polls this: every running bot's running agents and workflows, plus
+// its last 10 finished ones for the agent screen.
+async function agentsOf(bot) {
+  const transcript = await chat.currentTranscript(bot);
+  const r = listAgents({ transcript, hookLog: path.join(bots.STATE_DIR, bot.name, 'subagents.jsonl'), alive: !!bot.running });
+  const finished = r.agents.filter((a) => a.state !== 'running');
+  return { bot: bot.name, session: r.session, running: r.agents.filter((a) => a.state === 'running'), recent: finished.slice(0, 10), workflows: r.workflows };
+}
+app.get('/api/agents', wrap(async (_req, res) => {
+  const all = (await bots.listBots()).filter((b) => b.running);
+  res.json(await Promise.all(all.map((b) => agentsOf(b).catch(() => ({ bot: b.name, session: null, running: [], recent: [], workflows: [] })))));
+}));
+// One agent: its row and its turns (the chat renderer's, read-only), from byte `after`.
+app.get('/api/bots/:name/agents/:id', withBot(async (req, res, bot) => {
+  const transcript = await chat.currentTranscript(bot);
+  const file = agentFile(transcript, req.params.id);
+  if (!file) return res.status(404).json({ error: 'no such agent in the live session' });
+  const all = await agentsOf(bot);
+  const agent = [...all.running, ...all.recent].find((a) => a.id === req.params.id) || null;
+  const after = Math.max(0, parseInt(req.query.after, 10) || 0);
+  const { turns, cursor } = await chat.readTurns(file, after);
+  res.json({ agent, turns, cursor });
 }));
 
 // ---- operator decisions: approvals, automations, the tools registry ------------

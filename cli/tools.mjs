@@ -405,7 +405,10 @@ export function mcpProvider(def) {
   return path.win32.basename(cmd) || 'unknown';
 }
 
-export function toolInventory({ botHome, cfg, botcorpRoot, scan = null }) {
+// `descriptions`: the operator's "All bots" text per harness item id
+// (<BOTCORP_HOME>/global/descriptions.json, `botcorp knowledge describe`),
+// shown over the shipped text; such an item carries `described: true`.
+export function toolInventory({ botHome, cfg, botcorpRoot, scan = null, descriptions = {} }) {
   const H = path.join(botcorpRoot, 'harness');
   const home = botHome;
   const bot = cfg.name;
@@ -510,12 +513,14 @@ export function toolInventory({ botHome, cfg, botcorpRoot, scan = null }) {
   }));
 
   const section = (kind, label, items, extra = {}) => ({ kind, label, items, ...extra });
+  const described = (items) => items.map((i) => (typeof descriptions[i.id] === 'string' && descriptions[i.id].trim() ? { ...i, description: clip(descriptions[i.id], 200), described: true } : i));
   return {
     bot,
     groups: [
-      { source: 'harness', label: 'BotCorp harness', license: LICENSE.harness, sections: [
-        section('module', 'Modules', modules), section('skill', 'Skills', skills), section('agent', 'Agents', agents),
-        section('hook', 'Hooks', hooks), section('rule', 'Rules', rules), section('command', 'Commands', commands), section('tool', 'Tools', shimmed),
+      // every bot gets these: the harness BotCorp ships (the cockpit's "All bots")
+      { source: 'harness', label: 'All bots', license: LICENSE.harness, sections: [
+        section('module', 'Modules', described(modules)), section('skill', 'Skills', described(skills)), section('agent', 'Agents', described(agents)),
+        section('hook', 'Hooks', described(hooks)), section('rule', 'Rules', described(rules)), section('command', 'Commands', described(commands)), section('tool', 'Tools', described(shimmed)),
       ] },
       { source: 'bot', label: 'This bot\'s own', license: LICENSE.bot, sections: [
         section('tool', 'Registered tools', registry, { registry: scan ? scan.registry : (cfg.tools == null ? 'off' : 'warn'), unregistered: scan ? scan.unregistered.length : null }),

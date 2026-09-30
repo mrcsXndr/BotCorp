@@ -69,6 +69,15 @@ test('harness items: harness.disable and hooks_disable read as off, with the lis
   assert.equal(itemOf('harness', 'rule', 'security').on, false);
 });
 
+test('the harness group reads "All bots"; an operator description wins over the shipped text', () => {
+  assert.equal(inv.groups[0].label, 'All bots');
+  const d = toolInventory({ botHome: HOME, cfg: loadBotYaml(path.join(HOME, 'bot.yaml')), botcorpRoot: ROOT, descriptions: { 'skill:weekly': 'The Friday review' } });
+  const weekly = d.groups[0].sections.find((s) => s.kind === 'skill').items.find((i) => i.name === 'weekly');
+  assert.equal(weekly.description, 'The Friday review');
+  assert.equal(weekly.described, true);
+  assert.notEqual(itemOf('harness', 'skill', 'weekly').description, 'The Friday review');
+});
+
 test('vault-guard and operator-guard have no switch, and say why', () => {
   for (const h of ['vault-guard', 'operator-guard']) {
     const it = itemOf('harness', 'hook', h);

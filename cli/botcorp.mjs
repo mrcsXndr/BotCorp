@@ -1346,7 +1346,7 @@ function readRegistryDays(bot) {
   try { const d = JSON.parse(fs.readFileSync(registryDaysPath(bot), 'utf-8')); return isObj(d) ? d : {}; } catch { return {}; }
 }
 
-function cmdTools({ pos, flags }) {
+async function cmdTools({ pos, flags }) {
   const [, bot, action, ...rest] = pos;
   requireBot(bot, action === 'inventory' ? HAND_NAME_RE : NAME_RE);   // the read-only verb also takes a '_' fixture
   const home = botHome(bot);
@@ -1375,7 +1375,8 @@ function cmdTools({ pos, flags }) {
 
   // read-only: unlike `scan`, it records no registry day
   if (action === 'inventory') {
-    const inv = toolInventory({ botHome: home, cfg: { ...cfg, name: bot }, botcorpRoot: ROOT, scan: cfg.tools === null ? null : scanTools(home, cfg) });
+    const { readDescriptions } = await import('./knowledge.mjs');
+    const inv = toolInventory({ botHome: home, cfg: { ...cfg, name: bot }, botcorpRoot: ROOT, scan: cfg.tools === null ? null : scanTools(home, cfg), descriptions: readDescriptions() });
     if (flags.json) { outJson(inv); return 0; }
     for (const g of inv.groups) {
       out(`${g.label} (${g.license})`);

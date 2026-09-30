@@ -132,7 +132,7 @@ export async function getBot(name) {
     reviewBoard: await reviewBoard(home, !!modules.review_board),   // null = module off
     modules,
     capabilities: cfg.capabilities || null,
-    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false, secrets: Array.isArray(a?.secrets) ? a.secrets.map(String) : [] })) : [],
+    automations: Array.isArray(cfg.automations) ? cfg.automations.map((a) => ({ name: a?.name, kind: a?.kind === 'prompt' ? 'prompt' : 'command', trigger: a?.trigger, enabled: a?.enabled !== false, secrets: Array.isArray(a?.secrets) ? a.secrets.map(String) : [], description: typeof a?.description === 'string' ? a.description.slice(0, 200) : '' })) : [],
     tools: Array.isArray(cfg.tools) ? cfg.tools.length : null,   // null = no registry (bot.yaml has no tools:)
     home,
     configDir: configDir(name),
