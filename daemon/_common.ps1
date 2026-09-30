@@ -1356,7 +1356,14 @@ function Invoke-Bounded {
             Write-DaemonLog "$Label`: KILLED after ${TimeoutSec}s (was holding the tick)" -Bot $Bot
         }
         $text = ''
-        if ($Capture) { try { $text = ($outTask.Result + $errTask.Result) } catch {} }
+        if ($Capture) {
+            # The read is bounded too: a grandchild that inherited the pipe (claude
+            # --bg starting its supervisor) keeps it open after the child exited.
+            try {
+                if ([System.Threading.Tasks.Task]::WaitAll([System.Threading.Tasks.Task[]]@($outTask, $errTask), 5000)) { $text = ($outTask.Result + $errTask.Result) }
+                else { Write-DaemonLog "$Label`: output pipe still held open by a descendant after exit; output dropped" -Bot $Bot -Quiet }
+            } catch {}
+        }
         return [pscustomobject]@{ ExitCode = $(if ($done) { $p.ExitCode } else { $null }); Output = $text; Killed = (-not $done) }
     } catch {
         Write-DaemonLog "$Label`: launch failed (fail-open): $($_.Exception.Message)" -Bot $Bot
