@@ -49,7 +49,8 @@ harness:
     timeline_summary: false       # hourly daemon job: LLM-distil a session timeline a hook left structural, with the vault token (real spend)
     session_summarize: true       # the session-summarize Stop hook: a disk snapshot per turn in memory/sessions/<stamp>.md
     auto_roll: false              # the daemon rolls a FRESH session at a declared breakpoint once the context passes roll_tokens (below)
-  roll_tokens: 500000             # auto_roll's threshold: the last turn's context tokens (status.json)
+    context_warn: false           # one line in the prompt when the context passes 90% of roll_tokens (at most every 30 min)
+  roll_tokens: 500000             # auto_roll's threshold (context_warn warns at 90%): the last turn's context tokens (status.json)
   skills: all                     # or a list; the rest are hidden via disabledSkills in the generated settings
   agents: all
 

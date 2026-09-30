@@ -356,6 +356,7 @@ export const MODULE_TEXT = {
   timeline_summary: 'An hourly daemon job that LLM-distils a timeline a hook left structural (real spend).',
   auto_roll: 'The daemon rolls a fresh session at a declared breakpoint once the context passes harness.roll_tokens.',
   session_summarize: 'A disk snapshot per turn in memory/sessions/<stamp>.md (the session-summarize Stop hook).',
+  context_warn: 'One line in the prompt when the context passes 90% of harness.roll_tokens: finish the step, hand off, declare a breakpoint.',
 };
 const LOCKED_HOOKS = { 'vault-guard': 'keeps every session out of the vaults', 'operator-guard': 'keeps operator-only verbs away from bots' };
 // Plugin marketplaces with a known owner; any other marketplace is named as it is.

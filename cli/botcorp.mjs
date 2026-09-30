@@ -2005,6 +2005,7 @@ const MODULE_DESC = {
   timeline_summary: 'hourly daemon job: LLM-distil a timeline a hook left structural, with the vault token (real spend)',
   auto_roll: 'the daemon rolls a fresh session at a declared breakpoint once the context passes harness.roll_tokens',
   session_summarize: 'the session-summarize Stop hook: a disk snapshot per turn in memory/sessions/<stamp>.md',
+  context_warn: 'one line in the prompt when the last turn\'s context passes 90% of harness.roll_tokens (at most every 30 min)',
 };
 // Modules a bot configures rather than just switches on: shown once, under integrations.
 const INTEGRATION_MODULES = ['telegram', 'board', 'hub'];

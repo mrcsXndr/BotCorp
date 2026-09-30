@@ -23,18 +23,22 @@ case "$0" in */*|*\\*) _hooks="${0%[/\\]*}" ;; *) _hooks=. ;; esac  # dirname wi
 # Git Bash). The prompt is kept RAW: no %b re-escaping, so Windows-path
 # backslashes and other literals survive intact. For a Telegram prompt it
 # also appends the message to the bot's own chat log and builds the reply-path
-# nudge (see the TG block below). Fields: session_id, reply_to msg id, the one
-# <channel> body, the nudge, the nudge as a JSON string, the prompt.
+# nudge (see the TG block below). With module context_warn it also builds the
+# context-pressure line (see CONTEXT WARNING below). Fields: session_id,
+# reply_to msg id, the one <channel> body, the nudge, the nudge and the context
+# line as one JSON string, the context line, the prompt.
 PROMPT=""
 SESSION_ID=""
 REPLY_TO=""
 TG_BODY=""
 REPLY_NUDGE=""
 NUDGE_JSON=""
+CTX_WARN=""
 if ! [ -t 0 ]; then
   { IFS= read -r -d '' SESSION_ID; IFS= read -r -d '' REPLY_TO; IFS= read -r -d '' TG_BODY
-    IFS= read -r -d '' REPLY_NUDGE; IFS= read -r -d '' NUDGE_JSON; IFS= read -r -d '' PROMPT; } < <("$PY" -c '
-import json, os, re, subprocess, sys
+    IFS= read -r -d '' REPLY_NUDGE; IFS= read -r -d '' NUDGE_JSON; IFS= read -r -d '' CTX_WARN
+    IFS= read -r -d '' PROMPT; } < <("$PY" -c '
+import json, os, re, subprocess, sys, time
 try:
     d = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace") or "{}")
 except Exception:
@@ -71,9 +75,30 @@ if tg:
                  "footer; it is working). Use the plugin reply tool only for file attachments. Run python tools/tg/tg_send.py "
                  "--answered first if this is a reply from the operator.")
         nudge_json = json.dumps(nudge)
-out = [str(d.get("session_id") or ""), m.group(1) if m else "", body, nudge, nudge_json, p]
+warn = ""
+mods = os.environ.get("BOT_MODULES")
+sid = str(d.get("session_id") or "")
+if sid and (mods is None or {"context_warn", "*"} & set(mods.split(","))):
+    try:
+        cfg = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
+        s = json.load(open(os.path.join(cfg, "botcorp", "status.json"), encoding="utf-8"))
+        u = (s.get("context_window") or {}).get("current_usage") or {}
+        ctx = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens"))
+        limit = int(os.environ.get("BOT_ROLL_TOKENS") or 500000)
+        mark = os.path.join(sys.argv[2], ".claude", ".context_warn")
+        if str(s.get("session_id") or "") == sid and ctx > limit * 0.9:
+            prev = open(mark, encoding="utf-8").read().split() if os.path.exists(mark) else []
+            if not (len(prev) == 2 and prev[0] == sid and time.time() - float(prev[1]) < 1800):
+                warn = ("Context " + str(round(ctx / 1000)) + "K of " + str(round(limit / 1000)) + "K: finish the current step, "
+                        "update journal + TDL, then declare a breakpoint.")
+                open(mark, "w", encoding="utf-8").write(sid + " " + str(int(time.time())))
+    except Exception:
+        pass
+if warn:
+    nudge_json = json.dumps((nudge + "\n\n" + warn) if nudge else warn)
+out = [sid, m.group(1) if m else "", body, nudge, nudge_json, warn, p]
 sys.stdout.buffer.write("".join(x.replace("\0", "") + "\0" for x in out).encode("utf-8"))
-' "$HARNESS" 2>/dev/null)
+' "$HARNESS" "$BOT_HOME" 2>/dev/null)
 fi
 
 if [ -z "$PROMPT" ]; then
@@ -177,19 +202,30 @@ $HEAD
 EOF
 )
   "$PY" "$HARNESS/tools/v2/journal.py" append "$SESSION_ID" observation "large-paste guarded: ~$EST_TOKENS tokens stashed to .claude/stash/$(basename "$STASH_FILE")" >/dev/null 2>&1 || true
-  # One JSON blob per hook run: the reply-path nudge rides inside this one.
+  # One JSON blob per hook run: the reply-path nudge and the context line ride inside this one.
   if [ -n "$REPLY_NUDGE" ]; then
     GUARD_MSG="$GUARD_MSG
 
 $REPLY_NUDGE"
     REPLY_NUDGE=""
   fi
+  if [ -n "$CTX_WARN" ]; then
+    GUARD_MSG="$GUARD_MSG
+
+$CTX_WARN"
+    CTX_WARN=""
+  fi
   ESCAPED=$(printf '%s' "$GUARD_MSG" | "$PY" -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '""')
   printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "$ESCAPED"
 fi
 
-# --- TG REPLY-PATH NUDGE (see the inbound-log block) ---
-if [ -n "$REPLY_NUDGE" ]; then
+# --- TG REPLY-PATH NUDGE (see the inbound-log block) + CONTEXT WARNING ---
+# Module context_warn: when the last turn's context (the statusline's
+# <config>/botcorp/status.json, this session's) passes 90% of BOT_ROLL_TOKENS
+# (harness.roll_tokens), one line tells the session to wrap up and declare a
+# breakpoint; .claude/.context_warn keeps it to once per 30 min per session.
+# Built in the parse call at the top; NUDGE_JSON carries both lines.
+if [ -n "$REPLY_NUDGE" ] || [ -n "$CTX_WARN" ]; then
   printf '{"hookSpecificOutput":{"hookEventName":"UserPromptSubmit","additionalContext":%s}}\n' "${NUDGE_JSON:-\"\"}"
 fi
 

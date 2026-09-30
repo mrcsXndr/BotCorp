@@ -83,8 +83,9 @@ export const DEFAULTS = {
       lessons: true, debrief: false, auto_commit: true, memory_sync: false,
       sound: false, telemetry: true, review_board: false,
       timeline_summary: false, auto_roll: false, session_summarize: true,
+      context_warn: false,
     },
-    roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context
+    roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context; module context_warn warns at 90% of it
     skills: 'all',
     agents: 'all',
   },

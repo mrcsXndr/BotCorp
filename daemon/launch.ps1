@@ -385,6 +385,7 @@ $childEnv['BOT_HOME']            = $BotHome
 $childEnv['BOT_NAME']            = $Bot
 $childEnv['BOT_MODULES']         = ($modules -join ',')
 $childEnv['BOT_DISABLED_HOOKS']  = (@($cfg.harness.hooks_disable) -join ',')
+$childEnv['BOT_ROLL_TOKENS']     = "$($cfg.harness.roll_tokens)"   # module context_warn (user-prompt-submit)
 $childEnv['BOT_HAS_TG']          = $(if ($canOwn) { '1' } else { '0' })
 $childEnv['BOT_LAUNCHER_PID']    = "$PID"
 $childEnv['BOTCORP_HOME']        = $RtHome
