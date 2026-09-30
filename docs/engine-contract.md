@@ -71,10 +71,10 @@ the daemon tick runs a module's job only for bots that have it on.
 
 | Module | Default | What it gates |
 |---|---|---|
-| `telegram` | off | the Telegram plugin at launch (`--channels`, the token) |
+| `telegram` | off | the Telegram plugin at launch (`--channels`, the token), the tick's poller check and heal, the generated `channels/telegram/access.json`, the boot prompt. Written either way: `botcorp/telegram.json` (default chat, quiet hours) and the `tools/tg` shims; `user-prompt-submit` runs either way and acts only on a Telegram-tagged prompt |
 | `board` | off | the GitHub Projects board poll on the tick |
 | `cost_meter` | on | the `cost-meter` Stop hook (one `sessions.csv` row per session) |
-| `usage_resume` | on | the tick's `usage_monitor.py --resume-check`; the `stop-failure` and `notification` hooks |
+| `usage_resume` | on | the tick's `usage_monitor.py warn` (one `alerts.log` line per 5h / 7d window at 98%) and `usage_monitor.py --resume-check`; the `stop-failure` and `notification` hooks |
 | `alert_triage` | off | the tick's headless fix-or-card pass over `alerts.log` |
 | `hub` | off | the tick's status push (`integrations.hub`) |
 | `janitor` | on | the tick's hygiene pass (`report`: scan and log, touch nothing) |
@@ -83,7 +83,7 @@ the daemon tick runs a module's job only for bots that have it on.
 | `auto_commit` | on | the `auto-commit` Stop hook |
 | `memory_sync` | off | the `memory-sync` Stop hook |
 | `sound` | off | the `play-sound` Stop hook |
-| `telemetry` | on | the OpenTelemetry env at launch |
+| `telemetry` | on | the OpenTelemetry env at launch, the hub push's subagent rollup. `cost_meter` meters what the sink records, so with `telemetry` off it records nothing. The machine's OTel sink (`daemon/otel-sink.mjs`) is kept alive by the tick for every bot, on or off |
 | `review_board` | off | `review_board.py` and the board line in the session-start context |
 | `auto_roll` | off | the tick's fresh restart at a declared breakpoint once the last-turn context passes `harness.roll_tokens` (`docs/daemon.md` "Auto-roll") |
 | `session_summarize` | on | the `session-summarize` Stop hook (a disk snapshot per turn in `memory/sessions/<stamp>.md`) |
