@@ -29,7 +29,8 @@ the timeline summariser becomes a daemon job.
   clears it.
 - **Added (memory):** module `timeline_summary` (default off, real spend)
   runs `timeline.py summarize-stale` hourly as a built-in automation with
-  the vault token.
+  the vault token. `timeline.py`'s default distill model is now the
+  workhorse id in `harness/models.json`, not a hard-coded id.
 - **Added (daemon):** module `auto_roll` (default off). At a declared
   breakpoint, it rolls a fresh session, the same as `botcorp restart <bot>
   --fresh`. It needs an idle session, no running subagents, a last-turn

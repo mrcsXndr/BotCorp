@@ -36,7 +36,16 @@ REPO_ROOT = instance_root()
 SESSIONS_DIR = REPO_ROOT / "memory" / "sessions"
 TIMELINES_DIR = REPO_ROOT / "memory" / "timelines"
 
-DISTILL_MODEL = os.environ.get("BOT_DISTILL_MODEL", "claude-opus-4-8")
+def _workhorse_model() -> str:
+    """The workhorse tier's id from harness/models.json (the one source of model ids)."""
+    try:
+        tiers = json.loads((Path(__file__).resolve().parents[2] / "models.json").read_text(encoding="utf-8"))["tiers"]
+        return tiers["workhorse"]["id"]
+    except Exception:
+        return "claude-sonnet-5-5"
+
+
+DISTILL_MODEL = os.environ.get("BOT_DISTILL_MODEL") or _workhorse_model()
 DISTILL_TIMEOUT = int(os.environ.get("BOT_DISTILL_TIMEOUT", "180"))
 # The daemon's pinned CC when it names one; a bare `claude` on PATH is whatever
 # install the operator has.
@@ -387,7 +396,7 @@ Usage:
   timeline.py summarize-stale [<session_id>]    # distill only a missing/structural timeline (the daemon job)
 
 Env:
-  BOT_DISTILL_MODEL    (default: claude-opus-4-8)
+  BOT_DISTILL_MODEL    (default: the workhorse id in harness/models.json)
   BOT_DISTILL_TIMEOUT  (default: 180s)
 """
 

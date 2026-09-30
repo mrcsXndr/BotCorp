@@ -56,6 +56,7 @@ def _summarize(tmp_path, home, fake, token="t0k"):
                           encoding="utf-8", env=env, timeout=120)
 
 
+@needs_win  # the stand-in claude is a .cmd
 def test_summarize_stale_distills_skips_and_reports_a_fallback(tmp_path):
     home = tmp_path / "bot"
     _bot_memory(home)
