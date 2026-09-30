@@ -466,8 +466,13 @@ Non-widening paths apply immediately (written to `bot.yaml`, then `sync`;
 effective at the next session roll): `model`, `effort`, `persona`,
 `harness.modules.*`, `harness.hooks_disable`, `automations.<name>.enabled`
 (except a bot turning a disabled one on), `suggest.*`,
-`integrations.hub.interval_s`, every `remove`, and anything else that does
-not widen.
+`integrations.hub.interval_s`, every `remove`, and the narrowing values of the
+paths in the table below. From a bot session that list is an ALLOWLIST
+(v0.9.3): any other path queues, whatever its value, e.g.
+`automations.<name>.command|trigger|timeout_min|...`, `backup.*`,
+`harness.boot_prompt|resume_prompt`, `vault.lock`, `integrations.board.*`.
+From the operator's own terminal (or the cockpit, which runs the CLI as the
+operator) anything the table does not list still applies at once.
 
 WIDENING changes are NOT applied. They are appended to
 `<BOTCORP_HOME>/state/<bot>.approvals.json` as
@@ -492,6 +497,7 @@ queues nothing and prints the pending entry's id (`already queued ...`):
 | `account` | the value changes (switches the Claude account, `none` included) |
 | `backup_accounts` | the list changes (switches the Claude account: the reason starts "switches the Claude account") |
 | `role` | the value changes, either way, even from the operator's own terminal (see "Admin bots") |
+| any path not listed above or as non-widening | always, when a bot session asks (the reason reads "changes `<path>` (a bot may change only the paths docs/cli.md lists as non-widening)") |
 
 `requested_by` is `bot:<BOT_NAME>` when a bot session calls it, else
 `operator:<user>` (`--requested-by` overrides it from the operator's env and

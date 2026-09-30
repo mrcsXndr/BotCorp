@@ -995,7 +995,21 @@ function isWidening(cfg, segs, value, op = 'set') {
     const cur = listOf(el && el.secrets);
     return listOf(value).some((k) => !cur.includes(k)) ? 'injects a vault secret into an automation' : null;
   }
+  // Every other path: an allowlist for a bot, so a key nobody wrote a rule for
+  // (an automation's command, backup.git_remote, a new DEFAULTS key) queues
+  // instead of applying. The operator's own terminal keeps applying it.
+  if (!isOperatorContext() && !botMaySet(segs)) return `changes ${p} (a bot may change only the paths docs/cli.md lists as non-widening)`;
   return null;
+}
+
+// The paths a bot sets without the operator (docs/cli.md "Non-widening
+// paths"); the rules above still queue their widening values.
+function botMaySet(segs) {
+  const p = segs.join('.');
+  if (['model', 'effort', 'persona', 'integrations.hub.interval_s'].includes(p)) return true;
+  if (segs.length === 3 && segs[0] === 'harness' && segs[1] === 'modules') return true;
+  if (segs.length === 2 && segs[0] === 'suggest') return true;
+  return false;
 }
 
 // Apply to the RAW file (so the file stays minimal), validate the effective
