@@ -51,6 +51,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _paths import instance_root, harness_root, runtime_root, bot_name  # noqa: E402
+from _models import tier_id  # noqa: E402
 
 ROOT = instance_root()
 ALERTS_LOG = ROOT / "memory" / "metrics" / "alerts.log"
@@ -513,7 +514,9 @@ def run(prompt_file: Path, run_file: Path, now: datetime | None = None) -> int:
       - --dangerously-skip-permissions because nobody can answer a prompt.
       - no console window (CREATE_NO_WINDOW) so nothing pops on the desktop."""
     now = now or datetime.now()
-    model = os.environ.get("BOT_TRIAGE_MODEL") or "claude-opus-5-5"
+    # the workhorse tier (harness/models.json): a triage run fixes or cards one
+    # alert batch, locked-scope work; BOT_TRIAGE_MODEL overrides it
+    model = os.environ.get("BOT_TRIAGE_MODEL") or tier_id("workhorse")
     timeout_s = int(_env_num("BOT_TRIAGE_TIMEOUT_MIN", 25) * 60)
     prompt = prompt_file.read_text(encoding="utf-8")
     env = dict(os.environ, BOT_TG_MUTE="1", PYTHONIOENCODING="utf-8")

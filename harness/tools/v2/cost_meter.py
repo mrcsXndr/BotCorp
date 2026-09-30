@@ -50,14 +50,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _paths import instance_root, config_home, runtime_root, bot_name, bot_retired, module_enabled  # noqa: E402
+from _models import tier_prices  # noqa: E402
 
-# Pricing per MILLION tokens (USD). Only used by the legacy transcript-parse
+# Pricing per MILLION tokens (USD), per family, from harness/models.json
+# (price_per_mtok of each tier). Only used by the legacy transcript-parse
 # fallback — a metered (telemetry) row carries CC's own `cost_usd`.
-PRICING = {
-    "opus": {"input": 15.0, "cache_write": 3.75, "cache_read": 1.50, "output": 75.0},
-    "sonnet": {"input": 3.0, "cache_write": 0.75, "cache_read": 0.30, "output": 15.0},
-    "haiku": {"input": 0.8, "cache_write": 0.20, "cache_read": 0.08, "output": 4.0},
-}
+PRICING = tier_prices()
+_NO_PRICE = {"input": 0.0, "cache_write": 0.0, "cache_read": 0.0, "output": 0.0}
 
 REPO_ROOT = instance_root()
 METRICS_DIR = REPO_ROOT / "memory" / "metrics"
@@ -281,7 +280,7 @@ def _price_jsonl(path: Path) -> dict:
             msg = entry.get("message") or {}
             usage = msg.get("usage") or {}
             tier = _tier(msg.get("model"))
-            price = PRICING[tier] if tier in PRICING else PRICING["sonnet"]
+            price = PRICING.get(tier) or PRICING.get("sonnet") or _NO_PRICE
 
             inp = int(usage.get("input_tokens") or 0)
             out = int(usage.get("output_tokens") or 0)

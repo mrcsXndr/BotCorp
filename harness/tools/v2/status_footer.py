@@ -272,7 +272,7 @@ def _context_window() -> tuple[int, int, float]:
 
 def _model_short() -> str:
     """Display name: status.json display_name minus "Claude ", else derived from
-    the id ('claude-opus-5-5' -> 'Opus 5.5', 'claude-fable-5-1' -> 'Fable 5.1')."""
+    the id ('claude-<family>-<major>-<minor>' -> '<Family> <major>.<minor>')."""
     if _LAST_DISPLAY:
         return _LAST_DISPLAY.removeprefix("Claude ").strip()
     mid = _LAST_MODEL.split("[")[0]

@@ -56,7 +56,7 @@ export function resolveModel(model) {
 export const DEFAULTS = {
   name: null,
   persona: 'A sharp, dry, loyal assistant: leads with action and never over-explains.',
-  model: 'top',                     // a tier (top | workhorse | tiny | hyper) or an explicit id like claude-opus-5-5
+  model: 'top',                     // a tier (top | workhorse | tiny | hyper) or an explicit model id
   effort: null,                     // null = the tier's effort (high for an explicit id)
   permissions: 'bypass',            // bypass | default
   harness: {
@@ -162,7 +162,7 @@ export function validate(cfg) {
   const errs = [];
   if (!NAME_RE.test(String(cfg.name || ''))) errs.push(`name: must match ${NAME_RE} (got ${JSON.stringify(cfg.name)})`);
   if (!['bypass', 'default'].includes(cfg.permissions)) errs.push(`permissions: bypass | default (got ${cfg.permissions})`);
-  if (!(typeof cfg.model === 'string' && (Object.hasOwn(MODEL_TIERS, cfg.model) || EXPLICIT_MODEL_RE.test(cfg.model)))) errs.push(`model: a tier (${Object.keys(MODEL_TIERS).join(' | ')}) or a model id like claude-opus-5-5 (got ${JSON.stringify(cfg.model)})`);
+  if (!(typeof cfg.model === 'string' && (Object.hasOwn(MODEL_TIERS, cfg.model) || EXPLICIT_MODEL_RE.test(cfg.model)))) errs.push(`model: a tier (${Object.keys(MODEL_TIERS).join(' | ')}) or a model id like ${(MODEL_TIERS.top && MODEL_TIERS.top.id) || 'claude-<family>-<version>'} (got ${JSON.stringify(cfg.model)})`);
   // Claude only (locked 2026-09-24): there is no driver seam, so a `cli:` key is a mistake, not a choice.
   if ('cli' in cfg) errs.push(`cli: not a bot.yaml key (Claude Code is the only CLI; got ${JSON.stringify(cfg.cli)})`);
   // Any other unknown top-level key is a typo that would otherwise be silently ignored.

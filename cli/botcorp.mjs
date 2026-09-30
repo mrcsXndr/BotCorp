@@ -35,7 +35,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
   // exit once the write drained (a piped stdout is async on Windows); never resolves
   await new Promise(() => stream.write(text, () => process.exit(1)));
 }
-const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow } = await import('../daemon/botyaml.mjs');
+const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow, MODEL_TIERS } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
@@ -3179,7 +3179,7 @@ function checkAccountToken(a) {
   if (!tok) return { level: 'FAIL', ok: false, detail: 'vault unreadable (re-enter with botcorp accounts add)' };
   const env = { CLAUDE_CONFIG_DIR: a.config_dir, CLAUDE_CODE_OAUTH_TOKEN: tok, CLAUDECODE: '', CLAUDE_CODE_CHILD_SESSION: '', CLAUDE_CODE_ENTRYPOINT: '', CLAUDE_CODE_SSE_PORT: '' };
   try { fs.mkdirSync(a.config_dir, { recursive: true }); } catch {}
-  const r = runClaude(['-p', 'Reply with the single word ok.', '--model', 'claude-haiku-4-5-20251001', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
+  const r = runClaude(['-p', 'Reply with the single word ok.', '--model', (MODEL_TIERS.tiny && MODEL_TIERS.tiny.id) || 'haiku', '--max-turns', '1', '--output-format', 'json'], { env, timeoutMs: 90_000, cwd: a.config_dir });
   let ok = false, detail = '';
   try { const j = JSON.parse(r.out.trim()); ok = r.code === 0 && j && !j.is_error; detail = ok ? `haiku replied (${a.masked})` : `is_error=${j && j.is_error} exit ${r.code}${j && j.api_error_status ? ` (HTTP ${j.api_error_status})` : ''}`; }
   catch { detail = r.timedOut ? 'timed out after 90 s' : `exit ${r.code}: ${scrub((r.err || r.out).trim()).split(/\r?\n/)[0].slice(0, 120)}`; }

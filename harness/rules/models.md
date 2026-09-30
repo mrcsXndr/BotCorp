@@ -25,6 +25,9 @@ The operator set this on 2026-09-29, after Sonnet 5.5 shipped and a Fable-heavy 
 | Opus 5.5 | 66.4% | 58 | ~93 tok/s | $4 / $20 |
 | Sonnet 5.5 | 70.6% | 56 | ~139 tok/s | $2 / $10 |
 | Fable 5.1 | 55.8% | 53 | ~69 tok/s | $10 / $50 |
+| Haiku 4.5 | n/a | n/a | n/a | $1 / $5 |
+
+The prices come from `harness/models.json` (`price_per_mtok` per tier, with the cache write and read prices); the cost meter's transcript fallback prices from the same file, and a test checks that this column matches it.
 
 - On every row both sources publish, Opus 5.5 is at or above Fable 5.1, at 40% of the price.
 - Sonnet 5.5 is close behind Opus and ahead of it on agentic terminal work, at half the price and 1.5× the speed.

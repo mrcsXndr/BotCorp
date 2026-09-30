@@ -64,8 +64,11 @@ echo "$NOW" > "$GATE_FILE" 2>/dev/null || true
 PROMPT_FILE="$BOT_HOME/.claude/.debrief_prompt.txt"
 printf '%s' "$PROMPT" > "$PROMPT_FILE" 2>/dev/null || exit 0
 export BOT_TG_MUTE=1
+# the workhorse tier's pinned id (harness/models.json); its alias if unreadable
+MODEL=$("$PY" -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['tiers']['workhorse']['id'])" "$HARNESS/models.json" 2>/dev/null)
+[ -n "$MODEL" ] || MODEL=sonnet
 "$PY" "$HARNESS/tools/v2/run_hidden.py" --prompt-file "$PROMPT_FILE" -- \
-  claude --print --model sonnet --dangerously-skip-permissions \
+  claude --print --model "$MODEL" --dangerously-skip-permissions \
   --setting-sources user -p @PROMPT@ 2>/dev/null || true
 
 exit 0

@@ -31,21 +31,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _session import resolve_session_id  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _paths import instance_root  # noqa: E402
+from _models import tier_id  # noqa: E402
 
 REPO_ROOT = instance_root()
 SESSIONS_DIR = REPO_ROOT / "memory" / "sessions"
 TIMELINES_DIR = REPO_ROOT / "memory" / "timelines"
 
-def _workhorse_model() -> str:
-    """The workhorse tier's id from harness/models.json (the one source of model ids)."""
-    try:
-        tiers = json.loads((Path(__file__).resolve().parents[2] / "models.json").read_text(encoding="utf-8"))["tiers"]
-        return tiers["workhorse"]["id"]
-    except Exception:
-        return "claude-sonnet-5-5"
-
-
-DISTILL_MODEL = os.environ.get("BOT_DISTILL_MODEL") or _workhorse_model()
+DISTILL_MODEL = os.environ.get("BOT_DISTILL_MODEL") or tier_id("workhorse")
 DISTILL_TIMEOUT = int(os.environ.get("BOT_DISTILL_TIMEOUT", "180"))
 # The daemon's pinned CC when it names one; a bare `claude` on PATH is whatever
 # install the operator has.
