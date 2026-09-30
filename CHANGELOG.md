@@ -3,6 +3,29 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.8
+
+QA pack D: the minor findings of QA round 3.
+
+- **Fixed (hooks):** the `context_warn` warning is off unless the module is
+  listed, also when `BOT_MODULES` is unset. Its 30-minute marker is written
+  only after the line was emitted, and a marker that cannot be written keeps
+  the hook quiet instead of repeating the line on every prompt. The marker is
+  in the bot template's `.gitignore`.
+- **Fixed (cost meter):** a transcript-fallback row priced without a usable
+  `harness/models.json` is marked `|unpriced` with a stderr line, not a
+  silent 0. The models.json prices were re-checked against the published
+  rates and are unchanged.
+- **Fixed (hooks):** a failed hook-timing rotation removes its temp file.
+- **Fixed (daemon):** after the tick starts the OTel sink it waits (up to
+  5 s) for the sink's `otel.json`, so a bot launched in the same tick gets its
+  telemetry env.
+- **Changed (timeline):** with module `timeline_summary` on, the
+  `timeline-summary` job also distills the current week's roll-up when the
+  PreCompact hook left it concatenated; exit 1 when that distill fell back.
+- **Fixed (daemon):** a successful update apply removes a leftover
+  `update_failed_card.md` from an earlier failed one.
+
 ## v0.9.7
 
 QA pack C: a bot that was busy when a release applied restarts onto it later,
