@@ -1,7 +1,7 @@
 import { Link } from 'react-router';
 import type { Key } from 'react-aria-components';
 import type { Bot, StatusPush } from '../../api/queries';
-import { useAccounts } from '../../api/queries';
+import { useAccounts, useLaunching } from '../../api/queries';
 import { Button, Hint, IconButton, Menu, MenuItem, MenuSeparator, Segment, Segmented, Dot } from '../../ui';
 import { Icon } from '../../icons';
 import { contextBar, lifecycleButtons, type ContextReading } from '../../lib/cards';
@@ -24,7 +24,8 @@ export function BotHeader({ bot, status, view, onView, onAction, onStart, starti
   onAction: (a: BotAction) => void; onStart: () => void; starting: boolean;
 }) {
   const wide = useWide();
-  const s = botStatus(bot);
+  const launching = useLaunching().has(bot.name);
+  const s = botStatus(bot, launching);
   const lc = lifecycleButtons(bot);
   const accounts = useAccounts().data?.accounts;
   const ctx = contextBar(status?.context as ContextReading | undefined);
@@ -42,7 +43,7 @@ export function BotHeader({ bot, status, view, onView, onAction, onStart, starti
         )}
         <h1 className={`m-0 ${wide ? '' : 'ml-1'} flex-1 min-w-0 truncate font-display text-xl leading-tight text-text`}>{bot.name}</h1>
         {lc.start && (
-          <Button variant="primary" icon="play" onPress={onStart} isDisabled={starting} className="mr-1">{COPY.button.start}</Button>
+          <Button variant="primary" icon="play" onPress={onStart} isDisabled={starting || launching} className="mr-1">{COPY.button.start}</Button>
         )}
         <Menu label={COPY.button.botMenu} trigger={<IconButton icon="cog" size={20} label={COPY.button.botMenu} />} onAction={(k: Key) => onAction(k as BotAction)}>
           <MenuItem id="settings" icon="set">{COPY.tab.settings}</MenuItem>

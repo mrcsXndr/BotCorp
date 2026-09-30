@@ -24,9 +24,12 @@ export function splitBots<T extends BotLike>(bots: readonly T[]): { pinned: T[];
 
 // The one state word (at most 4 words, lower case) and the dot's tone, from
 // the phase every reader shows (core/state.mjs PHASES).
-export function botStatus(b: BotLike): { word: string; tone: DotTone } {
+// `launching`: a Start is in flight from this cockpit, so it reads "starting"
+// even before the daemon has written the phase.
+export function botStatus(b: BotLike, launching = false): { word: string; tone: DotTone } {
   if (b.running && (b.blocked || b.phase === 'blocked')) return { word: 'waiting on you', tone: 'warn' };
   if (b.running) return { word: b.phase === 'idle' || b.phase === 'working' ? b.phase : 'running', tone: 'ok' };
+  if (launching) return { word: 'starting', tone: 'accent' };
   if (b.down || b.phase === 'down') return { word: 'down', tone: 'bad' };
   if (b.phase === 'starting') return { word: 'starting', tone: 'accent' };
   return { word: 'stopped', tone: 'idle' };

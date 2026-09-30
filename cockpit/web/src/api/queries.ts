@@ -5,7 +5,7 @@
 // Reads poll only where the classic UI polled; writes invalidate what they
 // change. Every response shape is the server's; the types name the fields the
 // screens read and leave the rest open.
-import { useMutation, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
+import { useMutation, useMutationState, useQuery, useQueryClient, type QueryKey } from '@tanstack/react-query';
 import { del, fill, get, post, put, request } from './http';
 import type { ChatTurn, StatusPush } from './ws';
 
@@ -127,9 +127,10 @@ function useRead<T>(key: QueryKey, route: { p: string }, params?: Record<string,
   });
 }
 // A write that invalidates `keys` (prefix match) when it settles, success or not.
-function useWrite<V, T = CliResult>(fn: (v: V) => Promise<T>, keys: (v: V) => QueryKey[]) {
+function useWrite<V, T = CliResult>(fn: (v: V) => Promise<T>, keys: (v: V) => QueryKey[], mutationKey?: QueryKey) {
   const qc = useQueryClient();
   return useMutation<T, Error, V>({
+    mutationKey,
     mutationFn: fn,
     onSettled: (_d, _e, v) => Promise.all(keys(v).map((queryKey) => qc.invalidateQueries({ queryKey }))),
   });
@@ -175,9 +176,17 @@ export const useUploadFile = (name: string, file: string) =>
   useQuery<Blob>({ queryKey: qk.botPart(name, 'upload', file), queryFn: ({ signal }) => request<Blob>('GET', url(ROUTES.uploadFile, { name, file }), { signal, as: 'blob' }), enabled: !!name && !!file, staleTime: Infinity });
 
 // ---- writes -----------------------------------------------------------------------------
+const LIFECYCLE_KEY = ['lifecycle'] as const;
 export const useLifecycle = () => useWrite(
   ({ name, action, fresh }: { name: string; action: 'start' | 'stop' | 'restart'; fresh?: boolean }) => post<CliResult>(url(ROUTES[action], { name }), action === 'stop' ? {} : { fresh: !!fresh }),
-  ({ name }) => botKeys(name));
+  ({ name }) => botKeys(name), LIFECYCLE_KEY);
+// Bots with a start or restart in flight, from any component: a new chat is
+// "starting" from the moment Start is sent, not "stopped" until the daemon says so.
+export const useLaunching = (): ReadonlySet<string> => new Set(
+  useMutationState({
+    filters: { mutationKey: LIFECYCLE_KEY, status: 'pending' },
+    select: (m) => m.state.variables as { name: string; action: string },
+  }).filter((v) => v && v.action !== 'stop').map((v) => v.name));
 export const useSend = () => useWrite(
   ({ name, text, attachments = [] }: { name: string; text: string; attachments?: string[] }) => post<InboxItem>(url(ROUTES.send, { name }), { text, attachments }),
   ({ name }) => [qk.botPart(name, 'inbox')]);

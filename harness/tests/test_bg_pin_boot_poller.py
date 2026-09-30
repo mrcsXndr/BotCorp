@@ -313,6 +313,31 @@ def test_a_real_tick_pins_a_live_unpinned_session_and_logs_blocked(repo_bot, fak
 
 @needs_pwsh
 @needs_node
+def test_the_first_launch_of_a_new_chat_gets_no_resume_seed_a_restart_does(repo_bot):
+    name, home, rt, env = repo_bot
+    (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  resume_prompt: 'RESUMECHECK {{reason}}'\n  modules:\n    telegram: false\n", encoding="utf-8")
+    state = rt / "state" / f"{name}.json"
+    launch = ["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "launch.ps1"), "-Bot", name, "-Bg", "-DryRun", "-StartedBy", "cli"]
+
+    def argv_of():
+        r = subprocess.run(launch, capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=env)
+        assert r.returncode == 0, r.stderr
+        return next(ln for ln in r.stdout.splitlines() if ln.strip().startswith("argv:")), r.stdout
+
+    # a new chat: no state at all, or state with no started_at (something wrote a key before the launch)
+    argv, out = argv_of()
+    assert "RESUMECHECK" not in argv and "resume seed" not in out
+    state.write_text(json.dumps({"bot": name, "launcher_started_at": "2000-01-01T00:00:00+00:00"}), encoding="utf-8")
+    argv, out = argv_of()
+    assert "RESUMECHECK" not in argv and "resume seed" not in out
+    # the same bot once it has launched before: a restart seeds the resume prompt
+    state.write_text(json.dumps({"bot": name, "status": "exited", "started_at": "2000-01-01T00:00:00.0000000+00:00"}), encoding="utf-8")
+    argv, _ = argv_of()
+    assert "RESUMECHECK an operator started it (botcorp start / restart or the cockpit)" in argv
+
+
+@needs_pwsh
+@needs_node
 def test_a_daemon_cold_start_after_a_boot_passes_the_boot_prompt(repo_bot):
     name, home, rt, env = repo_bot
     (home / "bot.yaml").write_text(f"name: {name}\nharness:\n  service: manual\n  boot_prompt: 'BOOTCHECK {{now}}'\n  resume_prompt: 'RESUMECHECK {{reason}}'\n  modules:\n    telegram: false\n", encoding="utf-8")

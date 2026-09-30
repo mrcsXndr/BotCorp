@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { NavLink } from 'react-router';
-import type { Bot } from '../api/queries';
+import { useLaunching, type Bot } from '../api/queries';
 import { Button, Dot } from '../ui';
 import { Icon } from '../icons';
 import { botStatus } from '../lib/bots';
@@ -11,7 +11,7 @@ const TONE_TEXT = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', idle: 'te
 // One bot: the name is in the display face; the state is one coloured word
 // with its dot; Telegram is a bare mark; the Inbox count is mono.
 export function BotRow({ bot, attention = 0, dense = false }: { bot: Bot; attention?: number; dense?: boolean }) {
-  const s = botStatus(bot);
+  const s = botStatus(bot, useLaunching().has(bot.name));
   return (
     <NavLink to={`/bots/${encodeURIComponent(bot.name)}`} data-bot={bot.name}
       className={({ isActive }) => `flex items-stretch gap-3 ${dense ? 'min-h-[52px] px-3 py-2 rounded-btn' : 'min-h-16 px-4 py-2.5'}

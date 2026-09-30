@@ -238,7 +238,11 @@ if ($StartedBy -eq 'daemon-cold' -and "$($cfg._boot_prompt)") {
 # turn (bot.yaml harness.resume_prompt, botyaml.mjs RESUME_PROMPT_DEFAULT).
 # Daemon cold-starts / restarts (which pinning keeps rare) and CLI starts: a
 # `botcorp start|restart` bg session has nobody attached either. Never scheduled.
-if ($Bg -and -not $seedPrompt.Count -and $StartedBy -in @('daemon-cold', 'daemon-restart', 'cli') -and "$($cfg._resume_prompt)") {
+# The FIRST launch of a bot (no started_at recorded yet: a new chat) is not a
+# restart of anything, so it gets no resume seed at all.
+$hadLaunch = $false
+try { $stR = Read-State; $hadLaunch = [bool]($stR -and ($stR.PSObject.Properties.Name -contains 'started_at') -and "$($stR.started_at)") } catch {}
+if ($Bg -and -not $seedPrompt.Count -and $hadLaunch -and $StartedBy -in @('daemon-cold', 'daemon-restart', 'cli') -and "$($cfg._resume_prompt)") {
     $why = switch ($StartedBy) {
         'daemon-cold'    { 'the daemon found it not running' }
         'daemon-restart' { 'the daemon restarted it' }

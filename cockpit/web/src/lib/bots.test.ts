@@ -27,6 +27,10 @@ test('botStatus: one engine-neutral word and a tone', () => {
   expect(botStatus({ name: 'a', running: false, phase: 'down' })).toEqual({ word: 'down', tone: 'bad' });
   expect(botStatus({ name: 'a', running: false, phase: 'starting' })).toEqual({ word: 'starting', tone: 'accent' });
   expect(botStatus({ name: 'a', running: false, phase: null })).toEqual({ word: 'stopped', tone: 'idle' });
+  // a Start in flight: starting, not stopped or down; a running bot is unaffected
+  expect(botStatus({ name: 'a', running: false, phase: null }, true)).toEqual({ word: 'starting', tone: 'accent' });
+  expect(botStatus({ name: 'a', running: false, phase: 'down' }, true)).toEqual({ word: 'starting', tone: 'accent' });
+  expect(botStatus({ name: 'a', running: true, phase: 'idle' }, true)).toEqual({ word: 'idle', tone: 'ok' });
 });
 
 test('attentionByBot counts per bot and skips machine-wide items', () => {
