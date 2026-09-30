@@ -41,6 +41,7 @@ screenshots/
 .claude/.current_session_id
 .claude/stash/
 .claude/.botcorp_*
+.claude/.context_warn
 .claude/statsig/
 .claude/worktrees/
 

@@ -121,6 +121,11 @@ def test_a_telegram_prompt_gets_one_blob(tmp_path):
     assert ctx.startswith("Reply path:") and ctx.endswith(LINE)
 
 
+def test_marker_is_gitignored():
+    for f in (ASSEMBLY / "templates" / "bot" / ".gitignore", ASSEMBLY / ".gitignore"):
+        assert ".claude/.context_warn" in f.read_text(encoding="utf-8").splitlines(), f
+
+
 def test_registered_everywhere():
     assert "context_warn: false," in (ASSEMBLY / "daemon" / "botyaml.mjs").read_text(encoding="utf-8")
     assert "| `context_warn` | off |" in (ASSEMBLY / "docs" / "engine-contract.md").read_text(encoding="utf-8")
