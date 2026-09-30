@@ -3,6 +3,36 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.4
+
+Fixes from the 2026-09-30 code review: the cockpit, the CLI, and the daemon
+paths that could hit a live session.
+
+- **Fixed (cockpit):** a bad WebSocket frame or a client reset no longer kills
+  the cockpit or a pty-host (C4, C5, C6). The `/term` socket needs the operator
+  and every attach is audited (C1). Every write route needs the operator by
+  default, and `/unlock` locks after 5 wrong passphrases (C2, C3).
+- **Removed:** the classic cockpit UI, `/classic` and its parity test (F2).
+- **Fixed (CLI):** `config set` from a bot applies only an allowlist of keys;
+  the rest queue for approval (L1). `import` drops `.git`, `.vault` and
+  `.claude-*` in any case or trailing-dot spelling (L2). State files are
+  written atomically, and a torn one is never rebuilt from nothing (L3).
+  `secrets acl|migrate|lock|unlock` are operator verbs (L5). An admin bot's
+  decision names the admin bot (L21). Operator verbs also check the caller's
+  process ancestry, not only env markers (finding 4, CLI half).
+- **Fixed (inbox):** the drainer's pty-host socket always settles (L4).
+- **Fixed (daemon):** a turn in progress reads busy by Claude Code's job
+  record, in the daemon, observe and the cockpit (D12). A new prompt deletes
+  the breakpoint marker (D7). A failed roster read defers the cold-start; the
+  third in a row starts it (D8). The stray sweep spares shells under a
+  claude.exe and matches the whole bot folder, in the ownership check too
+  (D9). `Invoke-Bounded` bounds the output read (D16). A failed migration
+  fails the update and rolls back (D14).
+- **Fixed (automations):** the waiter runs bot.yaml's automation of the job's
+  name, with bot.yaml's secrets; an undeclared name is refused (D3).
+- **Fixed (harness):** the headless alert triage and debrief runs put the
+  alert and git text in a marked untrusted-data block (H13).
+
 ## v0.9.3
 
 Faster, stricter hooks, and the guard gaps the 2026-09-30 review found.
