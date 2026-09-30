@@ -167,7 +167,10 @@ def test_approve_needs_the_token_then_applies_and_audits(cockpit):
 @needs_node
 def test_automation_run_queues_and_resume_needs_the_token(cockpit):
     c, rt, bots = cockpit
+    # v0.9.3: every write needs the operator, a run too
     code, body = c.call("POST", "/api/bots/t/automations/job/run")
+    assert code == 403 and body["need"] == "approve-token", body
+    code, body = c.call("POST", "/api/bots/t/automations/job/run", token=True)
     assert code == 200 and body["ok"], body
     q = (rt / "state" / "t" / "events" / "run-now.queue").read_text(encoding="utf-8").splitlines()
     assert json.loads(q[-1])["automation"] == "job"
@@ -178,10 +181,11 @@ def test_automation_run_queues_and_resume_needs_the_token(cockpit):
     assert code == 200 and body["ok"], body
     assert "enabled: false" not in (bots / "t" / "bot.yaml").read_text(encoding="utf-8")
 
-    assert c.call("POST", "/api/bots/t/automations/nope/run")[0] == 404
-    assert c.call("POST", "/api/bots/t/automations/job/explode")[0] == 400
-    rows = _audit(rt, 5)
-    assert rows[0]["automation"] == "job" and rows[0]["action"] == "run" and rows[0]["result"] == 200, rows
+    assert c.call("POST", "/api/bots/t/automations/nope/run", token=True)[0] == 404
+    assert c.call("POST", "/api/bots/t/automations/job/explode", token=True)[0] == 400
+    rows = _audit(rt, 6)
+    assert rows[0]["result"] == 403, rows
+    assert rows[1]["automation"] == "job" and rows[1]["action"] == "run" and rows[1]["result"] == 200, rows
 
 
 # --- R5c step 19: switch account ----------------------------------------------------------------
