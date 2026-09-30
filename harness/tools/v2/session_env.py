@@ -35,6 +35,11 @@ def build_record(env, session_id, now):
         "telegram_last4": last4(env.get("TELEGRAM_BOT_TOKEN")),
         "launcher_pid": int(env["BOT_LAUNCHER_PID"]) if str(env.get("BOT_LAUNCHER_PID", "")).isdigit() else None,
         "bot": env.get("BOT_NAME") or None,
+        # The compaction window the worker really runs with (settings `env`
+        # applied), which doctor compares with bot.yaml; the launch log only
+        # says what the launch asked for.
+        "auto_compact_window": env.get("CLAUDE_CODE_AUTO_COMPACT_WINDOW") or None,
+        "autocompact_pct": env.get("CLAUDE_AUTOCOMPACT_PCT_OVERRIDE") or None,
     }
 
 

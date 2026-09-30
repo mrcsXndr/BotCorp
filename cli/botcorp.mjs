@@ -47,7 +47,7 @@ const {
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -726,7 +726,13 @@ async function cmdChat({ flags }) {
     else cwd = ans;
   }
   if (cwd && !fs.existsSync(cwd)) fail(`chat: folder not found: ${cwd}`);
-  const args = ['-Account', account, ...(generic ? ['-Generic'] : ['-Cwd', path.resolve(cwd)]), ...(flags['dry-run'] ? ['-DryRun'] : [])];
+  // A tab in a bot's own folder runs as its bot.yaml `permissions` says, like
+  // the bot's session; generic and any other folder stay Manual.
+  const same = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b);
+  const bot = generic ? null : listBots().find((b) => same(path.resolve(botHome(b)), path.resolve(cwd)));
+  let bypass = false;
+  if (bot) { try { bypass = loadBotYaml(botYamlPath(bot)).permissions === 'bypass'; } catch {} }
+  const args = ['-Account', account, ...(generic ? ['-Generic'] : ['-Cwd', path.resolve(cwd)]), ...(bypass ? ['-Bypass'] : []), ...(flags['dry-run'] ? ['-DryRun'] : [])];
   const r = runPwshFile(chatPs, args, { timeoutMs: 60_000 });
   return echoPs(r);
 }
@@ -3270,6 +3276,9 @@ async function cmdDoctor({ flags }) {
         const us = readJson(path.join(configDir(bot), 'settings.json'));
         const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, machinePct: machineCompactPct, running: s.running, launch });
         add(cw.level, `${bot}: context window`, cw.detail.replace(/<bot>/g, bot), 'bots');
+        // memory health: startup context size, timeline distill, import approval, the worker's real window
+        const rec = sessionLaunchOf(bot, botState(bot)).rec;
+        for (const r of memoryHealthRows({ home: botHome(bot), config: configDir(bot), sessionId: (rawState && rawState.session_id) || '', resolved: resolveContextWindow(cfg), running: s.running, rec })) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
       }
       {
         const v = harnessToolsVerdict(bot);

@@ -116,6 +116,138 @@ def test_record_notification_stale_leaves_window_for_resume_check(isolated, monk
     assert "resumed_for" not in st
 
 
+# The StopFailure payload Claude Code 2.1.284 builds (common hook fields +
+# error / error_details / last_assistant_message). `error` is a STRING; the old
+# handler did `(payload.get("error") or {}).get("message")` and crashed on it.
+_API_BODY = ('429 {"type":"error","error":{"type":"rate_limit_error","message":'
+             '"This request would exceed your account\'s rate limit. Please try again later."},'
+             '"request_id":"req_x"}')
+
+
+def _real_payload(text: str, *, agent: bool = False, details: str | None = None) -> dict:
+    p = {"session_id": "s1", "transcript_path": "t.jsonl", "cwd": "C:/bots/x",
+         "permission_mode": "bypassPermissions", "hook_event_name": "StopFailure",
+         "error": "rate_limit", "last_assistant_message": text}
+    if details is not None:
+        p["error_details"] = details
+    if agent:
+        p.update(agent_id="a1", agent_type="coder")
+    return p
+
+
+def test_record_block_real_session_limit_payload_with_string_error(isolated, monkeypatch):
+    _feed_stdin(monkeypatch, _real_payload(
+        "You've hit your session limit · resets 6:30am (Europe/Stockholm)"))
+    assert um.cmd_record_block(dry_run=False) == 0
+    st = json.loads(isolated["state_file"].read_text(encoding="utf-8"))
+    assert st["last_alerted_reset"] == "6:30am (Europe/Stockholm)"
+    assert st["blocked_until"] and st["source"] == "usage_monitor"
+    assert isolated["sent"] == ["6:30am (Europe/Stockholm)"]
+
+
+def test_record_block_one_model_limit_is_not_a_usage_block(isolated, monkeypatch):
+    """Three real StopFailures (09-27, 09-28, 09-29) were a subagent
+    reaching its Fable limit. The session went on; nothing to wait out."""
+    _feed_stdin(monkeypatch, _real_payload(
+        "You've reached your Fable limit. /model to switch models.", agent=True, details=_API_BODY))
+    assert um.cmd_record_block(dry_run=False) == 0
+    assert not isolated["state_file"].exists()
+    assert isolated["sent"] == []
+
+
+def test_record_block_still_reads_a_dict_error(isolated, monkeypatch):
+    _feed_stdin(monkeypatch, {"error": {"type": "rate_limit",
+                                        "message": "limit hit - resets 7:10pm (Europe/Stockholm)"}})
+    assert um.cmd_record_block(dry_run=False) == 0
+    st = json.loads(isolated["state_file"].read_text(encoding="utf-8"))
+    assert st["last_alerted_reset"].startswith("7:10pm")
+
+
+def test_record_block_string_error_without_text_defaults_to_5h(isolated, monkeypatch):
+    _feed_stdin(monkeypatch, {"hook_event_name": "StopFailure", "error": "rate_limit",
+                              "error_details": _API_BODY})
+    assert um.cmd_record_block(dry_run=False) == 0
+    assert json.loads(isolated["state_file"].read_text(encoding="utf-8")).get("blocked_until")
+
+
+# --- banner fallback ----------------------------------------------------------
+
+def _clock(dt: datetime) -> str:
+    h = dt.hour % 12 or 12
+    return f"{h}:{dt.minute:02d}{'am' if dt.hour < 12 else 'pm'} (Europe/Stockholm)"
+
+
+def _banner_line(ts: datetime, text: str) -> str:
+    # The entry CC writes for a limit (a real main session, 2026-09-29 01:37Z).
+    return json.dumps({
+        "type": "assistant", "isApiErrorMessage": True, "error": "rate_limit",
+        "timestamp": ts.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z"),
+        "message": {"model": "<synthetic>", "role": "assistant", "type": "message",
+                    "content": [{"type": "text", "text": text}]},
+    })
+
+
+@pytest.fixture
+def transcripts(tmp_path, monkeypatch):
+    d = tmp_path / "projects"
+    d.mkdir()
+    monkeypatch.setattr(um, "TRANSCRIPT_DIR", str(d))
+    return d
+
+
+def test_banner_scan_stamps_a_window_the_hook_missed(isolated, transcripts, monkeypatch):
+    now = datetime.now(timezone.utc).astimezone()
+    reset = _clock(now + timedelta(hours=2))
+    (transcripts / "s1.jsonl").write_text(
+        '{"type":"user"}\n' + _banner_line(now - timedelta(minutes=10),
+                                          f"You've hit your session limit · resets {reset}") + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(um, "newest_transcript_mtime", lambda: now - timedelta(minutes=10))
+    state = um.load_state()
+    assert um.scan_banner(state, dry_run=False) is True
+    st = json.loads(isolated["state_file"].read_text(encoding="utf-8"))
+    assert st["source"] == "banner" and st["last_alerted_reset"] == reset
+    assert isolated["sent"] == [reset]
+    assert um.resume_check(st, dry=False) == 0  # WAIT: the window is ahead
+    # The next tick sees the same banner and stays quiet.
+    assert um.scan_banner(um.load_state(), dry_run=False) is False
+    assert len(isolated["sent"]) == 1
+
+
+def test_banner_scan_ignores_a_block_the_hook_already_recorded(isolated, transcripts, monkeypatch):
+    now = datetime.now(timezone.utc).astimezone()
+    reset = _clock(now + timedelta(hours=2))
+    (transcripts / "s1.jsonl").write_text(
+        _banner_line(now - timedelta(seconds=30), f"You've hit your session limit · resets {reset}") + "\n",
+        encoding="utf-8")
+    _feed_stdin(monkeypatch, _real_payload(f"You've hit your session limit · resets {reset}"))
+    um.cmd_record_block(dry_run=False)
+    assert um.scan_banner(um.load_state(), dry_run=False) is False
+    assert isolated["sent"] == [reset]
+
+
+def test_banner_scan_skips_passed_windows_and_one_model_limits(isolated, transcripts):
+    now = datetime.now(timezone.utc).astimezone()
+    (transcripts / "s1.jsonl").write_text(
+        _banner_line(now - timedelta(hours=3), f"You've hit your session limit · resets {_clock(now - timedelta(hours=1))}") + "\n"
+        + _banner_line(now - timedelta(minutes=5), "You've reached your Fable limit. /model to switch models.") + "\n",
+        encoding="utf-8")
+    assert um.scan_banner(um.load_state(), dry_run=False) is False
+    assert not isolated["state_file"].exists() and isolated["sent"] == []
+
+
+def test_resume_check_cli_runs_the_banner_scan(isolated, transcripts, monkeypatch, capsys):
+    now = datetime.now(timezone.utc).astimezone()
+    reset = _clock(now + timedelta(hours=1))
+    (transcripts / "s1.jsonl").write_text(
+        _banner_line(now - timedelta(minutes=2), f"You've hit your session limit · resets {reset}") + "\n",
+        encoding="utf-8")
+    monkeypatch.setattr(um.sys, "argv", ["usage_monitor.py", "--resume-check"])
+    assert um.main() == 0
+    assert capsys.readouterr().out.strip().startswith("WAIT")
+    assert isolated["sent"] == [reset]
+
+
 def test_resume_check_resumes_once_the_recorded_window_has_passed(isolated, monkeypatch):
     past = datetime.now(timezone.utc).astimezone() - timedelta(minutes=5)
     state = {

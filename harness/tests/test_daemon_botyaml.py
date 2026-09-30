@@ -9,6 +9,7 @@ switches the `backup` entry of BOT_MODULES, and `sync` dropping the
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -159,6 +160,77 @@ def test_sync_writes_bypass_disclaimer_and_workspace_trust_into_the_config_home(
     # the project settings never carry it (Claude Code ignores it there)
     proj = json.loads((root / "bots" / "epsilon" / ".claude" / "settings.json").read_text(encoding="utf-8"))
     assert "skipDangerousModePermissionPrompt" not in proj
+
+
+def test_sync_approves_the_harness_rule_imports_and_keeps_every_other_key(tmp_path):
+    """v0.8.5: CLAUDE.md imports @../../harness/rules/*.md from outside the bot
+    folder; Claude Code loads those only with hasClaudeMdExternalIncludesApproved
+    on the project record, and a background session never shows the prompt."""
+    root = _root_with_bot(tmp_path, "eta", "name: eta\n")
+    cfg_home = root / "bots" / "eta" / ".claude-eta"
+    cfg_home.mkdir(parents=True)
+    key = str(root / "bots" / "eta").replace("\\", "/")
+    before = {"userID": "u1", "oauthAccount": {"emailAddress": "a@b.c"},
+              "projects": {key: {"allowedTools": ["Bash(ls)"], "lastCost": 1.5}, "C:/elsewhere": {"hasTrustDialogAccepted": False}}}
+    (cfg_home / ".claude.json").write_text(json.dumps(before), encoding="utf-8")
+    r = _node(str(SYNC), "eta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    cj = json.loads((cfg_home / ".claude.json").read_text(encoding="utf-8"))
+    rec = cj["projects"][key]
+    assert rec["hasClaudeMdExternalIncludesApproved"] is True and rec["hasClaudeMdExternalIncludesWarningShown"] is True
+    assert rec["hasTrustDialogAccepted"] is True
+    assert rec["allowedTools"] == ["Bash(ls)"] and rec["lastCost"] == 1.5          # the record is merged
+    assert cj["userID"] == "u1" and cj["oauthAccount"] == before["oauthAccount"]
+    assert cj["projects"]["C:/elsewhere"] == {"hasTrustDialogAccepted": False}     # other projects untouched
+    assert not (cfg_home / ".claude.json.tmp").exists()                              # written via tmp + rename
+    # idempotent: a second sync leaves the file byte-identical
+    text = (cfg_home / ".claude.json").read_text(encoding="utf-8")
+    assert _node(str(SYNC), "eta", "--botcorp", str(root)).returncode == 0
+    assert (cfg_home / ".claude.json").read_text(encoding="utf-8") == text
+    # a file that does not parse is left alone, never replaced by just our keys
+    (cfg_home / ".claude.json").write_text('{"userID": "u1", "projects": {', encoding="utf-8")
+    r = _node(str(SYNC), "eta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    assert "skipped (not valid JSON" in r.stdout
+    assert (cfg_home / ".claude.json").read_text(encoding="utf-8") == '{"userID": "u1", "projects": {'
+
+
+def test_sync_puts_the_context_window_in_the_config_home_env(tmp_path):
+    """v0.8.5: a machine-wide CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000 +
+    CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50 reached the background worker although
+    the launch set the bot's own. A settings `env` entry is written into Claude
+    Code's process env over the inherited value, so sync puts the window there;
+    PCT 100 is ignored by Claude Code (it can only lower the threshold)."""
+    root = _root_with_bot(tmp_path, "theta", "name: theta\nmodel: claude-opus-5-5\nharness:\n  context_window: 25%\n")
+    cfg_home = root / "bots" / "theta" / ".claude-theta"
+    cfg_home.mkdir(parents=True)
+    (cfg_home / "settings.json").write_text(json.dumps({"theme": "dark", "env": {"OPERATOR_VAR": "1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "500000"}}), encoding="utf-8")
+    r = _node(str(SYNC), "theta", "--botcorp", str(root))
+    assert r.returncode == 0, r.stderr
+    us = json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+    assert us["env"] == {"OPERATOR_VAR": "1", "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "100"}
+    assert us["autoCompactWindow"] == 250000 and us["theme"] == "dark"
+    # 'auto': both entries go, the operator's own stays; an env left empty is dropped
+    (root / "bots" / "theta" / "bot.yaml").write_text("name: theta\nharness:\n  context_window: auto\n", encoding="utf-8")
+    assert _node(str(SYNC), "theta", "--botcorp", str(root)).returncode == 0
+    assert json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))["env"] == {"OPERATOR_VAR": "1"}
+    (cfg_home / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000"}}), encoding="utf-8")
+    assert _node(str(SYNC), "theta", "--botcorp", str(root)).returncode == 0
+    assert "env" not in json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+
+
+def test_sync_excludes_the_operators_user_claude_md(tmp_path):
+    """v0.8.5: Claude Code walks up from the bot folder and loads
+    <home>/.claude/CLAUDE.md (the operator's own user memory) as project memory;
+    the generated settings exclude it (claudeMdExcludes, absolute path)."""
+    root = _root_with_bot(tmp_path, "iota", "name: iota\n")
+    home = tmp_path / "fakehome"
+    home.mkdir()
+    r = subprocess.run(["node", str(SYNC), "iota", "--botcorp", str(root)], capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "USERPROFILE": str(home), "HOME": str(home)})
+    assert r.returncode == 0, r.stderr
+    proj = json.loads((root / "bots" / "iota" / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert proj["claudeMdExcludes"] == [str(home / ".claude" / "CLAUDE.md").replace("\\", "/")]
 
 
 def test_sync_does_not_add_the_disclaimer_key_for_a_default_permissions_bot(tmp_path):

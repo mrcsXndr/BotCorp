@@ -42,11 +42,12 @@ TIMELINE_PATH="$BOT_HOME/memory/sessions/$SESSION_ID/timeline.md"
 # --- Last-session context ----------------------------------------------------
 # Prefer the most recent non-stub timeline.md (distilled narrative), else the
 # tail of the most recent journal.md that has real entries, else omit.
-LAST_SESSION=$("$PY" - "$BOT_HOME" <<'PYEOF' 2>/dev/null || true
+LAST_SESSION=$("$PY" - "$BOT_HOME" "$SESSION_ID" <<'PYEOF' 2>/dev/null || true
 import os, sys
 from pathlib import Path
 
 bot_home = Path(sys.argv[1])
+current = sys.argv[2]
 sessions = bot_home / "memory" / "sessions"
 PLACEHOLDERS = ("_(none yet)_", "_(none recorded)_")
 
@@ -68,7 +69,7 @@ def timeline_payload(p):
     )
     if not has_content:
         return None
-    return body.strip()[:4000]
+    return body.strip()  # session_context.py keeps the newest decisions that fit
 
 def journal_payload(p):
     """Tail of a journal that has real `- [HH:MM:SS] ...` entries."""
@@ -105,18 +106,23 @@ def session_dirs_newest_first():
         return m
     return sorted(dirs, key=recency, reverse=True)
 
+# The newest session with content being THIS one (a resume or a compaction)
+# means its own journal and timeline blocks already carry it: print nothing
+# rather than inject the same timeline twice.
 for d in session_dirs_newest_first():
     tl = d / "timeline.md"
     if tl.is_file():
         pl = timeline_payload(tl)
         if pl:
-            print(f"(from {d.name}/timeline.md)\n{pl}")
+            if d.name != current:
+                print(f"(from {d.name}/timeline.md)\n{pl}")
             sys.exit(0)
     jr = d / "journal.md"
     if jr.is_file():
         pl = journal_payload(jr)
         if pl:
-            print(f"(recent journal entries — {d.name})\n{pl}")
+            if d.name != current:
+                print(f"(recent journal entries — {d.name})\n{pl}")
             sys.exit(0)
 
 # nothing usable -> empty (block omitted by the hook)
@@ -126,9 +132,8 @@ GIT_LOG=$(git log --oneline -5 2>/dev/null || echo "")
 
 JOURNAL_BODY=""
 if [ -f "$JOURNAL_PATH" ]; then
-  # Cap journal load at last ~20K chars (~5K tokens) so a long-running
-  # session's journal doesn't bloat startup context. Full journal is
-  # always available on disk if the Director needs to Read it.
+  # Read at most the last ~20K chars; session_context.py cuts it further to
+  # fit the injection budget. Full journal is always on disk to Read.
   JOURNAL_BODY=$(tail -c "${BOT_JOURNAL_HEAD_BYTES:-20000}" "$JOURNAL_PATH" 2>/dev/null || true)
 fi
 TIMELINE_BODY=""
@@ -318,49 +323,24 @@ if [ -z "${CLAUDE_CONFIG_DIR:-}" ]; then
   ISOLATION_WARNING="ISOLATION WARNING: CLAUDE_CONFIG_DIR is unset — this bot is running against the user's real ~/.claude config home."
 fi
 
-CONTEXT=""
-if [ -n "$ISOLATION_WARNING" ]; then
-  CONTEXT="$ISOLATION_WARNING"
-fi
-if [ -n "$LAST_SESSION" ]; then
-  CONTEXT="$CONTEXT\n\nLast session:\n$LAST_SESSION"
-fi
-if [ -n "$GIT_LOG" ]; then
-  CONTEXT="$CONTEXT\n\nRecent commits:\n$GIT_LOG"
-fi
-CONTEXT="$CONTEXT\n\n## v2 Context Channels\nSession ID: $SESSION_ID\nJournal: $JOURNAL_PATH\nTimeline: $TIMELINE_PATH"
-if [ -n "$BUDGET_HEADER" ]; then
-  CONTEXT="$CONTEXT\n\n### Memory budget (frozen snapshot at session start)\n$BUDGET_HEADER"
-fi
-CONTEXT="$CONTEXT\n\nCross-session recall: run \`python tools/v2/recall.py search \"<query>\"\` for zero-LLM FTS5 recall across ALL past session journals AND the auto-memory files (no need to re-read them). A memory hit prints its 1-hop \`[[link]]\` neighbours; \`recall.py neighbours <slug>\` walks one node in full."
-if [ -n "$JOURNAL_BODY" ]; then
-  CONTEXT="$CONTEXT\n\n### Director's Journal (working memory)\n$JOURNAL_BODY"
-fi
-if [ -n "$TIMELINE_BODY" ]; then
-  CONTEXT="$CONTEXT\n\n### Timeline (distilled narrative)\n$TIMELINE_BODY"
-fi
-if [ -n "$COMMITMENTS" ]; then
-  CONTEXT="$CONTEXT\n\n## Due commitments\n$COMMITMENTS"
-fi
-if [ -n "$TDL_OPEN" ]; then
-  CONTEXT="$CONTEXT\n\n## Open TDL (persistent backlog — memory/TDL.md; hand-maintained, edit it directly with Edit/Write)\n$TDL_OPEN"
-fi
 # One line, only with the review_board module on and a board recorded (review_board.py gates both).
 BOARD_LINE=""
 if [ -f "$BOT_HOME/.botcorp/review-board.json" ]; then
   BOARD_LINE=$("$PY" "$HARNESS/tools/v2/review_board.py" line 2>/dev/null || true)
 fi
-if [ -n "$BOARD_LINE" ]; then
-  CONTEXT="$CONTEXT\n\n$BOARD_LINE"
-fi
-if [ -n "$LESSONS_BLOCK" ]; then
-  CONTEXT="$CONTEXT\n\n## Harness lessons (index)\n$LESSONS_BLOCK"
-fi
 
-if [ -n "$CONTEXT" ]; then
-  ESCAPED=$(printf '%s' "$CONTEXT" | "$PY" -c "import sys,json; print(json.dumps(sys.stdin.read()))" 2>/dev/null || echo '""')
-  printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}\n' "$ESCAPED"
+# Claude Code saves an additionalContext over 10,000 chars to a file and injects
+# only a 2,000-char preview, so session_context.py assembles the block inside a
+# 9,500-char budget (priority: TDL headlines, timeline decisions, journal,
+# commitments, lessons). Fields go over stdin NUL-separated, in its FIELDS order.
+OUT=$(printf '%s\0' "$ISOLATION_WARNING" "$LAST_SESSION" "$GIT_LOG" "$SESSION_ID" "$JOURNAL_PATH" \
+        "$TIMELINE_PATH" "$BUDGET_HEADER" "$JOURNAL_BODY" "$TIMELINE_BODY" "$COMMITMENTS" \
+        "$TDL_OPEN" "$BOARD_LINE" "$LESSONS_BLOCK" \
+      | "$PY" "$HARNESS/tools/v2/session_context.py" "$BOT_HOME" "$HARNESS" 2>/dev/null || true)
+if [ -z "$OUT" ]; then
+  OUT='{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":""}}'
 fi
+printf '%s\n' "$OUT"
 
 # Stash session id for sibling hooks (UserPromptSubmit etc.)
 echo "$SESSION_ID" > "$BOT_HOME/.claude/.current_session_id" 2>/dev/null || true

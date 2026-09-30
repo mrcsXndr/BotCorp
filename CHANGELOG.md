@@ -3,7 +3,10 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
-## Unreleased
+## v0.8.5
+
+Bots start with their memory again, every backup is an account, and one
+status line everywhere.
 
 - **Every chain entry is an Account.** `botcorp accounts seed --link` registers
   each bot's own vault token as an account once (matched by fingerprint, so a
@@ -50,6 +53,66 @@ versions follow SemVer.
   Removed from both: session id, journal count, TG dot, harness version, cost.
   `status_footer.py --json` keeps its keys and adds `folder` and `effort`;
   `status.json` is written as before.
+- **Fixed: the session-start memory reaches the session again.** Claude Code
+  saves a hook's additionalContext over 10,000 chars to a file and injects
+  only a 2,000-char preview, so a long-running bot started without its
+  journal, timeline and TDL (one bot's block was 48 KB). The block is now
+  assembled by `tools/v2/session_context.py` inside 9,500 chars. Space goes
+  first to the TDL Open items, cut to their headlines when needed, then to
+  the newest timeline decisions, then the journal tail, the due commitments
+  and the lessons index. A cut section ends with one line naming the file
+  to Read. On a resume or compaction, the session's own timeline is no
+  longer injected a second time as "Last session". Sections are joined with
+  real newlines instead of a literal `\n`.
+- **Fixed: the harness rule imports load in a background session.** A bot's
+  CLAUDE.md imports `@../../harness/rules/*.md` from outside its folder, and
+  Claude Code loads such an import only once it is approved, a prompt a
+  background session never shows, so every import was silently skipped. sync
+  now sets `hasClaudeMdExternalIncludesApproved` (and `…WarningShown`) on the
+  bot's project record in the config home's `.claude.json`, merged into the
+  record like `hasTrustDialogAccepted`. A `.claude.json` that does not parse
+  is left as it is instead of being replaced by just those keys.
+- **Fixed: `harness.context_window` reaches the background session.** The
+  launch put the bot's window in the session env, but the background worker
+  carried the machine-wide User-scope values
+  (`CLAUDE_CODE_AUTO_COMPACT_WINDOW=1000000`,
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=50`), which outrank `autoCompactWindow`.
+  sync now also writes the window into the config home's settings `env`,
+  which Claude Code applies over an inherited value, together with
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100` (ignored, so the inherited 50 no
+  longer halves the window). `auto` removes both; other `env` keys are kept.
+- **Fixed: the operator's `~/.claude/CLAUDE.md` no longer loads into bots.**
+  Claude Code walks up from the bot folder and loaded it as project memory.
+  The generated `.claude/settings.json` now carries
+  `claudeMdExcludes: ["<home>/.claude/CLAUDE.md"]`.
+- **Fixed: a usage-limit hit is recorded again.** Claude Code's StopFailure
+  payload carries `error` as a string (`"rate_limit"`) and the banner in
+  `last_assistant_message`; `usage_monitor.py record-block` expected a dict
+  and crashed, so no alert, no `blocked_until` and no auto-resume. It now
+  reads either shape. A one-model limit ("You've reached your Fable limit.
+  /model to switch models.") is logged, not announced: the session carries
+  on. The daemon's `--resume-check` also scans the transcript for the limit
+  banner and records a block no hook recorded, with the same dedupe and
+  alert. The hook's `events.jsonl` row now keeps the error and the message.
+- **Fixed: a chat tab in a bypass bot's folder no longer asks for every
+  Bash call.** `botcorp chat` (and the cockpit's New chat) started plain
+  `claude` in an account config dir with no settings, so the tab ran in
+  Manual mode. A tab whose folder is a bot with `permissions: bypass` now
+  passes `--dangerously-skip-permissions` and merges
+  `skipDangerousModePermissionPrompt` and `permissions.defaultMode:
+  bypassPermissions` into the account's `settings.json`. Generic tabs and
+  other folders pass `--permission-mode manual` and show `[manual]` in the
+  tab title.
+- **New: doctor checks a bot's memory health.** Four rows per bot, each a
+  WARN when the memory loop fails silently: `session-start context` (the
+  newest SessionStart block in the session's transcript was over 9,500
+  chars or saved to a file as "Output too large"), `session timeline` (more
+  than 2 newest timelines in a row are `1-structural`, not summarised),
+  `claude.md imports approved` (`hasClaudeMdExternalIncludesApproved` is not
+  true) and `session context window` (the window the session's own
+  SessionStart env recorded differs from bot.yaml). The session-env hook now
+  records `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` for that last check.
 
 ## v0.8.4
 

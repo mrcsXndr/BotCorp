@@ -141,6 +141,66 @@ def test_chat_dry_run_builds_a_wt_tab_with_intab_and_never_prints_the_token(tmp_
     assert r.returncode == 2
 
 
+def _bot(bots: Path, name: str, permissions: str) -> Path:
+    home = bots / name
+    home.mkdir(parents=True)
+    (home / "bot.yaml").write_text(f"name: {name}\npermissions: {permissions}\n", encoding="utf-8")
+    return home
+
+
+def test_chat_tab_in_a_bypass_bot_folder_opens_in_bypass(tmp_path, monkeypatch):
+    """Operator decision D5: a tab in a bypass bot's folder is bypass, like the
+    bot's session; generic tabs and other folders stay Manual and say so."""
+    bots = tmp_path / "bots"
+    monkeypatch.setenv("BOTCORP_BOTS_DIR", str(bots))
+    byp, dflt = _bot(bots, "bypbot", "bypass"), _bot(bots, "askbot", "default")
+    assert _cli("accounts", "add", "demo", stdin=FAKE_TOKEN + "\n").returncode == 0
+
+    r = _cli("chat", "--account", "demo", "--cwd", str(byp), "--dry-run")
+    assert r.returncode == 0, r.stderr
+    assert "-Bypass" in r.stdout and "--dangerously-skip-permissions" in r.stdout
+    assert "[bypass]" in r.stdout and "--permission-mode" not in r.stdout
+
+    for args in (("--generic",), ("--cwd", str(dflt)), ("--cwd", str(tmp_path))):
+        r = _cli("chat", "--account", "demo", *args, "--dry-run")
+        assert r.returncode == 0, r.stderr
+        assert "-Bypass" not in r.stdout and "--dangerously-skip-permissions" not in r.stdout
+        assert "--permission-mode manual" in r.stdout and "[manual]" in r.stdout
+
+    r = _pwsh("chat.ps1", "-Account", "demo", "-Generic", "-Bypass", "-DryRun")
+    assert r.returncode == 1 and "stays Manual" in r.stderr
+
+
+def _stub_args(tmp_path: Path) -> str:
+    return (tmp_path / "args.txt").read_text().strip()
+
+
+def test_chat_in_tab_passes_the_flag_and_writes_the_bypass_settings(tmp_path, monkeypatch):
+    stub = tmp_path / "claude-stub.cmd"
+    stub.write_text('@echo off\r\necho %*> "%~dp0args.txt"\r\n', encoding="utf-8")
+    monkeypatch.setenv("BOTCORP_CLAUDE_EXE", str(stub))
+    bot = _bot(tmp_path / "bots", "bypbot", "bypass")
+    assert _cli("accounts", "add", "demo", stdin=FAKE_TOKEN + "\n").returncode == 0
+    acc = Path(os.environ["BOTCORP_HOME"]) / "accounts" / "demo" / "claude"
+    acc.mkdir(parents=True)
+    (acc / "settings.json").write_text(json.dumps({"theme": "dark", "permissions": {"allow": ["Read"]}}), encoding="utf-8")
+
+    r = _pwsh("chat.ps1", "-Account", "demo", "-Cwd", str(bot), "-Bypass", "-InTab")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert _stub_args(tmp_path) == "--dangerously-skip-permissions"
+    s = json.loads((acc / "settings.json").read_text(encoding="utf-8"))
+    assert s["skipDangerousModePermissionPrompt"] is True
+    assert s["permissions"] == {"allow": ["Read"], "defaultMode": "bypassPermissions"}
+    assert s["theme"] == "dark"
+    assert FAKE_TOKEN not in r.stdout
+
+    # The same account, generic: Manual, whatever the shared settings say.
+    r = _pwsh("chat.ps1", "-Account", "demo", "-Generic", "-InTab")
+    assert r.returncode == 0, r.stderr + r.stdout
+    assert _stub_args(tmp_path) == "--permission-mode manual"
+    assert "permissions manual" in r.stdout
+
+
 def test_attach_without_bg_id_is_a_message_not_a_launch():
     r = _pwsh("attach.ps1", "-Bot", "demo-bot", "-DryRun")
     assert r.returncode == 0, r.stderr

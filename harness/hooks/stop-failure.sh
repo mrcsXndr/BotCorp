@@ -29,8 +29,9 @@ except Exception:
     d = {}
 line = json.dumps({
     'ts': ts, 'event': 'stop_failure',
-    'error_code': d.get('error_code') or d.get('errorCode') or '',
-    'message': str(d.get('message') or '')[:200],
+    'error_code': d.get('error_code') or d.get('errorCode') or (d.get('error') if isinstance(d.get('error'), str) else '') or '',
+    'message': str(d.get('message') or d.get('last_assistant_message') or '')[:200],
+    'agent_id': d.get('agent_id') or '',
 })
 try:
     with open(path, 'a', encoding='utf-8') as f:

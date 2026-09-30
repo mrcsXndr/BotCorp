@@ -7,7 +7,8 @@
 //   bots/<name>/.claude/settings.json                 GENERATED (header says so): env,
 //                                                     permissions, model, effortLevel,
 //                                                     statusLine, autoMemoryDirectory,
-//                                                     disabledSkills, autoContinueAtUsageLimit.
+//                                                     disabledSkills, autoContinueAtUsageLimit,
+//                                                     claudeMdExcludes (the operator's ~/.claude/CLAUDE.md).
 //                                                     harness.disable: skill:<x> joins disabledSkills,
 //                                                     agent:<x> and a tools: entry with enabled: false
 //                                                     become permissions.deny rules.
@@ -17,9 +18,12 @@
 //                                                     when bot.yaml permissions: bypass (a --bg launch
 //                                                     refuses until the disclaimer is accepted; only
 //                                                     USER settings are honoured for it);
-//                                                     autoCompactWindow from harness.context_window.
+//                                                     autoCompactWindow from harness.context_window,
+//                                                     and the same window in env (see below).
 //   bots/<name>/.claude-<name>/.claude.json          MERGED: projects[<bot home>].hasTrustDialogAccepted
-//                                                     (a --bg launch refuses an untrusted workspace).
+//                                                     (a --bg launch refuses an untrusted workspace)
+//                                                     and hasClaudeMdExternalIncludesApproved (the
+//                                                     harness rule imports load only when approved).
 //   bots/<name>/.claude-<name>/channels/telegram/access.json
 //                                                     dmPolicy + allowFrom from bot.yaml,
 //                                                     MERGED: never drops a pending entry
@@ -51,6 +55,7 @@
 // and a core update must not be able to clobber them.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBotYaml, validate, resolveContextWindow, resolveModel } from './botyaml.mjs';
@@ -130,6 +135,10 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     // A background session (harness.session: bg) must run IN the bot folder:
     // an isolated worktree would detach it from memory/ and the config home.
     worktree: { bgIsolation: 'none' },
+    // Claude Code walks up from the bot folder and loads <home>/.claude/CLAUDE.md
+    // as PROJECT memory: the operator's own user instructions, which a bot with
+    // its own config home must not get.
+    claudeMdExcludes: [fwd(path.join(os.homedir(), '.claude', 'CLAUDE.md'))],
   };
   // harness.disable: skill:<x> is hidden like a skill left out of harness.skills;
   // agent:<x> gets a deny rule, so the session cannot start that subagent.
@@ -162,13 +171,28 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
 // project .claude/settings.json). Written only when bot.yaml already opts
 // the bot into bypass; an existing key is left alone otherwise.
 // autoCompactWindow = harness.context_window resolved to tokens, for a session
-// the launcher did not start (the launcher also sets the env var, which Claude
-// Code ranks above this setting); 'auto' leaves the key as it is.
+// the launcher did not start; 'auto' leaves the key as it is.
+// The same window also goes in this file's `env`, because a machine-wide
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW outranks autoCompactWindow and the launch
+// env did not reach the background worker (it carried the User-scope values).
+// Claude Code writes a settings `env` entry into its own process env over the
+// inherited value, so this wins inside the worker. The PCT override is set to
+// 100, which Claude Code ignores (it can only lower the threshold), because a
+// settings file cannot unset the inherited one. 'auto' removes both entries.
 export function mergeConfigHomeSettings(existing, cfg) {
   const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
   if (cfg.permissions === 'bypass') cur.skipDangerousModePermissionPrompt = true;
   const cw = resolveContextWindow(cfg);
   if (cw.tokens) cur.autoCompactWindow = cw.tokens;
+  const env = cur.env && typeof cur.env === 'object' && !Array.isArray(cur.env) ? { ...cur.env } : {};
+  if (cw.tokens) {
+    env.CLAUDE_CODE_AUTO_COMPACT_WINDOW = String(cw.tokens);
+    env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE = '100';
+  } else {
+    delete env.CLAUDE_CODE_AUTO_COMPACT_WINDOW;
+    delete env.CLAUDE_AUTOCOMPACT_PCT_OVERRIDE;
+  }
+  if (Object.keys(env).length) cur.env = env; else delete cur.env;
   return cur;
 }
 
@@ -177,11 +201,16 @@ export function mergeConfigHomeSettings(existing, cfg) {
 // bot's own folder is trusted by definition - BotCorp made it - so the
 // project record gets hasTrustDialogAccepted, keyed the way Claude Code keys
 // it (absolute path, forward slashes); everything else in the file is kept.
+// It also gets the external-include approval: CLAUDE.md imports the harness
+// rules from outside the bot folder (@../../harness/rules/*.md), and Claude
+// Code loads such an import only once that is approved - a background session
+// never shows the prompt, so without the flag every import is silently skipped.
 export function mergeConfigHomeClaudeJson(existing, botHome) {
   const cur = existing && typeof existing === 'object' && !Array.isArray(existing) ? { ...existing } : {};
   const projects = cur.projects && typeof cur.projects === 'object' ? { ...cur.projects } : {};
   const key = fwd(path.resolve(botHome));
-  projects[key] = { ...(projects[key] && typeof projects[key] === 'object' ? projects[key] : {}), hasTrustDialogAccepted: true };
+  projects[key] = { ...(projects[key] && typeof projects[key] === 'object' ? projects[key] : {}), hasTrustDialogAccepted: true,
+    hasClaudeMdExternalIncludesApproved: true, hasClaudeMdExternalIncludesWarningShown: true };
   cur.projects = projects;
   return cur;
 }
@@ -363,7 +392,12 @@ export function sync(botName, { botcorpRoot, dryRun = false, nodeExe = process.e
   const userSettingsPath = path.join(configDir, 'settings.json');
   report['.claude-<name>/settings.json'] = writeIfChanged(userSettingsPath, JSON.stringify(mergeConfigHomeSettings(readJson(userSettingsPath), cfg), null, 2) + '\n', dryRun);
   const claudeJsonPath = path.join(configDir, '.claude.json');
-  report['.claude-<name>/.claude.json'] = writeIfChanged(claudeJsonPath, JSON.stringify(mergeConfigHomeClaudeJson(readJson(claudeJsonPath), botHome), null, 2) + '\n', dryRun);
+  // Claude Code's own state (account, every project record) lives in this file:
+  // one it cannot parse is left alone rather than replaced by just our keys.
+  const claudeJson = readJson(claudeJsonPath);
+  report['.claude-<name>/.claude.json'] = claudeJson === null && fs.existsSync(claudeJsonPath)
+    ? 'skipped (not valid JSON; left as it is)'
+    : writeIfChanged(claudeJsonPath, JSON.stringify(mergeConfigHomeClaudeJson(claudeJson, botHome), null, 2) + '\n', dryRun);
 
   // 2. access.json (merge)
   if (cfg.harness.modules.telegram) {
