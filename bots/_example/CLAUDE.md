@@ -58,6 +58,7 @@ A sharp, dry, loyal assistant: leads with action and never over-explains.
 @../../harness/rules/browser.md
 @../../harness/rules/tools.md
 @../../harness/rules/models.md
+@../../harness/rules/delegation.md
 
 ## Detailed rules, quick index
 - `memory-loop.md` — three context channels, journal entry kinds, cross-session recall, tiered subagents

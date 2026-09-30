@@ -18,7 +18,7 @@ usual order:
   4. the due commitments;
   5. the lessons index, which is either shown in full or replaced by a pointer.
 The small fixed lines (session id and paths, commits, memory budget, recall
-hint, review board) always stay. A section that was cut ends with one line
+hint, the delegation line, review board) always stay. A section that was cut ends with one line
 naming the file to Read for the rest.
 
 Usage: session_context.py <bot_home> <harness>, with the hook's values on
@@ -130,6 +130,9 @@ def main() -> int:
     recall = ("Cross-session recall: run `python tools/v2/recall.py search \"<query>\"` for zero-LLM FTS5 recall "
               "across ALL past session journals AND the auto-memory files (no need to re-read them). A memory hit "
               "prints its 1-hop `[[link]]` neighbours; `recall.py neighbours <slug>` walks one node in full.")
+    delegate = ("Delegate by default (harness/rules/delegation.md): work touching >1 file, >3 searches or a "
+                "multi-step build/research goes to subagents, independent ones fanned out in ONE message; relay "
+                "only their conclusions. The main thread orchestrates and keeps its context.")
     channels = (f"## v2 Context Channels\nSession ID: {f['session_id']}\n"
                 f"Journal: {f['journal_path']}\nTimeline: {f['timeline_path']}")
     sections = [
@@ -139,6 +142,7 @@ def main() -> int:
         ["channels", "", channels, None, ""],
         ["budget", "### Memory budget (frozen snapshot at session start)\n", f["budget_header"], None, ""],
         ["recall", "", recall, None, ""],
+        ["delegate", "", delegate, None, ""],
         ["journal", "### Director's Journal (working memory)\n", f["journal"], tail_lines, f"Read {f['journal_path']}"],
         ["timeline", "### Timeline (distilled narrative)\n", f["timeline"], fit_timeline, f"Read {f['timeline_path']}"],
         ["commitments", "## Due commitments\n", f["commitments"], head_lines, "run `python tools/v2/commitments.py surface`"],
