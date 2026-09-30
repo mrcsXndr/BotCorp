@@ -1644,6 +1644,12 @@ function Test-SessionBusy {
     # Is this bot's session ACTIVELY working? Returns $true = busy (defer),
     # $false = idle (safe). CONSERVATIVE: any error / no transcript -> BUSY.
     #
+    # 0. Claude Code's job record (bg: <config>/jobs/<bg_id>/state.json) says
+    #    `tempo: active`, written within 30 min => BUSY, ahead of the marker:
+    #    a turn that started after the breakpoint was declared, or one tool call
+    #    running longer than the quiet window, is live work. (`state: working`
+    #    alone is not: an idle session with monitors in flight keeps it.) An
+    #    older record is not trusted over the transcript.
     # 1. Breakpoint marker: <BotHome>/.claude/.botcorp_breakpoint younger than
     #    BOT_BREAKPOINT_TTL_MIN (30) => IDLE. The bot declares a clean
     #    breakpoint itself as the LAST action of a turn with nothing in flight,
@@ -1662,6 +1668,17 @@ function Test-SessionBusy {
     param([Parameter(Mandatory)][string]$Bot, [int]$QuietMin = 5, [switch]$LimitBlocked)
     if ($LimitBlocked) { return $false }
     $P = Get-BotPaths -Bot $Bot
+    try {
+        $bs = Read-BotState -Bot $Bot
+        $bgId = ''; if ($bs -and ($bs.PSObject.Properties.Name -contains 'bg_id')) { $bgId = "$($bs.bg_id)" }
+        if ($bgId -match '^[0-9a-f]{6,12}$') {
+            $jf = Join-Path (Join-Path (Join-Path $P.ConfigDir 'jobs') $bgId) 'state.json'
+            if ((Test-Path $jf) -and (((Get-Date) - (Get-Item $jf).LastWriteTime).TotalMinutes -lt 30)) {
+                $job = Read-JsonFile -Path $jf
+                if ($job -and "$($job.tempo)" -eq 'active') { return $true }
+            }
+        }
+    } catch {}
     try {
         if (Test-Path $P.Breakpoint) {
             $ttl = 30; try { if ($env:BOT_BREAKPOINT_TTL_MIN) { $ttl = [double]$env:BOT_BREAKPOINT_TTL_MIN } } catch {}
