@@ -22,7 +22,7 @@ ASSEMBLY = Path(__file__).resolve().parents[2]
 needs_win = pytest.mark.skipif(sys.platform != "win32" or shutil.which("pwsh") is None, reason="Windows + pwsh")
 
 PROBE = r"""
-param([string]$Tick, [string]$Root, [string]$Wanted, [string]$Unsure, [string]$Alive)
+param([string]$Tick, [string]$Root, [string]$Wanted, [string]$Unsure, [string]$Alive, [string]$Late = '')
 $ErrorActionPreference = 'Continue'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Tick, [ref]$null, [ref]$null)
 $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Invoke-OtelSinkKeepalive' }, $true)
@@ -36,14 +36,21 @@ $BotCorp = $Root
 function Write-DaemonLog { param($Message, $Bot, [switch]$Quiet) }
 function Read-JsonFile { param($Path) try { Get-Content -Raw -LiteralPath $Path -ErrorAction Stop | ConvertFrom-Json } catch { $null } }
 function Test-ProcAlive { param($P, $Names) $Alive -eq '1' }
-function Start-Hidden { param($Exe, $Arguments, $WorkingDirectory) $script:acts += 'start'; 4242 }
+function Start-Hidden {
+    param($Exe, $Arguments, $WorkingDirectory)
+    $script:acts += 'start'
+    # the real sink writes otel.json a moment after it is spawned
+    if ($Late -eq '1') { [void](Start-Job -ScriptBlock { param($f) Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath $f -Value '{"pid":4242,"port":4318}' } -ArgumentList (Join-Path $StateDir 'otel.json')) }
+    4242
+}
 function Stop-BotProcessTree { param($ProcId, $Bot, $Why) $script:acts += "stop $ProcId"; $true }
 Invoke-OtelSinkKeepalive -Wanted ($Wanted -eq '1') -Unsure ($Unsure -eq '1')
+if ($Late -eq '1') { (Get-Content -Raw -LiteralPath (Join-Path $StateDir 'otel.json') | ConvertFrom-Json).pid; exit 0 }
 ConvertTo-Json -Compress -InputObject @($script:acts)
 """
 
 
-def _acts(tmp: Path, wanted: str, unsure: str, alive: str):
+def _acts(tmp: Path, wanted: str, unsure: str, alive: str, late: str = ""):
     (tmp / "daemon").mkdir(exist_ok=True)
     (tmp / "daemon" / "otel-sink.mjs").write_text("// stub\n", encoding="utf-8")
     (tmp / "state").mkdir(exist_ok=True)
@@ -52,7 +59,7 @@ def _acts(tmp: Path, wanted: str, unsure: str, alive: str):
     ps.write_text(PROBE, encoding="utf-8")
     r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ps),
                         "-Tick", str(ASSEMBLY / "daemon" / "tick.ps1"), "-Root", str(tmp),
-                        "-Wanted", wanted, "-Unsure", unsure, "-Alive", alive], capture_output=True, text=True, timeout=120)
+                        "-Wanted", wanted, "-Unsure", unsure, "-Alive", alive, "-Late", late], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr + r.stdout
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -67,6 +74,13 @@ def _acts(tmp: Path, wanted: str, unsure: str, alive: str):
 ])
 def test_the_sink_follows_the_telemetry_module(tmp_path, wanted, unsure, alive, expect):
     assert _acts(tmp_path, wanted, unsure, alive) == expect
+
+
+@needs_win
+def test_a_started_sink_is_waited_for_until_its_otel_json_exists(tmp_path):
+    # QA pack D 6: a bot launched later in the tick reads otel.json; the keepalive
+    # must not return before the new sink has written it.
+    assert _acts(tmp_path, "1", "0", "0", late="1") == 4242
 
 
 def test_the_tick_decides_from_every_bot_yaml_after_the_apply():

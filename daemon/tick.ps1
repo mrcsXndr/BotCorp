@@ -198,6 +198,13 @@ function Invoke-OtelSinkKeepalive {
         if (-not $nodeExe) { return }
         $newPid = Start-Hidden -Exe $nodeExe -Arguments @($sink) -WorkingDirectory $BotCorp
         Write-DaemonLog "ACTION=OTEL-START pid=$newPid"
+        # The sink writes otel.json itself once it listens; a bot launched later in
+        # this tick reads it (launch.ps1), so wait (<= 5 s) for the NEW pid's file.
+        for ($i = 0; $newPid -gt 0 -and $i -lt 25; $i++) {
+            $n = Read-JsonFile -Path (Join-Path $StateDir 'otel.json')
+            try { if ($n -and [int]$n.pid -eq $newPid -and $n.port) { break } } catch {}
+            Start-Sleep -Milliseconds 200
+        }
     } catch { Write-DaemonLog "otel-sink: swallowed exception (fail-open): $($_.Exception.Message)" }
 }
 
