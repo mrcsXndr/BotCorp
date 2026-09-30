@@ -555,6 +555,30 @@ function Get-AccountRoll {
     return ''
 }
 
+function Get-HarnessRoll {
+    # A live bot whose session was launched on another harness than the applied
+    # release (<rt>/state/harness.json `tag` vs the `harness_version`
+    # session_start.py records in state/<bot>.json) is restarted onto it through
+    # the normal idle-gated restart, asked again every tick, so a bot that was
+    # busy on the apply tick restarts at its first idle one. Once per applied
+    # tag (`harness_roll_to`, written with the restart): a launch that still
+    # records another version cannot loop. No applied release or no recorded
+    # version -> no restart. -> @{ Why = restart reason or ''; To = the applied
+    # version without its v, or '' }
+    param([string]$Bot, $State)
+    $res = @{ Why = ''; To = '' }
+    try {
+        $h = Read-JsonFile -Path (Join-Path $StateDir 'harness.json')
+        if ($h -and $h.tag) { $res.To = "$($h.tag)".Trim() -replace '^v', '' }
+        $from = ''; try { if ($State -and ($State.PSObject.Properties.Name -contains 'harness_version') -and $State.harness_version) { $from = "$($State.harness_version)".Trim() -replace '^v', '' } } catch {}
+        if (-not $res.To -or -not $from -or $res.To -eq $from) { return $res }
+        $done = ''; try { if ($State.PSObject.Properties.Name -contains 'harness_roll_to') { $done = "$($State.harness_roll_to)" -replace '^v', '' } } catch {}
+        if ($done -eq $res.To) { return $res }
+        $res.Why = "restart onto v$($res.To) (launched on v$from)"
+    } catch { Write-DaemonLog "harness roll: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
+    return $res
+}
+
 function Invoke-AccountFailover {
     # The account failover engine (botcorp accounts failover <bot> --json,
     # core/failover.mjs) for a bot that has backup_accounts, or whose session
@@ -977,9 +1001,15 @@ function Invoke-BotTick {
         Invoke-RegistryScan -Bot $Bot -Cfg $cfg -AsDryRun:$DryRun
     }
     if ($resumeWanted -and $action -eq 'none') { $action = $(if ($alive -and $claudePid -gt 0) { 'restart' } else { 'cold-start' }); $why = 'usage-limit window passed' }
-    # A harness release applied this tick: every live bot restarts onto the new
-    # code (idle-gated below like any restart; a dead bot cold-starts onto it).
-    if ($script:RestartAllWhy -and $action -eq 'none' -and $alive) { $action = 'restart'; $why = $script:RestartAllWhy }
+    # A harness release applied this tick, or earlier while this session was
+    # busy (Get-HarnessRoll): a live bot restarts onto the new code (idle-gated
+    # below like any restart; a dead bot cold-starts onto it).
+    $harnessRoll = $null
+    if ($action -eq 'none' -and $alive) {
+        $hr = Get-HarnessRoll -Bot $Bot -State $st
+        $hrWhy = $(if ($hr.Why) { $hr.Why } else { $script:RestartAllWhy })
+        if ($hrWhy) { $action = 'restart'; $why = $hrWhy; $harnessRoll = $hr.To }
+    }
     Invoke-Automations -Bot $Bot -AsDryRun:$DryRun
     Invoke-InboxKick -Bot $Bot -Paths $P -AsDryRun:$DryRun
 
@@ -1022,6 +1052,7 @@ function Invoke-BotTick {
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session $(if ($limited) { 'usage-limited' } else { 'idle' }) -> $rel)" -Bot $Bot
         if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
         if ($acctRoll) { Write-BotState -Bot $Bot -Updates @{ account_roll_at = (Get-Date).ToString('o') } }
+        if ($harnessRoll) { Write-BotState -Bot $Bot -Updates @{ harness_roll_to = $harnessRoll } }
         $fo = $script:Failover[$Bot]
         if ($fo -and ($switch -or ($acctRoll -and "$($fo.decision.action)" -eq 'failback'))) {
             $fromRow = @($fo.chain | Where-Object { "$($_.id)" -eq "$($fo.active)" } | Select-Object -First 1)

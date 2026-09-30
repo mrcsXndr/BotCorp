@@ -805,7 +805,10 @@ that fails stops the apply), `state/harness.json`, `node
 daemon/sync.mjs <bot>` for every bot, status `applied`, the cockpit restarted
 onto the new code and `/healthz` polled; then every live bot restarts through
 the normal (idle-gated) restart path, resuming its conversation on the new
-harness. Fail (smoke, or reason `migration failed`) -> `git checkout --detach
+harness. A bot that was busy then is asked again every tick: while the
+`harness_version` its session start recorded in `state/<bot>.json` differs
+from the `harness.json` tag, it restarts at its first idle tick ("restart onto
+vX (launched on vY)"), once per applied tag (`harness_roll_to`). Fail (smoke, or reason `migration failed`) -> `git checkout --detach
 <from>`, status `failed` with the smoke or migration tail, `harness.json`
 untouched, a Ready card `HARNESS UPDATE FAILED <tag>` for every bot whose
 `board` module is on, else a `HUMAN:` line in `<BotHome>/memory/metrics/alerts.log`.
