@@ -64,9 +64,12 @@ def _node(expr: str) -> object:
 
 def test_record_is_last4_only_and_merge_keeps_the_newest():
     rec = session_env.build_record({"CLAUDE_CODE_OAUTH_TOKEN": OAUTH, "TELEGRAM_BOT_TOKEN": TG, "BOT_LAUNCHER_PID": "4242", "BOT_NAME": "alpha"}, "s1", "2026-09-25T00:00:01Z")
-    assert rec == {"session_id": "s1", "at": "2026-09-25T00:00:01Z", "oauth_last4": "Q7w3", "telegram_last4": "XyZ9", "launcher_pid": 4242, "bot": "alpha"}
+    assert rec == {"session_id": "s1", "at": "2026-09-25T00:00:01Z", "oauth_last4": "Q7w3", "telegram_last4": "XyZ9", "launcher_pid": 4242, "bot": "alpha",
+                   "auto_compact_window": None, "autocompact_pct": None}
     bare = session_env.build_record({"BOT_LAUNCHER_PID": "not-a-pid"}, "s2", "2026-09-25T00:00:02Z")
     assert bare["oauth_last4"] is None and bare["telegram_last4"] is None and bare["launcher_pid"] is None
+    win = session_env.build_record({"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "1000000", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"}, "s3", "2026-09-25T00:00:03Z")
+    assert (win["auto_compact_window"], win["autocompact_pct"]) == ("1000000", "50")
     merged = {}
     for i in range(5):
         merged = session_env.merge(merged, session_env.build_record({}, f"s{i}", f"2026-09-25T00:00:0{i}Z"), keep=3)

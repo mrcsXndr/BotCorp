@@ -46,7 +46,7 @@ const {
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
   CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, writeJsonAtomic, writeTextAtomic,
-  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
+  pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh, findOnPath,
   stdinIsPiped, readStdinAll, promptHidden, promptVisible,
   ptyJsonPath, ptyLive, ptyPublic,
@@ -3068,6 +3068,9 @@ async function cmdDoctor({ flags }) {
         const us = readJson(path.join(configDir(bot), 'settings.json'));
         const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, machinePct: machineCompactPct, running: s.running, launch });
         add(cw.level, `${bot}: context window`, cw.detail.replace(/<bot>/g, bot), 'bots');
+        // memory health: startup context size, timeline distill, import approval, the worker's real window
+        const rec = sessionLaunchOf(bot, botState(bot)).rec;
+        for (const r of memoryHealthRows({ home: botHome(bot), config: configDir(bot), sessionId: (rawState && rawState.session_id) || '', resolved: resolveContextWindow(cfg), running: s.running, rec })) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
       }
       {
         const v = harnessToolsVerdict(bot);

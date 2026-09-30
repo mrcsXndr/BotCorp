@@ -55,6 +55,16 @@ versions follow SemVer.
   bypassPermissions` into the account's `settings.json`. Generic tabs and
   other folders pass `--permission-mode manual` and show `[manual]` in the
   tab title.
+- **New: doctor checks a bot's memory health.** Four rows per bot, each a
+  WARN when the memory loop fails silently: `session-start context` (the
+  newest SessionStart block in the session's transcript was over 9,500
+  chars or saved to a file as "Output too large"), `session timeline` (more
+  than 2 newest timelines in a row are `1-structural`, not summarised),
+  `claude.md imports approved` (`hasClaudeMdExternalIncludesApproved` is not
+  true) and `session context window` (the window the session's own
+  SessionStart env recorded differs from bot.yaml). The session-env hook now
+  records `CLAUDE_CODE_AUTO_COMPACT_WINDOW` and
+  `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` for that last check.
 
 ## v0.8.4
 

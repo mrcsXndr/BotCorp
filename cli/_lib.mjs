@@ -366,6 +366,112 @@ export function contextWindowVerdict({ resolved, settingsValue, machineEnv = '',
   return { level: 'PASS', detail: shape };
 }
 
+// ---- doctor memory health (R18): the bot's memory can fail silently -------------
+// Claude Code saves a hook's additionalContext over 10,000 chars to a file and
+// injects a 2,000-char preview; harness/tools/v2/session_context.py keeps the
+// SessionStart block inside this budget.
+export const SESSION_START_BUDGET = 9500;
+
+// The newest SessionStart additionalContext row in a transcript's text:
+// { at, content } (content joined, as injected), or null.
+export function lastSessionStartContext(text) {
+  let pos = text.length;
+  while (pos >= 0) {
+    const i = text.lastIndexOf('hook_additional_context', pos);
+    if (i < 0) return null;
+    const start = text.lastIndexOf('\n', i) + 1;
+    const nl = text.indexOf('\n', i);
+    pos = start - 2;
+    try {
+      const d = JSON.parse(text.slice(start, nl < 0 ? text.length : nl));
+      const a = d && d.attachment;
+      if (a && a.type === 'hook_additional_context' && a.hookEvent === 'SessionStart') {
+        return { at: d.timestamp || '', content: Array.isArray(a.content) ? a.content.map(String).join('\n') : String(a.content ?? '') };
+      }
+    } catch {}
+  }
+  return null;
+}
+
+export function sessionStartVerdict(row, transcript = 'the newest transcript') {
+  if (!row) return { level: 'INFO', detail: `no SessionStart context in ${transcript}` };
+  const big = /Output too large \(([^)]+)\)/.exec(row.content);
+  if (big) return { level: 'WARN', detail: `the ${row.at} session start was ${big[1]}: Claude Code saved it to a file and injected a 2 KB preview, so the journal, timeline and TDL did not reach the session (budget ${SESSION_START_BUDGET} chars; ${transcript})` };
+  if (row.content.length > SESSION_START_BUDGET) return { level: 'WARN', detail: `the ${row.at} session start was ${row.content.length} chars, over the ${SESSION_START_BUDGET}-char budget (Claude Code cuts at 10,000; ${transcript})` };
+  return { level: 'PASS', detail: `${row.content.length} chars at ${row.at} (budget ${SESSION_START_BUDGET})` };
+}
+
+// rows: [{ session, built_at, phase }] from memory/sessions/<id>/timeline.md.
+// A timeline stays `1-structural` when the distill step could not run.
+export function timelineVerdict(rows, maxStructural = 2) {
+  if (!rows.length) return { level: 'INFO', detail: 'no session timeline yet' };
+  const sorted = [...rows].sort((a, b) => (Date.parse(b.built_at) || 0) - (Date.parse(a.built_at) || 0));
+  let n = 0;
+  while (n < sorted.length && sorted[n].phase === '1-structural') n += 1;
+  if (n > maxStructural) return { level: 'WARN', detail: `the newest ${n} session timelines are 1-structural, not summarised (newest ${sorted[0].session}): the distill step is not running` };
+  return { level: 'PASS', detail: `newest ${sorted[0].session} is ${sorted[0].phase || 'unknown'}; ${n} structural in a row (warn above ${maxStructural})` };
+}
+
+// The config home's .claude.json record of the bot folder: CLAUDE.md imports
+// the harness rules from outside the folder, loaded only once approved.
+export function externalIncludesVerdict(record) {
+  if (record && record.hasClaudeMdExternalIncludesApproved === true) return { level: 'PASS', detail: '.claude-<bot>/.claude.json approves the CLAUDE.md imports from outside the bot folder' };
+  return { level: 'WARN', detail: 'hasClaudeMdExternalIncludesApproved is not true in .claude-<bot>/.claude.json, so Claude Code skips every @import from outside the bot folder (the harness rules): botcorp sync <bot>' };
+}
+
+// The window the running session really got, from its SessionStart env record
+// (hooks/session-env.sh), not the launch log: a --bg worker can carry another env.
+export function sessionWindowVerdict({ resolved, running, rec }) {
+  if (!resolved || !resolved.tokens) return { level: 'INFO', detail: 'bot.yaml harness.context_window is auto' };
+  if (!running) return { level: 'INFO', detail: 'bot not running' };
+  if (!rec) return { level: 'INFO', detail: 'no session-env record for this session yet' };
+  if (!Object.prototype.hasOwnProperty.call(rec, 'auto_compact_window')) return { level: 'INFO', detail: 'the session-env record predates the window field (the next session start records it)' };
+  const win = rec.auto_compact_window ? Number(rec.auto_compact_window) : null;
+  const pct = rec.autocompact_pct ? Number(rec.autocompact_pct) : null;
+  const eff = win && pct && pct < 100 ? Math.round(win * pct / 100) : win;
+  const seen = `the session runs CLAUDE_CODE_AUTO_COMPACT_WINDOW=${rec.auto_compact_window ?? 'unset'}${rec.autocompact_pct ? `, CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=${rec.autocompact_pct}` : ''}`;
+  if (win !== resolved.tokens || eff !== resolved.tokens) return { level: 'WARN', detail: `${seen} (compacts near ${eff ?? "Claude Code's default"}), bot.yaml says ${resolved.tokens}: botcorp sync <bot>, then the next session start` };
+  return { level: 'PASS', detail: `${seen}, as bot.yaml says` };
+}
+
+// Reads the files the four checks need. sessionId: the bot's current session
+// (state), else the newest transcript. Never throws.
+export function memoryHealthRows({ home, config, sessionId = '', resolved = null, running = false, rec = null }) {
+  const rows = [];
+  const tdir = path.join(config, 'projects', String(home).replace(/[^A-Za-z0-9]/g, '-'));
+  let file = sessionId && fs.existsSync(path.join(tdir, `${sessionId}.jsonl`)) ? path.join(tdir, `${sessionId}.jsonl`) : '';
+  if (!file) {
+    try {
+      const all = fs.readdirSync(tdir).filter((f) => f.endsWith('.jsonl')).map((f) => path.join(tdir, f));
+      file = all.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs)[0] || '';
+    } catch {}
+  }
+  let row = null;
+  try { if (file) row = lastSessionStartContext(fs.readFileSync(file, 'utf-8')); } catch {}
+  rows.push({ name: 'session-start context', ...sessionStartVerdict(row, file ? path.basename(file) : 'no transcript') });
+
+  const tl = [];
+  const sdir = path.join(home, 'memory', 'sessions');
+  let ids = [];
+  try { ids = fs.readdirSync(sdir); } catch {}
+  for (const id of ids) {
+    const f = path.join(sdir, id, 'timeline.md');
+    let head = '';
+    try { head = fs.readFileSync(f, 'utf-8').slice(0, 1000); } catch { continue; }
+    const fm = (k) => { const m = new RegExp(`^${k}:\\s*(.+)$`, 'm').exec(head); return m ? m[1].trim() : ''; };
+    let builtAt = fm('built_at');
+    if (!Date.parse(builtAt)) { try { builtAt = fs.statSync(f).mtime.toISOString(); } catch {} }
+    tl.push({ session: id, built_at: builtAt, phase: fm('phase') });
+  }
+  rows.push({ name: 'session timeline', ...timelineVerdict(tl) });
+
+  const cj = readJson(path.join(config, '.claude.json'));
+  const key = String(home).replace(/\\/g, '/');
+  rows.push({ name: 'claude.md imports approved', ...externalIncludesVerdict(cj && cj.projects && cj.projects[key]) });
+  rows.push({ name: 'session context window', ...sessionWindowVerdict({ resolved, running, rec }) });
+  return rows;
+}
+
 // doctor `<bot>: unpushed commits`: with backup.git_remote set, the auto-commit
 // hook pushes the bot folder's own repo to origin on every Stop (a failed push is
 // retried on the next one), so commits that are not on any origin ref are work
