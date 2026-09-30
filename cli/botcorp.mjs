@@ -2296,8 +2296,11 @@ function cmdImport({ pos, flags }) {
   if (!NAME_RE.test(name)) usage(`bad bot name '${name}' (lowercase, digits, hyphens; max 32)`);
   if (fs.existsSync(botHome(name))) fail(`import: bots/${name} already exists (choose --as <other-name> or remove it first)`);
   const written = zipExtract(zip, botHome(name), (rel) => {
-    // never, even from a hand-made zip: the vault, a repo, any config home
-    if (rel.startsWith('.vault/') || rel.startsWith('.git/') || /^\.claude-[a-z0-9-]+\//.test(rel)) return null;
+    // never, even from a hand-made zip: the vault, a repo, any config home. The
+    // file system is case-insensitive and drops trailing dots and spaces, so
+    // `.GIT/` and `.git./` are `.git/`: compare each folder name that way.
+    const dirs = rel.split('/').slice(0, -1).map((s) => s.toLowerCase().replace(/[. ]+$/, ''));
+    if (dirs.some((s) => s === '.git' || s === '.vault' || s.startsWith('.claude-'))) return null;
     return rel;
   });
   out(`imported ${written.length} entries into ${botHome(name)}`);

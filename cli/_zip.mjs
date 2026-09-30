@@ -105,7 +105,8 @@ export function zipList(file) {
 
 function safeRel(name) {
   const n = name.replace(/\\/g, '/');
-  if (!n || n.startsWith('/') || /^[A-Za-z]:/.test(n) || n.split('/').includes('..')) throw new Error(`zip: refusing unsafe entry name ${JSON.stringify(name)}`);
+  // ':' also names an NTFS alternate data stream (`.git::$INDEX_ALLOCATION` is `.git`)
+  if (!n || n.startsWith('/') || n.includes(':') || n.split('/').includes('..')) throw new Error(`zip: refusing unsafe entry name ${JSON.stringify(name)}`);
   return n;
 }
 

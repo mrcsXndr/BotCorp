@@ -100,7 +100,9 @@ Node (`cli/_zip.mjs`, deflate, no zip64: >4 GB or >65535 entries is refused).
 
 Unpacks an export into `bots/<name>/` (name from the zip's `bot.yaml`, or
 `--as`). Refuses if the bot already exists. `.vault/`, `.git/` and `.claude-*`
-entries in a hand-made zip are dropped. `bot.yaml` lands byte-for-byte; with
+entries in a hand-made zip are dropped at any depth and in any spelling the
+file system treats as the same folder (`.GIT/`, `.git./`, `.Vault /`); an
+entry name with a `:` (an NTFS alternate data stream) fails the import. `bot.yaml` lands byte-for-byte; with
 `--as` only its `name:` line is edited as text, so every comment survives.
 Then `sync` (which rebuilds `access.json` from `bot.yaml`), the `.claude.json`
 seed, and the reminder to `secrets set <name> oauth` (and `telegram`). Nothing
