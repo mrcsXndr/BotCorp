@@ -47,7 +47,7 @@ test('approval: every widening path the CLI queues names what it widens', () => 
     ['integrations.telegram.dm_policy', 'loosens dm_policy allowlist -> pairing', 'senders'],
     ['account', 'switches the Claude account', 'account'],
     ['permissions', 'switches permissions to bypass', 'exposure'],
-    ['harness.modules.remote_control', 'enables Remote Control', 'exposure'],
+    ['harness.hooks_disable', 'switches off guard hook config-guard', 'exposure'],
     ['harness.tools_registry', 'relaxes the tools registry enforce -> warn', 'exposure'],
     ['tools', 'registers an integration or secret-bearing tool (gh)', 'tools'],
     ['automations', 'adds an automation', 'jobs'],
@@ -59,9 +59,9 @@ test('approval: every widening path the CLI queues names what it widens', () => 
     assert.equal(v.widens, key, p);
     assert.ok(v.widensLabel && v.widensText, p);
   }
-  const v = approvalView(row('harness.modules.remote_control', 'enables Remote Control'));
-  assert.equal(v.title, 'Enables Remote Control');
-  assert.equal(v.change, 'harness.modules.remote_control: a -> b');
+  const v = approvalView(row('harness.hooks_disable', 'switches off guard hook config-guard'));
+  assert.equal(v.title, 'Switches off guard hook config-guard');
+  assert.equal(v.change, 'harness.hooks_disable: a -> b');
   assert.equal(v.asker, 'Asked by demo');
   // the bare fallback reason is not a title; an operator-queued entry says so
   assert.equal(approvalView(row('model', 'widening', { requested_by: 'operator:someone' })).title, 'Change model');
@@ -70,7 +70,7 @@ test('approval: every widening path the CLI queues names what it widens', () => 
 
 test('the attention bar names an approval the way its card does', async () => {
   const { attentionItems } = await import('../attention.mjs');
-  for (const r of [row('harness.modules.remote_control', 'enables Remote Control'), row('model', 'widening'), row('model', '')]) {
+  for (const r of [row('harness.hooks_disable', 'switches off guard hook config-guard'), row('model', 'widening'), row('model', '')]) {
     const [item] = attentionItems({ approvals: [r] });
     assert.equal(item.text, `demo asks: ${approvalView(r).title}`);
   }

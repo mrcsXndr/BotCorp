@@ -142,9 +142,8 @@ export function toolWrite(item: ToolItem, checked: boolean, cfg: unknown): Write
   // membership of the list turns it OFF
   return { path: t.list, value: checked ? list.filter((x) => x !== t.item) : [...new Set([...list, t.item])] };
 }
-// Modules the Tools tab never lists: plumbing nobody switches off from a phone,
-// and remote_control, which is engine-specific (IA §4, §8).
-export const HIDDEN_TOOLS = new Set(['cost_meter', 'usage_resume', 'lessons', 'telemetry', 'janitor', 'remote_control'].map((m) => `module:${m}`));
+// Modules the Tools tab never lists: plumbing nobody switches off from a phone (IA §4, §8).
+export const HIDDEN_TOOLS = new Set(['cost_meter', 'usage_resume', 'lessons', 'telemetry', 'janitor'].map((m) => `module:${m}`));
 
 export const TOOL_KIND: Record<string, string> = {
   skill: 'Skill', agent: 'Agent', hook: 'Guard', mcp: 'Connector', plugin: 'Plugin', module: 'Module', command: 'Command', rule: 'Rule', tool: 'Tool',

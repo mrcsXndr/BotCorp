@@ -208,11 +208,10 @@ it('every automation row starts with Next, Last, Never or Failing', async () => 
   for (const r of rows) expect(r.querySelector('[data-status]')!.textContent, r.textContent!).toMatch(/^(Next|Last|Never|Failing)/);
 });
 
-it('Tools hides remote_control and the plumbing modules, and says what a module does in plain words', async () => {
+it('Tools hides the plumbing modules, and says what a module does in plain words', async () => {
   const mod = (m: string, description: string) => ({ id: `module:${m}`, source: 'harness', kind: 'module', name: m, description, on: true, locked: null, toggle: { path: `harness.modules.${m}`, on: true, off: false } });
   serve({
     'GET /api/bots/example/inventory': [200, { groups: [{ source: 'harness', label: 'BotCorp harness', license: 'MIT', sections: [{ kind: 'module', label: 'Modules', items: [
-      mod('remote_control', 'Claude Remote Control for this session (needs a /login in its config home).'),
       mod('cost_meter', 'One sessions.csv row per session.'),
       mod('telegram', 'The official Telegram plugin.'),
     ] }] }] }],
@@ -220,7 +219,6 @@ it('Tools hides remote_control and the plumbing modules, and says what a module 
   });
   mount('tools');
   await screen.findByText('Reads and answers its Telegram chat.');
-  expect(document.querySelector('[data-tool="module:remote_control"]')).toBeNull();
   expect(document.querySelector('[data-tool="module:cost_meter"]')).toBeNull();
-  expect(document.body.textContent).not.toMatch(/remote control|\/login|sessions\.csv/i);
+  expect(document.body.textContent).not.toMatch(/sessions\.csv/i);
 });

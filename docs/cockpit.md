@@ -308,9 +308,6 @@ Access remains the remote path.
 - The terminal fits xterm inside an unpadded inner box (`#termScreen`) and
   re-fits on every size change of that box (a `ResizeObserver`), not only on
   window resize.
-- Remote Control: "Enable Remote Control" types `/login`, "Start Remote
-  Control" types `/remote-control`; the link the TUI prints is surfaced in a
-  bar with an Open button (login and claude.ai/code URLs).
 - Review board (`harness.modules.review_board`): with the module on, the bot
   header shows "Review board" plus the open count, linking to the bot's one
   private review Artifact in a new tab (`rel="noopener noreferrer"`). With

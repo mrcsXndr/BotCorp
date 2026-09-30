@@ -43,7 +43,7 @@ test('approval: every widening path the CLI queues names what it widens', () => 
     ['integrations.telegram.dm_policy', 'loosens dm_policy allowlist -> pairing', 'senders'],
     ['account', 'switches the Claude account', 'account'],
     ['permissions', 'switches permissions to bypass', 'exposure'],
-    ['harness.modules.remote_control', 'enables Remote Control', 'exposure'],
+    ['harness.hooks_disable', 'switches off guard hook config-guard', 'exposure'],
     ['harness.tools_registry', 'relaxes the tools registry enforce -> warn', 'exposure'],
     ['tools', 'registers an integration or secret-bearing tool (gh)', 'tools'],
     ['automations', 'adds an automation', 'jobs'],
@@ -55,9 +55,9 @@ test('approval: every widening path the CLI queues names what it widens', () => 
     expect(v.widens, p).toBe(key);
     expect(v.widensLabel && v.widensText, p).toBeTruthy();
   }
-  const v = approvalView(row('harness.modules.remote_control', 'enables Remote Control'));
-  expect(v.title).toBe('Enables Remote Control');
-  expect(v.change).toBe('harness.modules.remote_control: a -> b');
+  const v = approvalView(row('harness.hooks_disable', 'switches off guard hook config-guard'));
+  expect(v.title).toBe('Switches off guard hook config-guard');
+  expect(v.change).toBe('harness.hooks_disable: a -> b');
   expect(v.asker).toBe('Asked by demo');
   // the bare fallback reason is not a title; an operator-queued entry says so
   expect(approvalView(row('model', 'widening', { requested_by: 'operator:someone' })).title).toBe('Change model');
