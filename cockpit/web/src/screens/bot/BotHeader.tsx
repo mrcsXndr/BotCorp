@@ -12,7 +12,7 @@ import { useWide } from '../../app/layout';
 const TONE_TEXT = { ok: 'text-ok', warn: 'text-warn', bad: 'text-bad', idle: 'text-text-3', accent: 'text-accent' } as const;
 const LEVEL_TEXT = { '': 'text-text', warn: 'text-warn', bad: 'text-bad' } as const;
 
-export type BotAction = 'settings' | 'telegram' | 'secrets' | 'automations' | 'tools' | 'history' | 'restart' | 'fresh' | 'stop' | 'archive';
+export type BotAction = 'settings' | 'telegram' | 'secrets' | 'automations' | 'tools' | 'history' | 'restart' | 'fresh' | 'stop' | 'stopArchive';
 export type View = 'chat' | 'term';
 
 // The bot header (IA §7): the name, the state word, Chat | Terminal and the
@@ -52,8 +52,9 @@ export function BotHeader({ bot, status, view, onView, onAction, onStart, starti
           <MenuSeparator />
           <MenuItem id="restart" icon="restart" tone="bad">{COPY.button.restart}</MenuItem>
           <MenuItem id="fresh" icon="restart" tone="bad">{COPY.button.restartFresh}</MenuItem>
-          {lc.stop && <MenuItem id="stop" icon="stop" tone="bad">{COPY.button.stop}</MenuItem>}
-          {chat && <MenuItem id="archive" icon="archive" tone="bad">{COPY.button.archive}</MenuItem>}
+          {chat
+            ? <MenuItem id="stopArchive" icon="archive" tone="bad">{COPY.button.stopArchive}</MenuItem>
+            : lc.stop && <MenuItem id="stop" icon="stop" tone="bad">{COPY.button.stop}</MenuItem>}
         </Menu>
       </div>
       <div className="flex items-center gap-x-3 gap-y-1 flex-wrap px-4 pb-2 text-sm">

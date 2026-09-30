@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest';
-import { accountLabel, attentionByBot, botStatus, hasUpdate, mostHeadroom, splitBots } from './bots';
+import { accountLabel, attentionByBot, botStatus, hasUpdate, mostHeadroom, splitBots, stopAndArchive } from './bots';
 
 test('accountLabel: the token\'s account, else the configured one, else nothing', () => {
   const accounts = [{ id: 'studio', label: 'Studio', masked: '****St01' }, { id: 'spare', label: 'Spare', masked: '****Sp02' }];
@@ -31,6 +31,22 @@ test('botStatus: one engine-neutral word and a tone', () => {
   expect(botStatus({ name: 'a', running: false, phase: null }, true)).toEqual({ word: 'starting', tone: 'accent' });
   expect(botStatus({ name: 'a', running: false, phase: 'down' }, true)).toEqual({ word: 'starting', tone: 'accent' });
   expect(botStatus({ name: 'a', running: true, phase: 'idle' }, true)).toEqual({ word: 'idle', tone: 'ok' });
+});
+
+test('stopAndArchive: stop then archive, in that order; a stopped chat only archives; a failed stop archives nothing', async () => {
+  const seq: string[] = [];
+  const io = (stopOk = true) => ({
+    stop: async (n: string) => { seq.push(`stop ${n}`); return { ok: stopOk, code: stopOk ? 0 : 1, err: 'still busy' }; },
+    archive: async (n: string) => { seq.push(`archive ${n}`); return { ok: true, code: 0 }; },
+  });
+  await stopAndArchive({ name: 'chat-1', running: true }, io());
+  expect(seq).toEqual(['stop chat-1', 'archive chat-1']);
+  seq.length = 0;
+  await stopAndArchive({ name: 'chat-2', running: false }, io());
+  expect(seq).toEqual(['archive chat-2']);
+  seq.length = 0;
+  await expect(stopAndArchive({ name: 'chat-3', running: true }, io(false))).rejects.toThrow('still busy');
+  expect(seq).toEqual(['stop chat-3']);
 });
 
 test('attentionByBot counts per bot and skips machine-wide items', () => {

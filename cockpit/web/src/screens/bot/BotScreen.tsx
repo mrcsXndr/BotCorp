@@ -4,6 +4,7 @@ import { useArchive, useBots, useInbox, useLifecycle, useSend, useUpload, type B
 import { useTermSocket } from '../../api/ws';
 import { Banner, Button, EmptyState, IconButton, SkeletonRow, toast, useConfirm } from '../../ui';
 import { fmtBytes } from '../../lib/cards';
+import { stopAndArchive } from '../../lib/bots';
 import { STATUSES, type InboxStatus } from '../../lib/inbox';
 import { COPY, t } from '../../lib/copy';
 import { BotHeader, type BotAction, type View } from './BotHeader';
@@ -106,10 +107,15 @@ function BotBody({ bot }: { bot: Bot }) {
     if (a === 'restart') return (await confirmed(COPY.confirm.restart)) && run('restart');
     if (a === 'fresh') return (await confirmed(COPY.confirm.fresh)) && run('restart', true);
     if (a === 'stop') return (await confirmed(COPY.confirm.stop)) && run('stop');
-    if (a === 'archive') {
-      if (!(await confirmed(COPY.confirm.archive))) return;
-      try { await archive.mutateAsync({ name: bot.name }); toast(t(COPY.toast.archived, { bot: bot.name }), 'ok'); nav('/'); }
-      catch (e) { toast((e as Error).message, 'bad'); }
+    if (a === 'stopArchive') {
+      if (!(await confirmed(COPY.confirm.stopArchive))) return;
+      try {
+        await stopAndArchive(bot, {
+          stop: (n) => lifecycle.mutateAsync({ name: n, action: 'stop' }),
+          archive: (n) => archive.mutateAsync({ name: n }),
+        });
+        toast(t(COPY.toast.archived, { bot: bot.name }), 'ok'); nav('/');
+      } catch (e) { toast((e as Error).message, 'bad'); }
       return;
     }
     nav(`/bots/${encodeURIComponent(bot.name)}/manage/${a}`);

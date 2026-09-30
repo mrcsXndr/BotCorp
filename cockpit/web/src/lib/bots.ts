@@ -58,6 +58,20 @@ export function accountLabel(reading: { tokenLast4?: string; na?: string } | nul
   return hit ? String(hit.label || hit.id) : null;
 }
 
+// A chat's Stop is "Stop and archive": stop it if it is running, then archive
+// it (POST stop, then POST archive). A failed stop archives nothing. Throws the
+// CLI's own message. A pinned bot never comes through here: its Stop only stops.
+export interface CliOutcome { ok: boolean; code?: number; out?: string; err?: string }
+export async function stopAndArchive(
+  bot: { name: string; running?: boolean },
+  io: { stop: (name: string) => Promise<CliOutcome>; archive: (name: string) => Promise<CliOutcome> },
+): Promise<void> {
+  const fail = (r: CliOutcome) => new Error(String(r.err || r.out || `exit ${r.code}`).trim());
+  if (bot.running) { const s = await io.stop(bot.name); if (!s.ok) throw fail(s); }
+  const a = await io.archive(bot.name);
+  if (!a.ok) throw fail(a);
+}
+
 // The account a new chat starts on: an account in state ok with the most
 // headroom (the lower of its 5 h / 7 d readings; no reading counts as full
 // headroom). Null when none is usable.
