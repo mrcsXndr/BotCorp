@@ -477,14 +477,13 @@ app.get('/api/accounts', wrap(async (_req, res) => res.json(await attention.acco
 // path, the method and the id only; the CLI's reply carries the last 4).
 const ACCOUNT_TEXT_RE = /^[^\r\n\0]{0,64}$/;
 app.post('/api/accounts', wrap(async (req, res) => {
-  const { id, label, plan, token } = req.body || {};
+  const { id, label, token } = req.body || {};
   if (!bots.NAME_RE.test(id || '')) return res.status(400).json({ error: 'id: lowercase letters, digits and hyphens, at most 32' });
-  if (![label, plan].every((v) => v === undefined || v === null || (typeof v === 'string' && ACCOUNT_TEXT_RE.test(v)))) return res.status(400).json({ error: 'label and plan: one line, at most 64 characters' });
+  if (!(label === undefined || label === null || (typeof label === 'string' && ACCOUNT_TEXT_RE.test(label)))) return res.status(400).json({ error: 'label: one line, at most 64 characters' });
   if (typeof token !== 'string' || token.length < 20 || token.length > 400 || /\s/.test(token)) return res.status(400).json({ error: 'token: the whole string `claude setup-token` printed (20 to 400 characters, no spaces)' });
   if (!operatorGate(req, res)) return;
   const args = ['accounts', 'add', id, '--by', req.identity];
   if (label) args.push('--label', label);
-  if (plan) args.push('--plan', plan);
   res.locals.audit = { account: id, action: 'add' };
   const r = await runCli(args, { stdin: token + '\n' });
   attention.invalidate();
@@ -519,6 +518,7 @@ app.post('/api/chat/launch', wrap((req, res) => {
 
 // Attachments (composer, terminal paste/drop, +file): one file per request, the
 // raw bytes as the body, its name in X-File-Name. Operator-gated (a bot must not
+// `plan` in the body is ignored: the CLI detects the plan (accounts add --plan stays a CLI-only override).
 // fill its own folder through here); an allow-listed type, at most 20 MB, kept
 // under the bot's own <bot>/.botcorp/uploads (core/attach.mjs). 10/min per session.
 const uploadHits = new Map();   // cookie -> [ts]
@@ -544,6 +544,30 @@ app.post('/api/bots/:name/uploads', gated, (req, res, next) => rawBody(req, res,
   const dir = attach.uploadsDir(bot.home);
   await fsp.mkdir(dir, { recursive: true });
   await fsp.writeFile(path.join(dir, '.gitignore'), '*\n', { flag: 'wx' }).catch(() => {});
+// Rename an account: the label only (`accounts rename`).
+app.patch('/api/accounts/:id', wrap(async (req, res) => {
+  const { id } = req.params;
+  const label = typeof req.body?.label === 'string' ? req.body.label.trim() : '';
+  if (!bots.NAME_RE.test(id)) return res.status(400).json({ error: 'bad account id' });
+  if (!label || !ACCOUNT_TEXT_RE.test(label)) return res.status(400).json({ error: 'label: one line, 1 to 64 characters' });
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { account: id, action: 'rename' };
+  const r = await runCli(['accounts', 'rename', id, '--label', label, '--by', req.identity]);
+  attention.invalidate();
+  if (r.code === 2) return res.status(404).json({ ok: false, code: r.code, error: 'no such account' });
+  res.status(r.code === 0 ? 200 : 502).json({ ok: r.code === 0, code: r.code, out: r.out, err: r.err });
+}));
+// The account_unlinked item's Link: every bot's own token becomes an account and the bot is set to it (`accounts seed --link`).
+app.post('/api/accounts/link', wrap(async (req, res) => {
+  if (!operatorGate(req, res)) return;
+  res.locals.audit = { action: 'link' };
+  const r = await runCli(['accounts', 'seed', '--link', '--json', '--by', req.identity], { timeoutMs: 180_000 });
+  attention.invalidate();
+  let result = null;
+  try { result = JSON.parse(r.out); } catch {}
+  if (r.code !== 0 || !result) return res.status(502).json({ ok: false, code: r.code, err: r.err || r.out });
+  res.json({ ok: true, ...result });
+}));
   let file = path.join(dir, stored);
   for (let n = 2; ; n++) {
     try { await fsp.writeFile(file, req.body, { flag: 'wx' }); break; } catch (e) {

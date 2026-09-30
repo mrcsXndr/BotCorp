@@ -3,6 +3,31 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+- **Every chain entry is an Account.** `botcorp accounts seed --link` registers
+  each bot's own vault token as an account once (matched by fingerprint, so a
+  shared token is one account, id `acct-<last4>`), sets `account:` on every bot
+  that had none, and relabels the old "bot <name>" labels to
+  `Account ····<last4>` (or `<Plan> ····<last4>`). Idempotent; `--json` prints
+  `{seeded, linked, relabeled}`; `--dry-run` writes nothing. The cockpit shows
+  an `account_unlinked` item with a **Link** button (`POST /api/accounts/link`)
+  until it has run. A linked bot moves onto its account (the same token) at
+  its next idle turn.
+- **Rename an account:** `botcorp accounts rename <id> --label <text>`, `PATCH
+  /api/accounts/:id {label}`.
+- **The plan is detected, never typed:** from the account's
+  `.credentials.json` (a `/login` there), else `/api/oauth/profile` (a setup
+  token gets 403, so no plan), cached with the token check. `accounts list
+  --json` and `GET /api/accounts` carry `plan_source`; `POST /api/accounts`
+  ignores `plan` (`accounts add --plan` stays a CLI override).
+- `GET /api/accounts` rows carry `used_by: [{bot, role: primary|backup, order}]`.
+- **Operator only, never a bot:** `accounts rename` and `accounts seed --link`
+  refuse in any bot session, an admin bot's included (CLI exit 3 and the
+  operator-guard hook).
+- **Fixed:** the account token check sent a masked token (`****`) to Claude
+  Code, so a live check could only fail; it now reads the real token in-process.
+
 ## v0.8.4
 
 The tool inventory names an MCP server the same way on every host.

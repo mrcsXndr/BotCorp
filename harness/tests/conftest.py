@@ -38,4 +38,6 @@ def isolated_bot_env(tmp_path, monkeypatch):
     monkeypatch.setenv("BOTCORP_HOME", str(tmp_path / "botcorp_home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude_config"))
     monkeypatch.setenv("BOT_NAME", "testbot")
+    # the CLI's plan probe (detectPlan) never calls the real profile endpoint from a test
+    monkeypatch.setenv("BOTCORP_OAUTH_PROFILE_URL", "off")
     yield
