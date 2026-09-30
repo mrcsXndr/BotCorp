@@ -3,6 +3,20 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+- **Fixed: the session-start memory reaches the session again.** Claude Code
+  saves a hook's additionalContext over 10,000 chars to a file and injects
+  only a 2,000-char preview, so a long-running bot started without its
+  journal, timeline and TDL (one bot's block was 48 KB). The block is now
+  assembled by `tools/v2/session_context.py` inside 9,500 chars. Space goes
+  first to the TDL Open items, cut to their headlines when needed, then to
+  the newest timeline decisions, then the journal tail, the due commitments
+  and the lessons index. A cut section ends with one line naming the file
+  to Read. On a resume or compaction, the session's own timeline is no
+  longer injected a second time as "Last session". Sections are joined with
+  real newlines instead of a literal `\n`.
+
 ## v0.8.4
 
 The tool inventory names an MCP server the same way on every host.

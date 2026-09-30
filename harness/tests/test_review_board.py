@@ -153,9 +153,8 @@ def _seed(bot_home, rec):
 def test_session_start_injects_the_board_line_when_on(tmp_path, bot_home):
     _seed(bot_home, {"url": URL, "open": 5, "answered": 2})
     ctx = _context(tmp_path, bot_home, "review_board", "rb1")
-    # the hook joins sections with a literal backslash-n, so match the line as a substring
     assert ctx.count("Review board:") == 1
-    assert f"Review board: {URL} (5 open). Republish to this URL; never start a second board (skill review-artifact)." in ctx
+    assert f"Review board: {URL} (5 open). Republish to this URL; never start a second board (skill review-artifact)." in ctx.splitlines()
 
 
 def test_session_start_has_no_board_line_when_off(tmp_path, bot_home):
