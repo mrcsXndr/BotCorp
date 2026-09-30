@@ -71,7 +71,25 @@ def _compact_ceiling(size: int = 0) -> int:
     return ceiling
 
 
+GIT_TTL_S = 30  # the same cache and TTL as statusline.js gitSegment()
+
+
 def _git_status() -> str:
+    """"(branch)" / "(branch*)", from <config_home>/botcorp/git-status.json when
+    that folder's entry is younger than GIT_TTL_S (statusline.js shares it), so
+    git runs at most once per TTL however often the footer is built."""
+    cache_file = config_home() / "botcorp" / "git-status.json"
+    key = str(REPO_ROOT).replace("\\", "/").rstrip("/").lower()
+    now = time.time()
+    try:
+        cache = json.loads(cache_file.read_text(encoding="utf-8"))
+        cache = cache if isinstance(cache, dict) else {}
+        hit = cache.get(key)
+        if isinstance(hit, dict) and isinstance(hit.get("git"), str) and 0 <= now - float(hit.get("ts") or 0) < GIT_TTL_S:
+            return hit["git"]
+    except Exception:
+        cache = {}
+    git = ""
     try:
         branch = subprocess.run(
             ["git", "symbolic-ref", "--short", "HEAD"],
@@ -81,11 +99,19 @@ def _git_status() -> str:
             ["git", "--no-optional-locks", "status", "--porcelain"],
             cwd=REPO_ROOT, capture_output=True, text=True, timeout=2,
         ).stdout.strip()
-        if not branch:
-            return ""
-        return f"({branch}{'*' if dirty else ''})"
+        if branch:
+            git = f"({branch}{'*' if dirty else ''})"
     except Exception:
         return ""
+    try:
+        cache[key] = {"ts": now, "git": git}
+        cache_file.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_file.with_name(f"{cache_file.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(cache), encoding="utf-8")
+        os.replace(tmp, cache_file)
+    except Exception:
+        pass
+    return git
 
 
 def format_line(folder: str, git: str, model: str, effort: str, ctx: str, usage: str = "",

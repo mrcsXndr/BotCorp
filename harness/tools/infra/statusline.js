@@ -162,6 +162,38 @@ function writeStatusFile(j, harnessV) {
   }
 }
 
+// "(branch)" / "(branch*)". git status is the slow part of a render (two git
+// processes on every keystroke-driven redraw), so the result is cached per folder
+// in <config_home>/botcorp/git-status.json for GIT_TTL_S, shared with
+// status_footer.py _git_status(): at most one render per TTL pays for git.
+const GIT_TTL_S = 30;
+function gitSegment(dir) {
+  const file = path.join(CONFIG_HOME, 'botcorp', 'git-status.json');
+  const key = dir.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const now = Date.now() / 1000;
+  let cache = {};
+  try {
+    const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (c && typeof c === 'object') cache = c;
+  } catch (e) {}
+  const hit = cache[key];
+  if (hit && typeof hit.git === 'string' && now - hit.ts >= 0 && now - hit.ts < GIT_TTL_S) return hit.git;
+  let g = '';
+  try {
+    const b = execSync('git symbolic-ref --short HEAD', { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
+    const s = execSync('git --no-optional-locks status --porcelain', { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
+    g = s.trim() ? `(${b}*)` : `(${b})`;
+  } catch (e) {}
+  try {
+    cache[key] = { ts: now, git: g };
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(cache));
+    fs.renameSync(tmp, file);
+  } catch (e) {}
+  return g;
+}
+
 function maybeDump(raw) {
   const idx = process.argv.indexOf('--dump');
   if (idx === -1 || !process.argv[idx + 1]) return;
@@ -182,12 +214,7 @@ process.stdin.on('end', () => {
     const m = (j.model && j.model.display_name || '?').replace(/^Claude /, '');
     const dir = (j.workspace && j.workspace.current_dir) || '';
 
-    let g = '';
-    try {
-      const b = execSync('git symbolic-ref --short HEAD', { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] }).toString().trim();
-      const s = execSync('git --no-optional-locks status --porcelain', { cwd: dir, stdio: ['pipe', 'pipe', 'pipe'] }).toString();
-      g = s.trim() ? `(${b}*)` : `(${b})`;
-    } catch (e) {}
+    const g = gitSegment(dir);
 
     const cw = j.context_window || {};
     const cu = cw.current_usage;
