@@ -1,9 +1,9 @@
-import { useCallback, type ReactNode } from 'react';
+import { useCallback, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { useApprovals, useConfigSet } from '../../api/queries';
-import { toast } from '../../ui';
+import { IconButton, TextField, toast } from '../../ui';
 import { Icon, type IconName } from '../../icons';
-import { COPY } from '../../lib/copy';
+import { COPY, t } from '../../lib/copy';
 import type { ConfigValue, Write } from '../../lib/settings';
 
 /** A group on a manage tab: a quiet heading, then its rows. */
@@ -34,6 +34,46 @@ export function Chip({ icon, tone = 'plain', mono, children }: { icon?: IconName
       {icon && <Icon name={icon} size={14} className="flex-none" />}
       <span className={`truncate ${mono ? 'num' : ''}`}>{children}</span>
     </span>
+  );
+}
+
+/**
+ * A one-line description, edited in place. Blur or Enter ends it with the text
+ * (onDone(text)); Escape ends it with null (nothing changes). Once only.
+ */
+export function DescriptionField({ name, value, onDone }: { name: string; value: string; onDone: (text: string | null) => void }) {
+  const [draft, setDraft] = useState(value);
+  const done = useRef(false);
+  const end = (text: string | null) => { if (done.current) return; done.current = true; onDone(text); };
+  return (
+    <TextField aria-label={COPY.row.description} name={`${name}-description`} value={draft} onChange={setDraft} autoFocus maxLength={200} autoComplete="off"
+      onBlur={() => end(draft.trim())} onKeyDown={(e) => {
+        if (e.key === 'Enter') end(draft.trim());
+        if (e.key === 'Escape') end(null);
+      }} />
+  );
+}
+
+/** Save one description (`automations.<n>.description`, `tools.<n>.purpose`): text only, never widening, "Saved". */
+export function useDescribe(bot: string) {
+  const { mutateAsync } = useConfigSet();
+  return useCallback(async (path: string, text: string) => {
+    try { await mutateAsync({ name: bot, path, value: text }); toast(COPY.toast.saved, 'ok'); }
+    catch (e) { toast((e as Error).message, 'bad'); }
+  }, [bot, mutateAsync]);
+}
+
+/** A row's description with its pencil: the text, or the field while editing; saves only a change. */
+export function Described({ name, value, onSave, children }: { name: string; value: string; onSave: (text: string) => void; children?: ReactNode }) {
+  const [editing, setEditing] = useState(false);
+  return (
+    <div className="flex flex-col gap-1.5" data-described={name}>
+      <div className="flex items-center gap-1">
+        <div className="flex-1 min-w-0">{children}</div>
+        {!editing && <IconButton icon="pen" size={16} label={t(COPY.button.editDescription, { name })} onPress={() => setEditing(true)} />}
+      </div>
+      {editing && <DescriptionField name={name} value={value} onDone={(text) => { setEditing(false); if (text !== null && text !== value.trim()) onSave(text); }} />}
+    </div>
   );
 }
 

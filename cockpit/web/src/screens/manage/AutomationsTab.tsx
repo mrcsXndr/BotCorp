@@ -2,20 +2,22 @@ import { useAutomationAction, useAutomations, type Bot } from '../../api/queries
 import { Button, Disclosure, EmptyState, Skeleton, toast } from '../../ui';
 import { COPY, t } from '../../lib/copy';
 import { ago, autoStatus, triggerText, type AutoState } from '../../lib/settings';
-import { Group } from './shared';
+import { Described, Group, useDescribe } from './shared';
 
-interface Declared { name: string; kind: string; trigger: unknown; enabled: boolean }
+interface Declared { name: string; kind: string; trigger: unknown; enabled: boolean; description?: string }
 interface Run { automation: string; run_id?: string; start?: string; end?: string; exit?: number; summary?: string }
 interface Payload { declared: Declared[]; state: Record<string, AutoState>; runs: Run[] }
 
 const TONE = { bad: 'text-bad', ok: 'text-text-2', idle: 'text-text-3', warn: 'text-warn' } as const;
 
 // A bot's automations: each row says when it runs next, or how it last went
-// (Next / Last / Never / Failing), not a count. Run now and Pause are one tap;
-// Resume waits for the operator like any change that widens the bot.
+// (Next / Last / Never / Failing), not a count, and what it is for (the pencil
+// edits that line). Run now and Pause are one tap; Resume waits for the
+// operator like any change that widens the bot.
 export function AutomationsTab({ bot }: { bot: Bot }) {
   const q = useAutomations(bot.name).data as unknown as Payload | undefined;
   const act = useAutomationAction();
+  const describe = useDescribe(bot.name);
   if (!q) return <Skeleton lines={4} />;
   const go = async (auto: string, action: 'run' | 'pause' | 'resume') => {
     try { await act.mutateAsync({ name: bot.name, auto, action }); if (action === 'run') toast(t(COPY.toast.ran, { name: auto }), 'ok'); }
@@ -30,11 +32,16 @@ export function AutomationsTab({ bot }: { bot: Bot }) {
             const s = autoStatus(q.state[a.name], a.enabled);
             return (
               <li key={a.name} data-automation={a.name} className="flex items-center gap-2 py-2 shadow-[0_1px_0_var(--line)] last:shadow-none">
-                <span className="flex-1 min-w-0 flex flex-col">
-                  <span className="text-ui font-semibold text-text truncate">{a.name}</span>
-                  <span data-status className={`text-sm ${TONE[s.tone]}`}>{a.enabled ? s.text : `${s.text} · ${COPY.status.paused}`}</span>
-                  <span className="text-sm text-text-3">{triggerText(a.trigger)}</span>
-                </span>
+                <div className="flex-1 min-w-0">
+                  <Described name={a.name} value={a.description || ''} onSave={(text) => describe(`automations.${a.name}.description`, text)}>
+                    <span className="flex flex-col">
+                      <span className="text-ui font-semibold text-text truncate">{a.name}</span>
+                      {a.description && <span data-description className="text-sm text-text-2 line-clamp-2">{a.description}</span>}
+                      <span data-status className={`text-sm ${TONE[s.tone]}`}>{a.enabled ? s.text : `${s.text} · ${COPY.status.paused}`}</span>
+                      <span className="text-sm text-text-3">{triggerText(a.trigger)}</span>
+                    </span>
+                  </Described>
+                </div>
                 <Button variant="quiet" isDisabled={act.isPending} onPress={() => go(a.name, 'run')}>{COPY.button.runNow}</Button>
                 <Button variant="quiet" isDisabled={act.isPending} onPress={() => go(a.name, a.enabled ? 'pause' : 'resume')}>{a.enabled ? COPY.button.pause : COPY.button.resume}</Button>
               </li>

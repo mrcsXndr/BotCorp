@@ -174,7 +174,7 @@ export function triggerText(t: unknown): string {
 // ---- Tools: an inventory item's switch as one config write ------------------------------
 export interface ToolItem {
   id: string; source: string; kind: string; name: string; description?: string; on: boolean; note?: string;
-  locked: string | null; missing?: boolean; provider?: string;
+  locked: string | null; missing?: boolean; provider?: string; described?: boolean;
   toggle: { path: string; on: ConfigValue; off: ConfigValue } | { list: string; item: string } | null;
 }
 export function toolWrite(item: ToolItem, checked: boolean, cfg: unknown): Write | null {

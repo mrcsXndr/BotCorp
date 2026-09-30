@@ -319,7 +319,7 @@ it('every automation row starts with Next, Last, Never or Failing', async () => 
 it('Tools hides the plumbing modules, and says what a module does in plain words', async () => {
   const mod = (m: string, description: string) => ({ id: `module:${m}`, source: 'harness', kind: 'module', name: m, description, on: true, locked: null, toggle: { path: `harness.modules.${m}`, on: true, off: false } });
   serve({
-    'GET /api/bots/example/inventory': [200, { groups: [{ source: 'harness', label: 'BotCorp harness', license: 'MIT', sections: [{ kind: 'module', label: 'Modules', items: [
+    'GET /api/bots/example/inventory': [200, { groups: [{ source: 'harness', label: 'All bots', license: 'MIT', sections: [{ kind: 'module', label: 'Modules', items: [
       mod('cost_meter', 'One sessions.csv row per session.'),
       mod('telegram', 'The official Telegram plugin.'),
     ] }] }] }],
@@ -329,4 +329,39 @@ it('Tools hides the plumbing modules, and says what a module does in plain words
   await screen.findByText('Reads and answers its Telegram chat.');
   expect(document.querySelector('[data-tool="module:cost_meter"]')).toBeNull();
   expect(document.body.textContent).not.toMatch(/sessions\.csv/i);
+});
+
+it('v0.9.9: "All bots" names the shared group; an operator description wins; a tool\'s purpose is edited in place', async () => {
+  serve({
+    'GET /api/bots/example/inventory': [200, { groups: [
+      { source: 'harness', label: 'All bots', license: 'MIT', sections: [{ kind: 'module', label: 'Modules', items: [
+        { id: 'module:telegram', source: 'harness', kind: 'module', name: 'telegram', description: 'Our chat line.', described: true, on: true, locked: null, toggle: { path: 'harness.modules.telegram', on: true, off: false } }] }] },
+      { source: 'bot', label: 'This bot', license: '', sections: [{ kind: 'tool', label: 'Tools', items: [
+        { id: 'tool:gh', source: 'bot', kind: 'tool', name: 'gh', description: 'GitHub', on: true, locked: null, toggle: { path: 'tools.gh.enabled', on: true, off: false } }] }] },
+    ] }],
+    'GET /api/bots/example/tools': [200, { registry: 'off', missing: [], registered: [], proposal: { tools: [], orphans: [] } }],
+  });
+  mount('tools');
+  await screen.findByText('Our chat line.');
+  expect(screen.getByRole('radio', { name: 'All bots' })).toBeTruthy();
+  expect(document.querySelector('[data-tool-group=harness] h2')!.textContent).toBe('All bots');
+  expect(screen.queryByRole('button', { name: 'Edit telegram' }), 'no pencil on a harness item').toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: 'Edit gh' }));
+  const field = await screen.findByRole('textbox', { name: 'Description' });
+  await userEvent.clear(field);
+  await userEvent.type(field, 'GitHub issues and PRs{Enter}');
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'tools.gh.purpose', value: 'GitHub issues and PRs' }]]));
+});
+
+it('v0.9.9: an automation shows its description; the pencil saves a new one, Escape nothing', async () => {
+  serve({ 'GET /api/bots/example/automations': [200, {
+    declared: [{ name: 'digest', kind: 'command', trigger: { interval_min: 30 }, enabled: true, description: 'Morning summary' }], state: {}, present: true, runs: [] }] });
+  mount('automations');
+  expect(await screen.findByText('Morning summary')).toBeTruthy();
+  await userEvent.click(screen.getByRole('button', { name: 'Edit digest' }));
+  await userEvent.type(await screen.findByRole('textbox', { name: 'Description' }), ' at 8{Escape}');
+  expect(writes()).toEqual([]);
+  await userEvent.click(screen.getByRole('button', { name: 'Edit digest' }));
+  await userEvent.type(await screen.findByRole('textbox', { name: 'Description' }), ' at 8{Enter}');
+  await waitFor(() => expect(writes()).toEqual([['POST', '/api/bots/example/config', { path: 'automations.digest.description', value: 'Morning summary at 8' }]]));
 });

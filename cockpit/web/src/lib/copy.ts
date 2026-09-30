@@ -165,7 +165,6 @@ export const COPY = {
     searchTools: 'Search tools',
     filter: 'Show',
     all: 'All',
-    harness: 'Harness',
     own: 'Own',
     thirdParty: 'Third-party',
     position: 'Position {n}',

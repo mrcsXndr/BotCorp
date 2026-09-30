@@ -4,15 +4,22 @@ import { Button, EmptyState, Segment, Segmented, Skeleton, Switch, TextField, to
 import { Icon } from '../../icons';
 import { COPY, t } from '../../lib/copy';
 import { HIDDEN_TOOLS, TOOL_KIND, itemPath, toolWrite, type ToolFilter, type ToolItem } from '../../lib/settings';
-import { Group, QueuedMark, usePendingPaths, useSetter } from './shared';
+import { Described, Group, QueuedMark, useDescribe, usePendingPaths, useSetter } from './shared';
 
 interface Section { kind: string; label: string; items: ToolItem[] }
 interface InvGroup { source: 'harness' | 'bot' | 'third'; label: string; license: string; sections: Section[] }
 interface Proposal { name: string; path: string; kind: 'cli' | 'monitor' | 'integration' | 'lib'; purpose?: string; secrets?: string[] }
 interface Scan { registry: string; missing: string[]; registered: { name: string; path: string }[]; proposal: { tools: Proposal[]; orphans: (string | { path: string })[] } }
 
-function ToolRow({ item, queued, onToggle }: { item: ToolItem; queued: boolean; onToggle: (on: boolean) => void }) {
-  const text = item.kind === 'module' ? (COPY.module as Record<string, string>)[item.name] ?? item.description : item.description;
+// A registered tool of the bot's own: its purpose is edited in place.
+function ToolRow({ item, queued, onToggle, onDescribe }: { item: ToolItem; queued: boolean; onToggle: (on: boolean) => void; onDescribe?: (text: string) => void }) {
+  const row = <ToolSwitch item={item} queued={queued} onToggle={onToggle} />;
+  return onDescribe ? <Described name={item.name} value={item.description || ''} onSave={onDescribe}>{row}</Described> : row;
+}
+
+function ToolSwitch({ item, queued, onToggle }: { item: ToolItem; queued: boolean; onToggle: (on: boolean) => void }) {
+  // an operator's description (`botcorp knowledge describe`) wins over the plain-words line
+  const text = item.kind === 'module' && !item.described ? (COPY.module as Record<string, string>)[item.name] ?? item.description : item.description;
   const body = (
     <span className="block">
       <span className="flex items-baseline gap-2">
@@ -104,6 +111,7 @@ export function ToolsTab({ bot }: { bot: Bot }) {
   const cfg = useBotConfig(bot.name).data?.config;
   const pending = usePendingPaths(bot.name);
   const save = useSetter(bot.name);
+  const describe = useDescribe(bot.name);
   const [filter, setFilter] = useState<ToolFilter>('all');
   const [q, setQ] = useState('');
   const needle = q.trim().toLowerCase();
@@ -125,7 +133,7 @@ export function ToolsTab({ bot }: { bot: Bot }) {
     <div className="flex flex-col gap-4 pb-8" data-tab-panel="tools">
       <Segmented aria-label={COPY.row.filter} value={filter} onChange={(k) => setFilter(k as ToolFilter)} className="w-full">
         <Segment id="all">{COPY.row.all}</Segment>
-        <Segment id="harness">{COPY.row.harness}</Segment>
+        <Segment id="harness">{COPY.row.allBots}</Segment>
         <Segment id="bot">{COPY.row.own}</Segment>
         <Segment id="third">{COPY.row.thirdParty}</Segment>
       </Segmented>
@@ -139,7 +147,8 @@ export function ToolsTab({ bot }: { bot: Bot }) {
               <h3 className="m-0 pt-2 pb-0.5 text-sm font-normal text-text-3">{s.label}</h3>
               <ul className="m-0 p-0 list-none">
                 {s.items.map((i) => (
-                  <li key={i.id} data-tool={i.id}><ToolRow item={i} queued={pending.has(itemPath(i) || '')} onToggle={(on) => toggle(i, on)} /></li>
+                  <li key={i.id} data-tool={i.id}><ToolRow item={i} queued={pending.has(itemPath(i) || '')} onToggle={(on) => toggle(i, on)}
+                    onDescribe={g.source === 'bot' && i.kind === 'tool' ? (text) => describe(`tools.${i.name}.purpose`, text) : undefined} /></li>
                 ))}
               </ul>
             </div>

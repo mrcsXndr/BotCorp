@@ -65,7 +65,7 @@ export type Tool = {
 };
 export const TOOL_GROUPS: { id: 'harness' | 'own' | 'third'; title: string; license: string; tools: Tool[] }[] = [
   {
-    id: 'harness', title: 'BotCorp harness', license: 'MIT', tools: [
+    id: 'harness', title: 'All bots', license: 'MIT', tools: [
       { name: 'standup', kind: 'skill', purpose: 'Reads the standing board, sweeps what the bot owns, updates the board.', enabled: true },
       { name: 'review-artifact', kind: 'skill', purpose: 'Builds a Yes / No / Don\'t know review page with an answer export.', enabled: true },
       { name: 'vault-guard', kind: 'hook', purpose: 'Blocks any read of the vault and its keys.', enabled: true, lock: 'Security guard: always on' },
