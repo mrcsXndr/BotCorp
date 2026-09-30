@@ -7,6 +7,7 @@ import { Icon } from '../../icons';
 import { deviceName, readCopyOnSelect, writeCopyOnSelect } from '../../lib/browsers';
 import { ago } from '../../lib/settings';
 import { COPY } from '../../lib/copy';
+import { KnowledgePanel } from '../manage/KnowledgeTab';
 
 type ThemeApi = { get(): string; set(t: string): void };
 const themeApi = () => (globalThis as { CockpitTheme?: ThemeApi }).CockpitTheme;
@@ -55,9 +56,9 @@ function PairedBrowsers() {
 }
 
 // Settings is short and global (IA §4): this browser's Appearance and Copy on
-// select, the browsers paired to operate this cockpit (a loopback cockpit
-// only: behind Access the verified identity is the operator), and Help. A
-// bot's own settings are on the bot.
+// select, the knowledge every bot loads (the operator's only), the browsers
+// paired to operate this cockpit (a loopback cockpit only: behind Access the
+// verified identity is the operator), and Help. A bot's own settings are on the bot.
 export function SettingsScreen() {
   const [theme, setTheme] = useState(() => themeApi()?.get() ?? 'auto');
   const [copy, setCopy] = useState(readCopyOnSelect);
@@ -74,6 +75,9 @@ export function SettingsScreen() {
       </Section>
       <Section title={COPY.row.copySelect}
         right={<Switch aria-label={COPY.row.copySelect} isSelected={copy} onChange={(v) => { setCopy(v); writeCopyOnSelect(v); }} />} />
+      <Section title={`${COPY.title.knowledge} · ${COPY.row.allBots}`}>
+        <KnowledgePanel bot={null} />
+      </Section>
       {!exposure ? <Skeleton lines={2} className="px-4 py-4" /> : exposure === 'loopback' && <PairedBrowsers />}
       <Section title={COPY.row.help}>
         <Link to="/help" className="flex items-center gap-2 min-h-[var(--tap)] text-ui text-text no-underline outline-none rounded-btn hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">

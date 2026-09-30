@@ -55,11 +55,53 @@ const confirmDialog = () => waitFor(() => {
 });
 const writes = () => calls.filter((c) => c.method !== 'GET').map((c) => [c.method, c.url, c.body]);
 
-it('the five tabs, in order', async () => {
+it('the six tabs, in order', async () => {
   serve();
   mount('settings');
   await screen.findByRole('textbox', { name: 'Persona' });
-  expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Settings', 'Telegram', 'Secrets', 'Automations', 'Tools']);
+  expect(screen.getAllByRole('tab').map((t) => t.textContent)).toEqual(['Settings', 'Telegram', 'Secrets', 'Automations', 'Tools', 'Knowledge']);
+});
+
+const doc = (id: string, tokens: number) => ({ id, file: `${id}.md`, bytes: tokens * 4, tokens, sha256: 'c'.repeat(64), updated_at: new Date(Date.now() - 2 * 3600e3).toISOString() });
+it('v0.9.9 Knowledge: this bot\'s docs open to edit; "All bots" is read-only here with a link to Settings', async () => {
+  serve({ 'GET /api/bots/example/knowledge': [200, { scope: 'bot', bot: 'example', docs: [doc('CLAUDE', 1200), doc('style', 40)] }],
+    'GET /api/knowledge': [200, { scope: 'global', docs: [doc('house', 25000)] }],
+    'GET /api/bots/example/knowledge/CLAUDE': [200, { ...doc('CLAUDE', 1200), content: '# example\n' }] });
+  mount('knowledge');
+  await screen.findByRole('button', { name: /CLAUDE/ });
+  const house = document.querySelector('[data-doc=house]')!;
+  expect(house.querySelector('button')).toBeNull();
+  expect(house.textContent).toMatch(/~25,000 tokens/);
+  expect(screen.getByText('Over 20k tokens')).toBeTruthy();
+  expect(screen.getByRole('link', { name: 'Edit in Settings' }).getAttribute('href')).toBe('/settings');
+  await userEvent.click(screen.getByRole('button', { name: /CLAUDE/ }));
+  await screen.findByRole('textbox', { name: 'Doc text' });
+  expect(screen.queryByRole('button', { name: 'Delete doc' }), 'CLAUDE.md is never deleted').toBeNull();
+  await userEvent.click(screen.getByText('Preview'));
+  await waitFor(() => expect(document.querySelector('[data-preview] h3')?.textContent).toBe('example'));
+});
+
+it('v0.9.9 Knowledge: a stale save is a 409, and the editor reloads the doc', async () => {
+  let n = 0;
+  serve({ 'GET /api/bots/example/knowledge': [200, { scope: 'bot', bot: 'example', docs: [doc('style', 40)] }], 'GET /api/knowledge': [200, { scope: 'global', docs: [] }],
+    'PUT /api/bots/example/knowledge/style': [409, { ok: false, code: 4, error: 'changed since it was read' }] });
+  const read = { ...doc('style', 40), content: '# old\n' };
+  const fetchFn = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+  const inner = fetchFn.getMockImplementation() as (url: string, init: RequestInit) => Promise<Response>;
+  fetchFn.mockImplementation(async (url: string, init: RequestInit = {}) => {
+    if (url === '/api/bots/example/knowledge/style' && (init.method || 'GET') === 'GET') {
+      n++;
+      return new Response(JSON.stringify(n === 1 ? read : { ...read, content: '# edited by the bot\n' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return inner(url, init);
+  });
+  mount('knowledge');
+  await userEvent.click(await screen.findByRole('button', { name: /style/ }));
+  const field = await screen.findByRole('textbox', { name: 'Doc text' });
+  await userEvent.type(field, 'mine');
+  await userEvent.click(screen.getByRole('button', { name: 'Save' }));
+  await screen.findByText('Changed elsewhere. Reloaded it.');
+  await waitFor(() => expect((screen.getByRole('textbox', { name: 'Doc text' }) as HTMLTextAreaElement).value).toBe('# edited by the bot\n'));
 });
 
 it('the model is a picker over /api/models: its names, and no model input', async () => {

@@ -9,13 +9,14 @@ import { TelegramTab } from './TelegramTab';
 import { SecretsTab } from './SecretsTab';
 import { AutomationsTab } from './AutomationsTab';
 import { ToolsTab } from './ToolsTab';
+import { KnowledgeTab } from './KnowledgeTab';
 
-export const MANAGE_TABS = ['settings', 'telegram', 'secrets', 'automations', 'tools'] as const;
+export const MANAGE_TABS = ['settings', 'telegram', 'secrets', 'automations', 'tools', 'knowledge'] as const;
 type ManageTab = (typeof MANAGE_TABS)[number];
 
 // `#/bots/:name/manage/:tab`: one bot's Settings, Telegram, Secrets,
-// Automations and Tools. Its own tabs, so the cog menu's five entries land
-// on the right one and the address says which.
+// Automations, Tools and Knowledge. Its own tabs, so a link lands on the right
+// one and the address says which. Wider on a desktop (the docs editor).
 export function ManageScreen() {
   const { name = '', tab = 'settings' } = useParams();
   const nav = useNavigate();
@@ -26,7 +27,7 @@ export function ManageScreen() {
   if (!bots.data) return <div className="pt-6"><SkeletonRow /><SkeletonRow /></div>;
   if (!bot) return <EmptyState className="min-h-[60dvh]">{COPY.empty.noBot}</EmptyState>;
   return (
-    <div className="mx-auto w-full max-w-[720px] px-4 pb-6">
+    <div className={`mx-auto w-full ${wide ? 'max-w-[960px]' : 'max-w-[720px]'} px-4 pb-6`}>
       <header className="flex items-center gap-1 pt-[max(8px,env(safe-area-inset-top))] -mx-3">
         <Link to={`/bots/${encodeURIComponent(bot.name)}`} aria-label={COPY.button.back}
           className="grid place-items-center size-[var(--tap)] flex-none rounded-btn text-text-2 outline-none hover:bg-hover active:bg-press focus-visible:outline-2 focus-visible:outline-accent">
@@ -43,6 +44,7 @@ export function ManageScreen() {
         <TabPanel id="secrets"><SecretsTab bot={bot} /></TabPanel>
         <TabPanel id="automations"><AutomationsTab bot={bot} /></TabPanel>
         <TabPanel id="tools"><ToolsTab bot={bot} /></TabPanel>
+        <TabPanel id="knowledge"><KnowledgeTab bot={bot} /></TabPanel>
       </Tabs>
     </div>
   );
