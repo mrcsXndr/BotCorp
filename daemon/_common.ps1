@@ -1448,8 +1448,11 @@ function Get-JanitorMode {
 
 function Get-JanitorArgs {
     # pwsh arguments for resource_monitor.ps1 in a Get-JanitorMode mode: only 'clean' passes -Clean.
+    # -Tg in both: a warn/critical finding goes through tg_send.py --alert
+    # (alerts.log for triage; pushed only when CRITICAL), at most once per
+    # same issue set in 6 h (v0.8.6 R11).
     param([Parameter(Mandatory)][string]$Script, [Parameter(Mandatory)][string]$Mode)
-    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script)
+    $a = @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $Script, '-Tg')
     if ($Mode -eq 'clean') { $a += '-Clean' }
     return , $a
 }

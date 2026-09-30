@@ -260,7 +260,7 @@ def test_get_janitor_mode_decides_on_the_type_first():
     r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", f". '{COMMON}'\n{body}"],
                        capture_output=True, text=True, timeout=120, cwd=str(ASSEMBLY))
     assert r.returncode == 0, r.stderr
-    assert r.stdout.strip().splitlines()[-1] == "True|False|x.ps1|6"
+    assert r.stdout.strip().splitlines()[-1] == "True|False|-Tg|7"   # v0.8.6 R11: -Tg, the alert path
 
 
 @pytest.fixture

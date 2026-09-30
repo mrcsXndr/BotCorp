@@ -6,8 +6,9 @@
 # the operator's own apps, work, or games — only bot-spawned automation.
 #
 # Usage:  pwsh -File tools/infra/resource_monitor.ps1 [-Clean]
-#   -Clean : auto-kill stray agent-browser "Chrome for Testing" orphans (safe:
-#            isolated browser, no user data). Other strays are reported, not killed.
+#   -Clean : auto-kill THIS bot's stray agent-browser "Chrome for Testing"
+#            orphans, hung test runners and old dev servers (see Test-OwnedProc);
+#            anything another bot or the operator owns is reported, never killed.
 # Output: one compact JSON object on stdout. Fail-open (errors never throw).
 #
 # Paths: everything below is parametrized off $env:BOT_HOME (the bot repo —
@@ -63,6 +64,54 @@ function Resolve-Py {
 $Py = Resolve-Py
 
 function Add-Issue($sev,$cat,$detail){ $script:issues += ,([ordered]@{ sev=$sev; cat=$cat; detail=$detail }) }
+
+# --- ownership: only THIS bot's processes are ever reaped (v0.8.6 R11) ---------
+# The daemon runs this per bot, and -Clean used to kill every agent-browser
+# Chrome, hung test runner and old dev server on the box, another bot's or the
+# operator's included. A process is the bot's when its command line names one
+# of the bot's own directories (the agent-browser dir ab.sh gives each bot,
+# ~/.agent-browser/botcorp/<bot>, or the bot home; a path boundary must follow,
+# so bots/alpha is not bots/alpha-mirror) or its parent chain reaches the bot's
+# claude pid (state/<bot>.json). Anything else is reported, never killed.
+# Without BOT_NAME nothing is the bot's, so nothing is reaped.
+function Test-OwnedProc {
+  param($Proc, [hashtable]$Parents, [int]$ClaudePid, [string[]]$Needles = @())
+  $cl = ("$($Proc.CommandLine)" -replace '\\', '/').ToLowerInvariant()
+  foreach ($n in @($Needles)) {
+    if (-not $n) { continue }
+    $k = ("$n" -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
+    $i = $cl.IndexOf($k)
+    while ($i -ge 0) {
+      $end = $i + $k.Length
+      if ($end -ge $cl.Length -or "$($cl[$end])" -in @('/', '"', "'", ' ')) { return $true }
+      $i = $cl.IndexOf($k, $i + 1)
+    }
+  }
+  if ($ClaudePid -gt 0 -and $Parents) {
+    $cur = [int]$Proc.ProcessId
+    for ($d = 0; $d -lt 30 -and $cur -gt 4; $d++) {
+      if (-not $Parents.ContainsKey($cur)) { break }
+      $cur = [int]$Parents[$cur]
+      if ($cur -eq $ClaudePid) { return $true }
+    }
+  }
+  return $false
+}
+$BotName = "$env:BOT_NAME"
+$AbRoot = Join-Path $env:USERPROFILE '.agent-browser'
+$AbDir = if ($BotName) { Join-Path (Join-Path $AbRoot 'botcorp') $BotName } else { '' }
+$ClaudePid = 0; $LiveSession = ''
+if ($BotName -and $env:BOTCORP_HOME) {
+  try {
+    $bs = Get-Content (Join-Path $env:BOTCORP_HOME "state\$BotName.json") -Raw -EA Stop | ConvertFrom-Json
+    if ($bs.claude_pid) { $ClaudePid = [int]$bs.claude_pid }
+    if ($bs.session_id) { $LiveSession = "$($bs.session_id)" }
+  } catch {}
+}
+$OwnDirs = @(if ($BotName) { $AbDir; $BotHome })
+$Parents = @{}
+foreach ($pp in @(Get-CimInstance Win32_Process -EA SilentlyContinue)) { $Parents[[int]$pp.ProcessId] = [int]$pp.ParentProcessId }
+$IsOwn = { param($p, $dirs) Test-OwnedProc -Proc $p -Parents $Parents -ClaudePid $ClaudePid -Needles $dirs }
 
 # --- the duplicate-bridge decision, lifted out so a test can drive it --------
 # Live process ages cannot be faked on a box (you cannot make a real claude.exe
@@ -138,8 +187,12 @@ if (Test-Path $smi) {
 # warns — and with -Clean would kill a session mid-use. $AbKillThreshold is
 # kept as a belt-and-braces cap on TOTAL procs (a huge pile is suspect even
 # with live parents — e.g. the daemon itself is leaking sessions).
-$abAll = Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -EA SilentlyContinue |
-         Where-Object { $_.ExecutablePath -like '*\.agent-browser\*' }
+$abBox = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -EA SilentlyContinue |
+         Where-Object { $_.ExecutablePath -like '*\.agent-browser\*' })
+# this bot's own: its Chrome profiles live under its agent-browser dir
+$abAll = @($abBox | Where-Object { & $IsOwn $_ @($AbDir) })
+$abOthers = $abBox.Count - $abAll.Count
+if ($abOthers -gt 0) { Add-Issue 'info' 'browser' "$abOthers agent-browser Chrome procs of other owners (another bot, the operator): not this bot's, never touched" }
 $abCount = @($abAll).Count
 $abMem = 0
 if ($abCount -gt 0) {
@@ -153,7 +206,7 @@ if ($abCount -gt 0) {
   # what prevents a mid-use kill). STALE/MISSING = a pile ab.sh opened and never
   # closed → reap it whole (root+children). Killing only parent-DEAD procs would
   # leak an abandoned-but-alive session unbounded.
-  $hbFile = Join-Path $env:USERPROFILE '.agent-browser\.botcorp_activity'
+  $hbFile = Join-Path $AbDir '.botcorp_activity'
   $hbAgeMin = 999999
   if (Test-Path $hbFile) { $hbAgeMin = [math]::Round((New-TimeSpan -Start (Get-Item $hbFile).LastWriteTime -End (Get-Date)).TotalMinutes,1) }
   $stale = $hbAgeMin -ge $AbMaxAgeMin
@@ -192,8 +245,15 @@ if ($abCount -gt 0) {
 # dead parent and zero Chrome children before anyone notices by hand.
 # Same orphan rule as above — parent gone = nobody is driving it — and a
 # daemon with no Chrome left is finished by definition.
+# This bot's daemons: the pids its own socket dir records (<session>.pid).
+$ownDaemon = @{}
+if ($AbDir -and (Test-Path -LiteralPath $AbDir)) {
+  foreach ($pf in @(Get-ChildItem -LiteralPath $AbDir -Filter '*.pid' -File -EA SilentlyContinue)) {
+    $v = 0; if ([int]::TryParse("$(Get-Content -LiteralPath $pf.FullName -TotalCount 1 -EA SilentlyContinue)".Trim(), [ref]$v)) { $ownDaemon[$v] = $true }
+  }
+}
 $abDaemons = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
-               Where-Object { $_.Name -like 'agent-browser-*' })
+               Where-Object { $_.Name -like 'agent-browser-*' -and ($ownDaemon[[int]$_.ProcessId] -or (& $IsOwn $_ @($AbDir))) })
 if (@($abDaemons).Count -gt 0) {
   $liveNow = @{}
   Get-Process -EA SilentlyContinue | ForEach-Object { $liveNow[$_.Id] = $true }
@@ -206,7 +266,7 @@ if (@($abDaemons).Count -gt 0) {
   # and its reap would slip to the next tick — one condition, two alerts an
   # hour apart. One tick should leave the box clean.
   $abLive = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -EA SilentlyContinue |
-              Where-Object { $_.ExecutablePath -like '*\.agent-browser\*' }).Count
+              Where-Object { $_.ExecutablePath -like '*\.agent-browser\*' -and (& $IsOwn $_ @($AbDir)) }).Count
   $abDaemonOrphans = @($abDaemons | Where-Object {
     (-not $liveNow[[int]$_.ParentProcessId]) -and $abLive -eq 0
   })
@@ -236,11 +296,13 @@ if (@($abDaemons).Count -gt 0) {
 # harness worker processes, which never carry that flag.
 $testProcs = @(Get-CimInstance Win32_Process -Filter "Name='node.exe'" -EA SilentlyContinue |
   Where-Object { $_.CommandLine -match '(^|\s)--test(\s|$|=)' })
-$hungTests = @($testProcs | Where-Object {
+$hungBox = @($testProcs | Where-Object {
   $started = $null
   try { $started = $_.CreationDate } catch {}
   $started -and ((Get-Date) - $started).TotalMinutes -ge $TestMaxAgeMin
 })
+$hungTests = @($hungBox | Where-Object { & $IsOwn $_ $OwnDirs })
+if ($hungBox.Count -gt $hungTests.Count) { Add-Issue 'info' 'tests' "$($hungBox.Count - $hungTests.Count) hung test-runner proc(s) of other owners: not this bot's, never touched" }
 if (@($hungTests).Count -gt 0) {
   $tMem = [math]::Round((($hungTests | Measure-Object WorkingSetSize -Sum).Sum) / 1MB)
   $oldest = [math]::Round((($hungTests | ForEach-Object { ((Get-Date) - $_.CreationDate).TotalHours } | Measure-Object -Maximum).Maximum), 1)
@@ -347,9 +409,11 @@ $devServers = @(Get-CimInstance Win32_Process -EA SilentlyContinue |
   })
 if (@($devServers).Count -gt 0) {
   $nowT = Get-Date
-  $staleSrv = @($devServers | Where-Object {
+  $staleBox = @($devServers | Where-Object {
     $_.CreationDate -and (New-TimeSpan -Start $_.CreationDate -End $nowT).TotalHours -ge $devSrvMaxAgeH
   })
+  $staleSrv = @($staleBox | Where-Object { & $IsOwn $_ $OwnDirs })
+  if ($staleBox.Count -gt $staleSrv.Count) { Add-Issue 'info' 'node' "$($staleBox.Count - $staleSrv.Count) old dev server proc(s) of other owners: not this bot's, never touched" }
   if (@($staleSrv).Count -gt 0) {
     $oldestH = [math]::Round((($staleSrv | ForEach-Object { (New-TimeSpan -Start $_.CreationDate -End $nowT).TotalHours } | Measure-Object -Maximum).Maximum),1)
     if ($Clean) {
@@ -394,6 +458,17 @@ try {
 # handoff, not by resuming a week-old transcript — so old ones are dead
 # weight. Keep 7d; NEVER touch a 'memory' subdirectory (auto-memory,
 # load-bearing). Once/day (marker-guarded), only under -Clean. Fail-open.
+# A session subdirectory (subagents/, tool-results/) is aged by the NEWEST file
+# anywhere under it: a directory's own mtime moves only when a direct child is
+# added or removed, so a long-running session's dir looked 7 days old while it
+# was being written. The bot's current session (state/<bot>.json) is never pruned.
+function Test-PrunableSessionDir {
+  param([System.IO.DirectoryInfo]$Dir, [datetime]$Cut, [string[]]$Keep = @())
+  if ($Dir.Name -eq 'memory' -or (@($Keep) -contains $Dir.Name)) { return $false }
+  $newest = $Dir.LastWriteTime
+  foreach ($f in @(Get-ChildItem -LiteralPath $Dir.FullName -Recurse -Force -EA SilentlyContinue)) { if ($f.LastWriteTime -gt $newest) { $newest = $f.LastWriteTime } }
+  return ($newest -lt $Cut)
+}
 if ($Clean) {
   try {
     $projectsDir = Join-Path $ConfigHome 'projects'
@@ -407,10 +482,10 @@ if ($Clean) {
       $freed = 0; $n = 0
       foreach ($projDir in Get-ChildItem $projectsDir -Directory -EA SilentlyContinue) {
         Get-ChildItem $projDir.FullName -Filter *.jsonl -File -EA SilentlyContinue |
-          Where-Object { $_.LastWriteTime -lt $cut } |
+          Where-Object { $_.LastWriteTime -lt $cut -and $_.BaseName -ne $LiveSession } |
           ForEach-Object { $freed += $_.Length; $n++; Remove-Item $_.FullName -Force -EA SilentlyContinue }
         Get-ChildItem $projDir.FullName -Directory -EA SilentlyContinue |
-          Where-Object { $_.Name -ne 'memory' -and $_.LastWriteTime -lt $cut } |
+          Where-Object { Test-PrunableSessionDir -Dir $_ -Cut $cut -Keep @($LiveSession) } |
           ForEach-Object { Remove-Item $_.FullName -Recurse -Force -EA SilentlyContinue }
       }
       Set-Content -Path $stamp -Value ((Get-Date).ToUniversalTime().ToString('o')) -Encoding utf8 -EA SilentlyContinue
@@ -464,6 +539,7 @@ $result = [ordered]@{
   gpu                  = $gpu
   agent_browser_chrome = $abCount
   agent_browser_mem_mb = $abMem
+  agent_browser_chrome_others = $abOthers
   claude_procs         = $claudeCount
   node_procs           = $nodeCount
   ram_pct              = $memPct
