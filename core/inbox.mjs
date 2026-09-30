@@ -60,6 +60,7 @@ export const MAX_TEXT_BYTES = 64 * 1024;
 export const HOST_UP_MS = 15_000;   // a started attach host publishes its endpoint
 const SETTLE_MS = 1_500;            // output quiet this long = the TUI has drawn
 const READY_MS = 20_000;            // ... or give up waiting for quiet and type anyway
+const HANDSHAKE_MS = 10_000;        // the pty-host answers the WebSocket upgrade by then
 export const CONFIRM_MS = 30_000;   // the user turn must reach the transcript by then
 export const MAX_ATTEMPTS = 2;      // the first typing, then one retry once the session is idle
 const confirmMs = () => Number(process.env.BOTCORP_INBOX_CONFIRM_MS) || CONFIRM_MS;
@@ -277,17 +278,22 @@ async function deliver(bot, kind, text) {
 
 // Dial, wait for the screen to settle, type, keep the socket for the caller to close.
 // `images`: paths pasted after the text, one bracketed paste each (core/attach.mjs).
-function typeInto(ep, text, images = []) {
+// Always settles: a host that stalls the upgrade (handshakeMs), closes early, or
+// never lets the text go out (an overall deadline) is an error, never a promise
+// left pending that wedges the drainer and its lock.
+export function typeInto(ep, text, images = [], { handshakeMs = HANDSHAKE_MS } = {}) {
   return new Promise((resolve) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * 1024 * 1024 });
+    const ws = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * 1024 * 1024, handshakeTimeout: handshakeMs });
     let last = 0, sent = false, timer = null, done = false;
-    const finish = (err) => { if (done) return; done = true; if (timer) clearInterval(timer); resolve({ ws, err }); };
+    const guard = setTimeout(() => finish(`pty-host: nothing typed within ${(handshakeMs + READY_MS + IMAGE_MAX_MS) / 1000 + 5}s`), handshakeMs + READY_MS + IMAGE_MAX_MS + 5_000);
+    const finish = (err) => { if (done) return; done = true; clearTimeout(guard); if (timer) clearInterval(timer); resolve({ ws, err }); };
     ws.on('message', (raw) => {
       let m; try { m = JSON.parse(raw.toString()); } catch { return; }
       if (m.t === 'o') last = Date.now();
       else if (m.t === 'exit' && !sent) finish(`the session client exited (code ${m.code}) before the text was typed`);
     });
     ws.on('error', (e) => { if (!sent) finish(`pty-host: ${e.message}`); });
+    ws.on('close', (code) => finish(`pty-host closed the connection (code ${code}) before the text was typed`));
     ws.on('open', () => {
       const deadline = Date.now() + READY_MS;
       timer = setInterval(() => {
