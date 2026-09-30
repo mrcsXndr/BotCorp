@@ -579,7 +579,7 @@ def test_the_cockpit_send_route(box):
             assert time.time() < deadline and srv.poll() is None, "cockpit did not come up"
             time.sleep(0.5)
     cookie = urllib.request.urlopen(base + "/", timeout=30).headers["Set-Cookie"].split(";")[0]
-    # v0.9.3: every cockpit write needs the operator (C2)
+    # v0.9.4: every cockpit write needs the operator (C2)
     token = (box["rt"] / "state" / "cockpit-approve-token").read_text(encoding="utf-8").strip()
 
     def call(method, path, body=None):

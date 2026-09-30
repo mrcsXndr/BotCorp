@@ -36,7 +36,8 @@ def test_export_skip_dirs_and_import_drop_git():
         if ln.strip().startswith("const EXPORT_SKIP_DIRS = new Set(")
     )
     assert "'.git'" in line
-    assert "rel.startsWith('.git/')" in text
+    # v0.9.4 (L2): every folder name, case- and trailing-dot-insensitive; behaviour in cli/tests/import-filter.test.mjs
+    assert "s === '.git'" in text
 
 
 def test_export_state_regex_excludes_runtime_state_only():
