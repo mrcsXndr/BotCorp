@@ -64,7 +64,59 @@ export function usage(message) { throw new CliError(message, 2); }
 // cc rollback, a --requested-by label) refuse inside a bot: the launcher
 // gives a session BOT_NAME, Claude Code sets CLAUDECODE. Defense in depth, not
 // a boundary (a bot runs as the same user); the cockpit's runCli strips both.
-export function isOperatorContext(env = process.env) { return !env.BOT_NAME && !env.CLAUDECODE; }
+// Env markers can be stripped (`env -u BOT_NAME -u CLAUDECODE`), so without
+// them this process's ancestry decides as well (ancestorBotSession).
+export function isOperatorContext(env = process.env) {
+  if (env.BOT_NAME || env.CLAUDECODE) return false;
+  return env !== process.env || !ancestorBotSession();
+}
+
+// The bot whose session this process runs under, found by process ancestry, or
+// null. A session's processes are the ones this runtime recorded: a bot's
+// state/<bot>.json claude_pid (a claude executable) and its <bot>.pty.json
+// pty-host (node). One process-table query, cached for the process; a query
+// that fails reads as null (fail-open: this is defense in depth; a caller that
+// orphans itself, or points BOTCORP_HOME at another runtime, still gets past it).
+let ancestorBotMemo;
+export function ancestorBotSession() {
+  if (ancestorBotMemo !== undefined) return ancestorBotMemo;
+  ancestorBotMemo = null;
+  const recorded = new Map();   // pid -> { bot, image: RegExp }
+  let files = [];
+  try { files = fs.readdirSync(STATE_DIR); } catch { return ancestorBotMemo; }
+  for (const f of files) {
+    const m = /^(_?[a-z0-9][a-z0-9-]{0,31})(\.pty)?\.json$/.exec(f);
+    if (!m) continue;
+    const rec = readJson(path.join(STATE_DIR, f));
+    const pid = Number(rec && (m[2] ? rec.pid : rec.claude_pid)) || 0;
+    if (pid > 0) recorded.set(pid, { bot: m[1], image: m[2] ? /^node/i : /claude/i });
+  }
+  if (!recorded.size) return ancestorBotMemo;
+  const table = processTable();
+  if (!table) return ancestorBotMemo;
+  const seen = new Set();
+  for (let pid = process.ppid; pid > 0 && !seen.has(pid); pid = table.get(pid)?.ppid) {
+    seen.add(pid);
+    const hit = recorded.get(pid);
+    if (hit && table.has(pid) && hit.image.test(table.get(pid).name)) return (ancestorBotMemo = hit.bot);
+  }
+  return ancestorBotMemo;
+}
+
+// pid -> { ppid, name } for every process, or null when the query failed.
+const TABLE_PWSH = 'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $($_.Name)" }';
+function processTable() {
+  const r = process.platform === 'win32'
+    ? runPwshCommand(TABLE_PWSH, { timeoutMs: 60_000 })
+    : run('ps', ['-e', '-o', 'pid=,ppid=,comm='], { timeoutMs: 30_000 });
+  if (r.code !== 0) return null;
+  const t = new Map();
+  for (const line of String(r.out).split(/\r?\n/)) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.*?)\s*$/.exec(line);
+    if (m) t.set(Number(m[1]), { ppid: Number(m[2]), name: path.basename(m[3]) });
+  }
+  return t.size ? t : null;
+}
 
 // Admin bots (bot.yaml role: admin; docs/cli.md "Admin bots"). A caller is bot
 // X only when its env carries BOT_NAME=X AND the per-launch id launch.ps1 gave
@@ -82,6 +134,10 @@ export function botRole(bot) {
 // -> { operator, admin, bot, spoofed, why }
 export function callerIdentity(env = process.env) {
   if (isOperatorContext(env)) return { operator: true, admin: false, bot: null, spoofed: false, why: 'the operator (no bot-session markers in the env)' };
+  if (!env.BOT_NAME && !env.CLAUDECODE) {
+    const anc = ancestorBotSession();
+    return { operator: false, admin: false, bot: anc, spoofed: true, why: `this process runs under ${anc}'s session, with its BOT_NAME / CLAUDECODE removed; refused` };
+  }
   const bot = String(env.BOT_NAME || '');
   if (!bot) return { operator: false, admin: false, bot: null, spoofed: false, why: 'a Claude Code session (CLAUDECODE) that names no bot' };
   if (!NAME_RE.test(bot) || !fs.existsSync(botYamlPath(bot))) return { operator: false, admin: false, bot, spoofed: false, why: `BOT_NAME=${bot} names no bot` };

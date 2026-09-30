@@ -45,7 +45,7 @@ const { releaseView, isOlder, cmpVersion } = await import('../core/releases.mjs'
 const {
   ROOT, BOTCORP_HOME, STATE_DIR, NAME_RE, HAND_NAME_RE, SENDER_RE,
   botHome, configDir, botYamlPath, listBots, listFixtureBots,
-  CliError, fail, usage, requireOperator, isOperatorContext, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
+  CliError, fail, usage, requireOperator, isOperatorContext, ancestorBotSession, callerIdentity, auditAdmin, readLaunchId, launchIdFile,
   readJson, readJsonState, writeJsonAtomic, writeTextAtomic,
   pidAlive, firstInt, processParents, botLiveness, pickSessionEnvRecord, sessionEnvVerdict, resolvePluginCommand, pluginCommandVerdict, launcherBunResolve, sessionAliveVerdict, bgPinVerdict, bgJobFile, bgBlockVerdict, sessionSecretEnvVerdict, secretEnvName, contextWindowVerdict, memoryHealthRows, unpushedVerdict, FOREIGN_TG_LOCKS, foreignTgLockVerdict, tgSlotVerdict, tgToolsVerdictOf, toolShimsVerdictOf, scrub, run, runPwshFile, runPwshCommand, resolveClaude, readCcState, runClaude, resolvePython, sleep,
   resolvePwsh, resolveGit, gitExe, PYTHON_LOOKED_IN, matchesAnyGlob, coversMesh,
@@ -1555,7 +1555,13 @@ function cmdWhoami({ flags }) {
 // admin bot) any other. A bot whose launch recorded an id must carry it, so BOT_NAME=<other>
 // set by hand does not pass as "its own".
 function requireBotControl(bot, verb) {
-  if (!process.env.BOT_NAME) return;   // the operator, or their own plain Claude Code (unchanged)
+  if (!process.env.BOT_NAME) {
+    // the operator, or their own plain Claude Code (unchanged); a bot session
+    // with its markers removed is found by ancestry and may control only itself
+    const anc = process.env.CLAUDECODE ? null : ancestorBotSession();
+    if (!anc || anc === bot) return;
+    return void requireOperator(`${verb} ${bot}`, { admin: true, target: bot });
+  }
   if (process.env.BOT_NAME === bot) {
     const want = readLaunchId(bot);
     if (!want || process.env.BOTCORP_LAUNCH_ID === want) return;

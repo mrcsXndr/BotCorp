@@ -10,7 +10,9 @@ Conventions:
 
 - Exit codes: `0` ok, `1` error, `2` usage, `3` duplicate Telegram token, or
   an operator-only verb run from inside a bot session (`BOT_NAME` or
-  `CLAUDECODE` in the env): `approve`, `reject`, `accounts add|remove|seed|use`,
+  `CLAUDECODE` in the env; or, with those removed, a bot's recorded session
+  process among its parents: `state/<bot>.json` `claude_pid`, `<bot>.pty.json`
+  `pid`; v0.9.3): `approve`, `reject`, `accounts add|remove|seed|use`,
   `secrets set|delete|acl|migrate|lock|unlock` (for any bot), `pair <bot> <senderId>`, `cockpit
   expose|unexpose`, `update --apply|--skip`, `cc rollback`, `secrets
   export-bundle`, and any verb given `--requested-by`. A bot also gets exit 3
