@@ -107,6 +107,30 @@ def test_a_week_label_bundles_only_the_sessions_of_that_week(session, monkeypatc
     assert "sess-1" not in out
 
 
+def test_a_failed_weekly_distill_backs_off(session, monkeypatch, capsys):
+    # QA r4 N3: the fallback rewrote the week as concatenated, so every hourly run paid for the LLM again
+    monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "t")
+    (session / "timeline.md").write_text("# now\n", encoding="utf-8")
+    y, w, _ = datetime.now(timezone.utc).isocalendar()
+    wk = timeline.TIMELINES_DIR / f"{y}-W{w:02d}.md"
+    wk.parent.mkdir(parents=True)
+    wk.write_text(f"# Cross-session timelines for {y}-W{w:02d} (concatenated fallback)\n\nx\n", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(timeline.subprocess, "run",
+                        lambda argv, **kw: calls.append(argv) or types.SimpleNamespace(returncode=1, stdout="", stderr="boom"))
+    assert timeline._summarize_week() == 1 and len(calls) == 1
+    assert timeline._summarize_week() == 1 and len(calls) == 1          # inside the window: no second LLM call
+    assert "not retried yet" in capsys.readouterr().out
+    marker = timeline.TIMELINES_DIR / ".weekly_distill_failed"
+    old = marker.stat().st_mtime - 7 * 3600
+    os.utime(marker, (old, old))
+    assert timeline._summarize_week() == 1 and len(calls) == 2          # window over: tried again
+    monkeypatch.setattr(timeline.subprocess, "run",
+                        lambda argv, **kw: types.SimpleNamespace(returncode=0, stdout="# Week\n\n" + "narrative " * 10, stderr=""))
+    os.utime(marker, (old, old))
+    assert timeline._summarize_week() == 0 and not marker.exists()
+
+
 def test_the_installed_claude_knows_the_flag():
     exe = shutil.which("claude")
     if not exe:

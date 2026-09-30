@@ -286,18 +286,35 @@ def _week_is_structural(tp: Path) -> bool:
     return tp.exists() and "(concatenated fallback)" in tp.read_text(encoding="utf-8")[:200]
 
 
+WEEK_RETRY_H = 6
+
+
 def _summarize_week() -> int:
     """Distill the current ISO week's roll-up when the PreCompact hook left it
-    concatenated (memory/timelines/<week>.md). No file yet = nothing to do."""
+    concatenated (memory/timelines/<week>.md). No file yet = nothing to do.
+    A fallback leaves a marker naming the week; the LLM is not tried again for
+    that week within WEEK_RETRY_H hours, and the run still exits 1 so the
+    job's failure streak keeps counting."""
     y, w, _ = datetime.now(timezone.utc).isocalendar()
     week = f"{y}-W{w:02d}"
     tp = TIMELINES_DIR / f"{week}.md"
+    marker = TIMELINES_DIR / ".weekly_distill_failed"
     if not _week_is_structural(tp):
         return 0
+    try:
+        recent = marker.read_text(encoding="utf-8").strip() == week and \
+            datetime.now(timezone.utc).timestamp() - marker.stat().st_mtime < WEEK_RETRY_H * 3600
+    except OSError:
+        recent = False
+    if recent:
+        print(f"SUMMARY: weekly distill for {week} fell back under {WEEK_RETRY_H} h ago; not retried yet")
+        return 1
     cmd_distill(week)
     if not _week_is_structural(tp):
+        marker.unlink(missing_ok=True)
         print(f"SUMMARY: distilled the weekly timeline {week} ({DISTILL_MODEL})")
         return 0
+    marker.write_text(week, encoding="utf-8")
     print(f"SUMMARY: weekly distill fell back to concatenation for {week} (the reason is on stderr above)")
     return 1
 
