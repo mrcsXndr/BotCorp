@@ -9,7 +9,8 @@
 #
 # Each tick, under one global mutex (Global\BotCorpDaemon):
 #   machine: keep the cockpit alive (/healthz; loopback-only unless <rt>/access.json
-#            exists), keep the OTel sink alive if present, hourly harness update
+#            exists), keep the OTel sink alive while some bot has module
+#            telemetry on, hourly harness update
 #            CHECK (records releases only), APPLY of an admin-requested release
 #            only when every bot is at a safe point (then the bots restart),
 #            hourly Claude Code check (daemon/cc.ps1: pin, stage, a detached
@@ -176,13 +177,23 @@ function Invoke-CockpitKeepalive {
 function Invoke-OtelSinkKeepalive {
     # daemon/otel-sink.mjs (optional, written separately): loopback OTLP receiver
     # that records {port, pid} in <rt>/state/otel.json. Restart when its pid is gone.
-    param([switch]$AsDryRun)
+    # Only while some bot has module telemetry on ($Wanted); with none, a running
+    # sink is stopped, unless a bot.yaml was unreadable this tick ($Unsure).
+    param([bool]$Wanted, [bool]$Unsure, [switch]$AsDryRun)
     try {
         $sink = Join-Path $PSScriptRoot 'otel-sink.mjs'
         if (-not (Test-Path $sink)) { return }
         $o = Read-JsonFile -Path (Join-Path $StateDir 'otel.json')
         $opid = 0; try { if ($o -and $o.pid) { $opid = [int]$o.pid } } catch {}
-        if ($opid -gt 0 -and (Test-ProcAlive $opid @('node'))) { return }
+        $alive = ($opid -gt 0 -and (Test-ProcAlive $opid @('node')))
+        if (-not $Wanted) {
+            if ($alive -and -not $Unsure) {
+                if ($AsDryRun) { Write-DaemonLog "DRYRUN would stop otel-sink pid $opid (no bot has module telemetry)"; return }
+                [void](Stop-BotProcessTree -ProcId $opid -Why 'otel-sink: no bot has module telemetry')
+            }
+            return
+        }
+        if ($alive) { return }
         if ($AsDryRun) { Write-DaemonLog 'DRYRUN would start otel-sink'; return }
         if (-not $nodeExe) { return }
         $newPid = Start-Hidden -Exe $nodeExe -Arguments @($sink) -WorkingDirectory $BotCorp
@@ -788,7 +799,7 @@ function Start-BotCold {
 function Invoke-BotTick {
     param([string]$Bot)
     $P = Get-BotPaths -Bot $Bot
-    $cfg = Get-BotConfig -Bot $Bot
+    $cfg = $(if ($script:BotCfg -and $script:BotCfg.ContainsKey($Bot)) { $script:BotCfg[$Bot] } else { Get-BotConfig -Bot $Bot })
     if (-not $cfg) { Write-DaemonLog 'skipped (bot.yaml unreadable/invalid)' -Bot $Bot; return }
     $hasTg = Test-BotModule $cfg 'telegram'
     $service = Get-BotSessionKind $cfg
@@ -1106,6 +1117,7 @@ try {
     $script:RestartAllWhy = $null
     $script:Observed = @{}
     $script:Failover = @{}
+    $script:BotCfg = @{}
     if (-not $ProbeOnly) {
         # state schema v2 has its own version (`schema` in each file), migrated here, not by
         # harness/migrations (that number is bot.yaml's); a no-op once every file is v2
@@ -1113,10 +1125,15 @@ try {
         # one measurement per tick, persisted as state/<bot>.json `observed` (state schema v2)
         $script:Observed = Update-BotsObserved -NoWrite:$DryRun
         Invoke-CockpitKeepalive -AsDryRun:$DryRun
-        Invoke-OtelSinkKeepalive -AsDryRun:$DryRun
         Invoke-UpdateCheck -AsDryRun:$DryRun
         Invoke-CcCheck -AsDryRun:$DryRun
         $script:RestartAllWhy = Invoke-UpdateApply -AsDryRun:$DryRun
+        # every bot.yaml once, after a possible apply (Invoke-BotTick uses these),
+        # so the sink runs only while some bot has module telemetry on, and is up
+        # before any launch this tick
+        foreach ($b in @(Get-BotList)) { $script:BotCfg[$b] = Get-BotConfig -Bot $b }
+        $cfgs = @($script:BotCfg.Values)
+        Invoke-OtelSinkKeepalive -Wanted (@($cfgs | Where-Object { $_ -and (Test-BotModule $_ 'telemetry') }).Count -gt 0) -Unsure (@($cfgs | Where-Object { -not $_ }).Count -gt 0) -AsDryRun:$DryRun
     }
     $bots = @(Get-BotList)
     if ($bots.Count -eq 0) { Write-DaemonLog "no bots under $BotsDir" }

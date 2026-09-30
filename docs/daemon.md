@@ -420,7 +420,9 @@ machine steps
                         (no --roster; fail-open: a failed run leaves the previous record and its `at`)
   cockpit keepalive     GET /healthz; down -> hidden `node cockpit/server.mjs`; capped 3 starts / 30 min;
                         LOOPBACK-ONLY unless <rt>/access.json exists (integrations.access), whatever cockpit.json's bind says
-  otel-sink keepalive   if daemon/otel-sink.mjs exists and state/otel.json's pid is gone
+  otel-sink keepalive   after update apply, from every bot.yaml read once for the tick: while some bot has module
+                        telemetry on, start daemon/otel-sink.mjs when state/otel.json's pid is gone; with none,
+                        stop a running sink (unless a bot.yaml was unreadable this tick)
   update check          hourly: daemon/update.ps1 -Check (records releases + What/Why/Value; never applies, never messages)
   update apply          only a release with status apply_requested (admin action via CLI/cockpit), and only when
                         EVERY bot's phase this tick is idle, blocked, down or stopped (working, starting,

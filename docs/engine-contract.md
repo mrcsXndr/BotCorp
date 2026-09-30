@@ -83,7 +83,7 @@ the daemon tick runs a module's job only for bots that have it on.
 | `auto_commit` | on | the `auto-commit` Stop hook |
 | `memory_sync` | off | the `memory-sync` Stop hook |
 | `sound` | off | the `play-sound` Stop hook |
-| `telemetry` | on | the OpenTelemetry env at launch, the hub push's subagent rollup. `cost_meter` meters what the sink records, so with `telemetry` off it records nothing. The machine's OTel sink (`daemon/otel-sink.mjs`) is kept alive by the tick for every bot, on or off |
+| `telemetry` | on | the OpenTelemetry env at launch, the hub push's subagent rollup. `cost_meter` meters what the sink records, so with `telemetry` off it records nothing. The machine's OTel sink (`daemon/otel-sink.mjs`) is kept alive by the tick only while some bot has `telemetry` on |
 | `review_board` | off | `review_board.py` and the board line in the session-start context |
 | `auto_roll` | off | the tick's fresh restart at a declared breakpoint once the last-turn context passes `harness.roll_tokens` (`docs/daemon.md` "Auto-roll") |
 | `session_summarize` | on | the `session-summarize` Stop hook (a disk snapshot per turn in `memory/sessions/<stamp>.md`) |
