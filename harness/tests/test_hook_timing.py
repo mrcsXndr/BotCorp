@@ -130,6 +130,19 @@ def test_the_file_is_cut_to_the_last_2000_lines(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node")
+def test_a_failed_rotation_leaves_no_tmp_file(tmp_path):
+    rt = tmp_path / "rt"
+    d = rt / "state" / "t"
+    d.mkdir(parents=True)
+    old = json.dumps({"ts": "2026-01-01T00:00:00Z", "hook": "old", "ms": 1, "rc": 0, "pad": "x" * 60})
+    (d / "hooks-timing.jsonl").write_text((old + "\n") * 4000, encoding="utf-8")
+    js = (f"import fs from 'node:fs'; import {{ recordTiming }} from '{(HOOKS / '_timing.mjs').as_uri()}';"
+          "fs.renameSync = () => { throw new Error('EPERM'); }; recordTiming('x', 1, 0);")
+    subprocess.run(["node", "--input-type=module", "-e", js], env=_env(rt), capture_output=True, timeout=60, check=True)
+    assert [p.name for p in d.iterdir()] == ["hooks-timing.jsonl"]
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node")
 def test_guard_records_its_entry_points_only(tmp_path):
     rt = tmp_path / "rt"
     (rt / "state" / "t").mkdir(parents=True)

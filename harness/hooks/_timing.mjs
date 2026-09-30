@@ -27,7 +27,11 @@ export function recordTiming(hook, ms, rc, timedOut = false, env = process.env) 
     if (fs.statSync(file).size <= MAX_BYTES) return;
     const lines = fs.readFileSync(file, 'utf-8').split('\n').filter(Boolean).slice(-KEEP);
     const tmp = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(tmp, lines.join('\n') + '\n');
-    fs.renameSync(tmp, file);
+    try {
+      fs.writeFileSync(tmp, lines.join('\n') + '\n');
+      fs.renameSync(tmp, file);
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
   } catch {}
 }
