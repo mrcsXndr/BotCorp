@@ -7,7 +7,8 @@
 //   bots/<name>/.claude/settings.json                 GENERATED (header says so): env,
 //                                                     permissions, model, effortLevel,
 //                                                     statusLine, autoMemoryDirectory,
-//                                                     disabledSkills, autoContinueAtUsageLimit.
+//                                                     disabledSkills, autoContinueAtUsageLimit,
+//                                                     claudeMdExcludes (the operator's ~/.claude/CLAUDE.md).
 //                                                     harness.disable: skill:<x> joins disabledSkills,
 //                                                     agent:<x> and a tools: entry with enabled: false
 //                                                     become permissions.deny rules.
@@ -54,6 +55,7 @@
 // and a core update must not be able to clobber them.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadBotYaml, validate, resolveContextWindow } from './botyaml.mjs';
@@ -132,6 +134,10 @@ export function buildSettings(cfg, { botcorpRoot, botHome, nodeExe }) {
     // A background session (harness.session: bg) must run IN the bot folder:
     // an isolated worktree would detach it from memory/ and the config home.
     worktree: { bgIsolation: 'none' },
+    // Claude Code walks up from the bot folder and loads <home>/.claude/CLAUDE.md
+    // as PROJECT memory: the operator's own user instructions, which a bot with
+    // its own config home must not get.
+    claudeMdExcludes: [fwd(path.join(os.homedir(), '.claude', 'CLAUDE.md'))],
   };
   // harness.disable: skill:<x> is hidden like a skill left out of harness.skills;
   // agent:<x> gets a deny rule, so the session cannot start that subagent.

@@ -9,6 +9,7 @@ switches the `backup` entry of BOT_MODULES, and `sync` dropping the
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -216,6 +217,20 @@ def test_sync_puts_the_context_window_in_the_config_home_env(tmp_path):
     (cfg_home / "settings.json").write_text(json.dumps({"env": {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": "250000"}}), encoding="utf-8")
     assert _node(str(SYNC), "theta", "--botcorp", str(root)).returncode == 0
     assert "env" not in json.loads((cfg_home / "settings.json").read_text(encoding="utf-8"))
+
+
+def test_sync_excludes_the_operators_user_claude_md(tmp_path):
+    """v0.8.5: Claude Code walks up from the bot folder and loads
+    <home>/.claude/CLAUDE.md (the operator's own user memory) as project memory;
+    the generated settings exclude it (claudeMdExcludes, absolute path)."""
+    root = _root_with_bot(tmp_path, "iota", "name: iota\n")
+    home = tmp_path / "fakehome"
+    home.mkdir()
+    r = subprocess.run(["node", str(SYNC), "iota", "--botcorp", str(root)], capture_output=True, text=True, timeout=60,
+                       env={**os.environ, "USERPROFILE": str(home), "HOME": str(home)})
+    assert r.returncode == 0, r.stderr
+    proj = json.loads((root / "bots" / "iota" / ".claude" / "settings.json").read_text(encoding="utf-8"))
+    assert proj["claudeMdExcludes"] == [str(home / ".claude" / "CLAUDE.md").replace("\\", "/")]
 
 
 def test_sync_does_not_add_the_disclaimer_key_for_a_default_permissions_bot(tmp_path):

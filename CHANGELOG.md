@@ -33,6 +33,10 @@ versions follow SemVer.
   which Claude Code applies over an inherited value, together with
   `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=100` (ignored, so the inherited 50 no
   longer halves the window). `auto` removes both; other `env` keys are kept.
+- **Fixed: the operator's `~/.claude/CLAUDE.md` no longer loads into bots.**
+  Claude Code walks up from the bot folder and loaded it as project memory.
+  The generated `.claude/settings.json` now carries
+  `claudeMdExcludes: ["<home>/.claude/CLAUDE.md"]`.
 
 ## v0.8.4
 
