@@ -35,7 +35,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
   // exit once the write drained (a piped stdout is async on Windows); never resolves
   await new Promise(() => stream.write(text, () => process.exit(1)));
 }
-const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow, MODEL_TIERS } = await import('../daemon/botyaml.mjs');
+const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow, MODEL_TIERS, DESCRIPTION_MAX } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
@@ -855,7 +855,7 @@ function cmdPair({ pos, flags }) {
 }
 
 // ---- config: the guarded writer -------------------------------------------------------
-const AUTOMATION_FIELDS = new Set(['enabled', 'secrets', 'timeout_min', 'max_per_day', 'idle_gated', 'critical', 'command', 'trigger', 'backoff']);
+const AUTOMATION_FIELDS = new Set(['enabled', 'secrets', 'timeout_min', 'max_per_day', 'idle_gated', 'critical', 'command', 'trigger', 'backoff', 'description']);
 const DM_RANK = { disabled: 0, allowlist: 1, pairing: 2 };   // higher = accepts more senders
 
 function parseValue(text) {
@@ -883,8 +883,8 @@ function checkKnownPath(segs, { forGet = false } = {}) {
   if (segs[0] === 'name' && !forGet) fail('config set: renaming a bot is not supported here (the folder and the config home would have to move)');
   // a registry entry's switch (DEFAULTS.tools is null: the list is the bot's own)
   if (segs[0] === 'tools' && segs.length > 1) {
-    if (segs.length === 3 && segs[2] === 'enabled') return;
-    fail(`config: unknown path ${segs.join('.')} (tools.<name>.enabled)`);
+    if (segs.length === 3 && ['enabled', 'purpose'].includes(segs[2])) return;
+    fail(`config: unknown path ${segs.join('.')} (tools.<name>.enabled | tools.<name>.purpose)`);
   }
   let d = DEFAULTS;
   for (let i = 0; i < segs.length; i++) {
@@ -1011,6 +1011,8 @@ function botMaySet(segs) {
   const p = segs.join('.');
   if (['model', 'effort', 'persona', 'integrations.hub.interval_s'].includes(p)) return true;
   if (segs.length === 3 && segs[0] === 'harness' && segs[1] === 'modules') return true;
+  // the one line the cockpit shows for a job or a tool: words, not capability
+  if (segs.length === 3 && ((segs[0] === 'automations' && segs[2] === 'description') || (segs[0] === 'tools' && segs[2] === 'purpose'))) return true;
   if (segs.length === 2 && segs[0] === 'suggest') return true;
   return false;
 }
@@ -1160,6 +1162,12 @@ function cmdConfig({ pos, flags }) {
   if (!dotted || rest.length === 0) usage('config set <bot> <path> <value>');
   const segs = splitPath(dotted);
   checkKnownPath(segs);
+  // a description / purpose is text as typed ("42" stays a string), one line, capped
+  if (segs.length === 3 && ['description', 'purpose'].includes(segs[2])) {
+    const text = rest.join(' ').trim();
+    if (text.length > DESCRIPTION_MAX || /[\r\n]/.test(text)) usage(`config set: ${dotted}: one line, at most ${DESCRIPTION_MAX} characters`);
+    return queueOrApply(bot, { segs, value: text, flags });
+  }
   return queueOrApply(bot, { segs, value: parseValue(rest.join(' ')), flags });
 }
 

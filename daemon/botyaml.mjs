@@ -47,7 +47,11 @@ export function harnessAgentNames() {
 export const MODEL_TIERS = (() => {
   try { return JSON.parse(fs.readFileSync(path.join(HARNESS_DIR, 'models.json'), 'utf-8')).tiers || {}; } catch { return {}; }
 })();
-const EXPLICIT_MODEL_RE = /^(claude-[a-z0-9][a-z0-9.-]*|default|opus|sonnet|haiku|opusplan)(\[1m\])?$/;
+const EXPLICIT_MODEL_RE = /^(claude-[a-z0-9][a-z0-9.-]*|default|opus|sonnet|haiku|fable|opusplan)(\[1m\])?$/;
+// Claude Code's effort levels (its `initialize` reply lists them per model; core/ccprobe.mjs).
+export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
+// automations[].description and a set tools[].purpose: the one line the cockpit shows.
+export const DESCRIPTION_MAX = 200;
 export function resolveModel(model) {
   const t = typeof model === 'string' && Object.hasOwn(MODEL_TIERS, model) ? MODEL_TIERS[model] : null;
   return t ? { id: t.id, effort: t.effort ?? null, tier: model } : { id: model, effort: 'high', tier: null };
@@ -57,7 +61,8 @@ export const DEFAULTS = {
   name: null,
   persona: 'A sharp, dry, loyal assistant: leads with action and never over-explains.',
   model: 'top',                     // a tier (top | workhorse | tiny | hyper) or an explicit model id
-  effort: null,                     // null = the tier's effort (high for an explicit id)
+  effort: null,                     // null = the tier's effort (high for an explicit id); else low | medium | high | xhigh | max
+  ultracode: false,                 // true: sync writes `ultracode: true` into .claude/settings.json (workflows on every task; much more of the limit)
   permissions: 'bypass',            // bypass | default
   harness: {
     channel: 'stable',              // stable | pinned
@@ -164,6 +169,8 @@ export function validate(cfg) {
   if (!NAME_RE.test(String(cfg.name || ''))) errs.push(`name: must match ${NAME_RE} (got ${JSON.stringify(cfg.name)})`);
   if (!['bypass', 'default'].includes(cfg.permissions)) errs.push(`permissions: bypass | default (got ${cfg.permissions})`);
   if (!(typeof cfg.model === 'string' && (Object.hasOwn(MODEL_TIERS, cfg.model) || EXPLICIT_MODEL_RE.test(cfg.model)))) errs.push(`model: a tier (${Object.keys(MODEL_TIERS).join(' | ')}) or a model id like ${(MODEL_TIERS.top && MODEL_TIERS.top.id) || 'claude-<family>-<version>'} (got ${JSON.stringify(cfg.model)})`);
+  if (!(cfg.effort === null || EFFORT_LEVELS.includes(cfg.effort))) errs.push(`effort: ${EFFORT_LEVELS.join(' | ')} or null (the tier's own) (got ${JSON.stringify(cfg.effort)})`);
+  if (typeof cfg.ultracode !== 'boolean') errs.push(`ultracode: true | false (got ${JSON.stringify(cfg.ultracode)})`);
   // Claude only (locked 2026-09-24): there is no driver seam, so a `cli:` key is a mistake, not a choice.
   if ('cli' in cfg) errs.push(`cli: not a bot.yaml key (Claude Code is the only CLI; got ${JSON.stringify(cfg.cli)})`);
   // Any other unknown top-level key is a typo that would otherwise be silently ignored.
@@ -229,6 +236,7 @@ export function validate(cfg) {
     else if (/^([\\/]|[a-zA-Z]:)/.test(t.path) || t.path.split(/[\\/]/).includes('..')) errs.push(`tools[${i}].path: relative to the bot folder, no '..' (got ${JSON.stringify(t.path)})`);
     else if (/[*?[]/.test(t.path) && !['lib', 'cli'].includes(t.kind)) errs.push(`tools[${i}].path: a glob only for kind lib | cli (got ${JSON.stringify(t.path)} as ${t.kind})`);
     if (t.enabled !== undefined && typeof t.enabled !== 'boolean') errs.push(`tools[${i}].enabled: true | false (got ${JSON.stringify(t.enabled)})`);
+    if (t.purpose !== undefined && t.purpose !== null && typeof t.purpose !== 'string') errs.push(`tools[${i}].purpose: one line of text (got ${JSON.stringify(t.purpose)})`);
     if (t.secrets !== undefined) {
       const declared = new Set(Array.isArray(cfg.secrets) ? cfg.secrets.map(String) : []);
       const extra = (Array.isArray(t.secrets) ? t.secrets.map(String) : [String(t.secrets)]).filter((k) => !declared.has(k));
@@ -265,6 +273,9 @@ export function validate(cfg) {
     }
     const t = a.trigger || {};
     if (!t.cron && !t.interval_min && !t.event) errs.push(`automations[${i}].trigger: cron | interval_min | event required`);
+    if (a.description !== undefined && a.description !== null && !(typeof a.description === 'string' && a.description.length <= DESCRIPTION_MAX && !/[\r\n]/.test(a.description))) {
+      errs.push(`automations[${i}].description: one line, at most ${DESCRIPTION_MAX} characters (got ${JSON.stringify(a.description).slice(0, 80)})`);
+    }
     // verify: {fresh: <file, relative to the bot folder or absolute>, max_age_min: N}: after a
     // run that exited 0 the file must be at most N minutes old, else one alerts.log line
     if (a.verify !== undefined) {

@@ -476,7 +476,9 @@ Non-widening paths apply immediately (written to `bot.yaml`, then `sync`;
 effective at the next session roll): `model`, `effort`, `persona`,
 `harness.modules.*`, `harness.hooks_disable`, `automations.<name>.enabled`
 (except a bot turning a disabled one on), `suggest.*`,
-`integrations.hub.interval_s`, every `remove`, and the narrowing values of the
+`integrations.hub.interval_s`, `automations.<name>.description` and
+`tools.<name>.purpose` (one line of text, at most 200 characters, stored as
+typed), every `remove`, and the narrowing values of the
 paths in the table below. From a bot session that list is an ALLOWLIST
 (v0.9.3): any other path queues, whatever its value, e.g.
 `automations.<name>.command|trigger|timeout_min|...`, `backup.*`,
