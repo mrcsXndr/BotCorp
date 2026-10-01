@@ -770,8 +770,17 @@ rolls only when ALL of these hold, and anything it cannot read counts as no:
    holds no start of this session without its stop;
 3. `<config>/botcorp/status.json` belongs to this session, is under 60 min
    old, and its last-turn context (`context_window.current_usage`: input +
-   cache read + cache creation) is above `harness.roll_tokens` (500000);
+   cache read + cache creation) is above the roll threshold;
 4. `memory/sessions/<session>/journal.md` was written in the last 30 min.
+
+The roll threshold is `harness.roll_tokens` (500000), capped at 80% of the
+auto-compact point: the window every launch sets from `harness.context_window`,
+or the model's own window for `auto`. Claude Code compacts a little before that
+point, so a threshold at or above it could never fire. `botyaml.mjs
+rollThreshold` is the one place this is computed: the tick reads it as
+`_roll_tokens`, the launch passes it to `context_warn` as `BOT_ROLL_TOKENS`,
+and `--validate` and the doctor (`<bot>: roll threshold`) warn when
+`roll_tokens` is at or above the compact point.
 
 Then it is an ordinary restart (start cap, busy gate, claude pid), with
 `.claude/.botcorp_fresh_restart` written just before `restart.ps1` is spawned,

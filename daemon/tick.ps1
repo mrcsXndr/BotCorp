@@ -447,8 +447,9 @@ function Get-AutoRollWhy {
     #   no subagent runs (bg: the job record's `fan` / `inFlight.kinds`; pty:
     #     a subagents.jsonl start of this session with no stop);
     #   <config>/botcorp/status.json is this session's, < 60 min old, and its
-    #     last-turn context (context_window.current_usage) is above
-    #     harness.roll_tokens (500000);
+    #     last-turn context (context_window.current_usage) is above the roll
+    #     threshold: botyaml.mjs rollThreshold (`_roll_tokens`), i.e.
+    #     harness.roll_tokens capped below the auto-compact point;
     #   the session journal was written within 30 min (the handoff is on disk).
     # -> the restart reason, or ''.
     param([string]$Bot, $Cfg, [hashtable]$Paths, [string]$BgId, [string]$SessionId)
@@ -483,10 +484,13 @@ function Get-AutoRollWhy {
         $u = $s.context_window.current_usage
         $ctx = 0.0; foreach ($k in @('input_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')) { try { if ($null -ne $u.$k) { $ctx += [double]$u.$k } } catch {} }
         $limit = 500000.0; try { if ($Cfg.harness.roll_tokens) { $limit = [double]$Cfg.harness.roll_tokens } } catch {}
-        if ($ctx -le $limit) { return (& $no "context $([int]($ctx / 1000))K <= roll_tokens $([int]($limit / 1000))K") }
+        $set = $limit; try { if ($Cfg._roll_tokens) { $limit = [double]$Cfg._roll_tokens } } catch {}
+        $label = "roll_tokens $([int]($limit / 1000))K"
+        if ($limit -lt $set) { $label = "roll threshold $([int]($limit / 1000))K (roll_tokens $([int]($set / 1000))K capped below the $([int]([double]$Cfg._compact_at / 1000))K compact point)" }
+        if ($ctx -le $limit) { return (& $no "context $([int]($ctx / 1000))K <= $label") }
         $jf = Join-Path (Join-Path (Join-Path (Join-Path $Paths.BotHome 'memory') 'sessions') $SessionId) 'journal.md'
         if (-not (Test-Path -LiteralPath $jf) -or ((Get-Date) - (Get-Item -LiteralPath $jf).LastWriteTime).TotalMinutes -gt 30) { return (& $no 'journal not written in the last 30 min') }
-        return "auto-roll: context $([int]($ctx / 1000))K > roll_tokens $([int]($limit / 1000))K at a declared breakpoint"
+        return "auto-roll: context $([int]($ctx / 1000))K > $label at a declared breakpoint"
     } catch { Write-DaemonLog "auto-roll: swallowed exception (fail-open, no roll): $($_.Exception.Message)" -Bot $Bot; return '' }
 }
 

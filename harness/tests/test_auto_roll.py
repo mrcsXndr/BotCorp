@@ -31,7 +31,7 @@ SID = "11111111-2222-3333-4444-555555555555"
 BG = "a1b2c3d4"
 
 PROBE = r"""
-param([string]$Tick, [string]$Root, [string]$Bg, [string]$Sid, [string]$Fresh, [string]$Busy, [string]$Roll)
+param([string]$Tick, [string]$Root, [string]$Bg, [string]$Sid, [string]$Fresh, [string]$Busy, [string]$Roll, [string]$CfgFile)
 $ErrorActionPreference = 'Continue'
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($Tick, [ref]$null, [ref]$null)
 $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-AutoRollWhy' }, $true)
@@ -42,6 +42,7 @@ function Read-JsonFile { param($Path) try { Get-Content -Raw -LiteralPath $Path 
 function Test-BreakpointFresh { param($Bot) $Fresh -eq '1' }
 function Test-SessionBusy { param($Bot) $Busy -eq '1' }
 $cfg = [pscustomobject]@{ harness = [pscustomobject]@{ roll_tokens = $(if ($Roll) { [int]$Roll } else { 500000 }) } }
+if ($CfgFile) { $cfg = Get-Content -Raw -LiteralPath $CfgFile | ConvertFrom-Json }
 $paths = @{ BotHome = (Join-Path $Root 'bot'); ConfigDir = (Join-Path $Root 'cfg'); BotStateDir = (Join-Path $Root 'state') }
 $why = Get-AutoRollWhy -Bot 't' -Cfg $cfg -Paths $paths -BgId $Bg -SessionId $Sid
 [pscustomobject]@{ why = "$why"; logs = @($script:logs) } | ConvertTo-Json -Compress
@@ -69,12 +70,12 @@ def _box(tmp: Path, *, ctx=620000, status_sid=SID, status_age_s=60, journal_age_
     return bot, state
 
 
-def _why(tmp, bg=BG, sid=SID, fresh="1", busy="0", roll=""):
+def _why(tmp, bg=BG, sid=SID, fresh="1", busy="0", roll="", cfg_file=""):
     ps = tmp / "probe.ps1"
     ps.write_text(PROBE, encoding="utf-8")
     r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ps),
                         "-Tick", str(ASSEMBLY / "daemon" / "tick.ps1"), "-Root", str(tmp), "-Bg", bg, "-Sid", sid,
-                        "-Fresh", fresh, "-Busy", busy, "-Roll", roll], capture_output=True, text=True, timeout=120)
+                        "-Fresh", fresh, "-Busy", busy, "-Roll", roll, "-CfgFile", str(cfg_file)], capture_output=True, text=True, timeout=120)
     assert r.returncode == 0, r.stderr + r.stdout
     return json.loads(r.stdout.strip().splitlines()[-1])
 
@@ -146,3 +147,60 @@ def test_the_tick_asks_only_with_the_module_and_marks_fresh_before_the_restart()
     marker = body.index("Set-Content -LiteralPath $P.FreshMarker")
     assert body.index("if ($autoRoll) {") < marker < body.index("Start-RestartDetached")
     assert body.index("Test-SessionBusy -Bot $Bot -LimitBlocked:$stuck") < marker   # every gate first
+
+
+# v0.9.13: a live bot ran context_window 50% (a 500K compact point) with the
+# default roll_tokens 500000. Claude Code compacted at 467-493K every time, so
+# the context never passed 500K and the roll never fired (21 compactions, no
+# fresh session in 5 days).
+def _effective(tmp_path, harness: str, model: str = "claude-opus-5-5") -> tuple[dict, subprocess.CompletedProcess]:
+    f = tmp_path / "bot.yaml"
+    f.write_text(f"name: v\nmodel: {model}\nharness:\n{harness}", encoding="utf-8")
+    eff = subprocess.run(["node", str(ASSEMBLY / "daemon" / "botyaml.mjs"), str(f)], capture_output=True, text=True, timeout=60)
+    assert eff.returncode == 0, eff.stderr
+    val = subprocess.run(["node", str(ASSEMBLY / "daemon" / "botyaml.mjs"), str(f), "--validate"], capture_output=True, text=True, timeout=60)
+    return json.loads(eff.stdout), val
+
+
+@pytest.mark.parametrize("harness,model,compact_at,roll", [
+    ("  context_window: 50%\n", "claude-opus-5-5", 500000, 400000),                   # the live case: capped
+    ("  context_window: 70%\n", "claude-opus-5-5", 700000, 500000),                   # the default: roll_tokens stands
+    ("  context_window: auto\n", "claude-opus-5-5", 1000000, 500000),                 # auto = the model's window
+    ("  context_window: 70%\n", "claude-haiku-4-5-20251001", 140000, 112000),         # a 200K model
+    ("  context_window: 50%\n  roll_tokens: 300000\n", "claude-opus-5-5", 500000, 300000),
+])
+def test_the_roll_threshold_sits_below_the_compact_point(tmp_path, harness, model, compact_at, roll):
+    cfg, _ = _effective(tmp_path, harness, model)
+    assert (cfg["_compact_at"], cfg["_roll_tokens"]) == (compact_at, roll)
+    assert cfg["_roll_tokens"] <= 0.8 * cfg["_compact_at"]
+
+
+def test_validate_warns_when_roll_tokens_reaches_the_compact_point(tmp_path):
+    _, val = _effective(tmp_path, "  context_window: 50%\n")
+    assert val.returncode == 0, val.stderr                       # a warning, never a launch-blocking error
+    assert "bot.yaml: warning: harness.roll_tokens 500000 >= the auto-compact point 500000" in val.stderr, val.stderr
+    _, val = _effective(tmp_path, "  context_window: 70%\n")
+    assert val.returncode == 0 and "warning" not in val.stderr, val.stderr
+
+
+@needs_win
+def test_the_tick_rolls_below_the_compact_point(tmp_path):
+    cfg, _ = _effective(tmp_path, "  context_window: 50%\n")
+    cf = tmp_path / "effective.json"
+    cf.write_text(json.dumps(cfg), encoding="utf-8")
+    _box(tmp_path, ctx=450000)                                   # past 80% of 500K, short of the compaction
+    out = _why(tmp_path, cfg_file=cf)
+    assert out["why"] == ("auto-roll: context 450K > roll threshold 400K (roll_tokens 500K capped below the 500K "
+                          "compact point) at a declared breakpoint"), out
+
+
+def test_doctor_warns_when_roll_tokens_reaches_the_compact_point(tmp_path):
+    from test_operator_only import cli, make_bot, operator_env
+    rt, bots = tmp_path / "rt", tmp_path / "bots"
+    (rt / "state").mkdir(parents=True)
+    make_bot(bots, "w", "name: w\nmodel: claude-opus-5-5\nharness:\n  service: manual\n  context_window: 50%\n")
+    make_bot(bots, "p", "name: p\nmodel: claude-opus-5-5\nharness:\n  service: manual\n")
+    r = cli(operator_env(rt, bots), "doctor", "--no-tg-probe", "--no-accounts", "--json", timeout=300)
+    rows = {c["name"]: c for c in json.loads(r.stdout)}
+    assert rows["w: roll threshold"]["level"] == "WARN" and "rolls at 400000" in rows["w: roll threshold"]["detail"]
+    assert rows["p: roll threshold"]["level"] == "PASS", rows["p: roll threshold"]

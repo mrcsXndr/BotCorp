@@ -90,7 +90,7 @@ export const DEFAULTS = {
       timeline_summary: false, auto_roll: false, session_summarize: true,
       context_warn: false,
     },
-    roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context; module context_warn warns at 90% of it
+    roll_tokens: 500000,            // module auto_roll: the daemon rolls a fresh session at a declared breakpoint above this last-turn context; module context_warn warns at 90% of it. Capped at 80% of the compact point (rollThreshold)
     skills: 'all',
     agents: 'all',
   },
@@ -366,6 +366,26 @@ export function resolveContextWindow(cfg) {
   return { ...range(n, `${pct}% of ${win.tokens}`), source: `${pct}% of ${win.tokens} for ${cfg.model || 'no model'}${win.known ? '' : ', window unknown so 1M assumed'}` };
 }
 
+// The ONE place the compaction point and the roll threshold are computed (the
+// tick's auto-roll, the launch's BOT_ROLL_TOKENS, --validate and the doctor all
+// read it). Claude Code auto-compacts at the window every launch sets
+// (CLAUDE_CODE_AUTO_COMPACT_WINDOW, with no PCT override), or the model's own
+// window for 'auto', and it compacts a little BEFORE that point (467-493K seen
+// for a 500K window). A roll threshold at or above it can never fire, so the
+// effective threshold is min(roll_tokens, ROLL_MARGIN x the compaction point).
+export const ROLL_MARGIN = 0.8;
+export function rollThreshold(cfg) {
+  const compactAt = resolveContextWindow(cfg).tokens || modelContextWindow(cfg.model).tokens;
+  const rollTokens = Number.isInteger(cfg.harness.roll_tokens) ? cfg.harness.roll_tokens : DEFAULTS.harness.roll_tokens;
+  const cap = Math.floor(compactAt * ROLL_MARGIN);
+  return { compactAt, rollTokens, tokens: Math.min(rollTokens, cap), capped: rollTokens > cap };
+}
+export function rollTokensWarning(cfg) {
+  const r = rollThreshold(cfg);
+  if (r.rollTokens < r.compactAt) return '';
+  return `harness.roll_tokens ${r.rollTokens} >= the auto-compact point ${r.compactAt} (harness.context_window): Claude Code compacts before the context can reach it, so the daemon rolls at ${r.tokens} instead (${Math.round(ROLL_MARGIN * 100)}% of the compact point); set roll_tokens to at most ${r.tokens}`;
+}
+
 // The effective resume prompt: '' = none.
 export function resumePrompt(cfg) {
   const p = cfg.harness.resume_prompt;
@@ -384,6 +404,7 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || proce
   const errs = validate(cfg);
   if (process.argv.includes('--validate')) {
     for (const e of errs) console.error(`bot.yaml: ${e}`);
+    { const w = errs.length ? '' : rollTokensWarning(cfg); if (w) console.error(`bot.yaml: warning: ${w}`); }
     console.log(errs.length ? 'INVALID' : 'OK');
     process.exit(errs.length ? 1 : 0);
   }
@@ -397,6 +418,7 @@ if (import.meta.url === `file://${process.argv[1].replace(/\\/g, '/')}` || proce
   cfg._boot_prompt = bootPrompt(cfg);
   cfg._resume_prompt = resumePrompt(cfg);
   { const cw = resolveContextWindow(cfg); cfg._context_window = cw.tokens; cfg._context_window_source = cw.source || ''; }
+  { const r = rollThreshold(cfg); cfg._compact_at = r.compactAt; cfg._roll_tokens = r.tokens; }
   cfg._errors = errs;
   console.log(JSON.stringify(cfg));
 }

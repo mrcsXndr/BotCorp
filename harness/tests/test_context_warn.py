@@ -132,4 +132,4 @@ def test_registered_everywhere():
     assert "    context_warn: false" in (ASSEMBLY / "templates" / "bot" / "bot.yaml").read_text(encoding="utf-8")
     assert "  context_warn: '" in (ASSEMBLY / "cli" / "tools.mjs").read_text(encoding="utf-8")
     assert "  context_warn: '" in (ASSEMBLY / "cli" / "botcorp.mjs").read_text(encoding="utf-8")
-    assert "$childEnv['BOT_ROLL_TOKENS']     = \"$($cfg.harness.roll_tokens)\"" in (ASSEMBLY / "daemon" / "launch.ps1").read_text(encoding="utf-8")
+    assert "$childEnv['BOT_ROLL_TOKENS']     = \"$($cfg._roll_tokens)\"" in (ASSEMBLY / "daemon" / "launch.ps1").read_text(encoding="utf-8")

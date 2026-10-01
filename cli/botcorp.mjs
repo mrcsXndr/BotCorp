@@ -35,7 +35,7 @@ if (DEPS.missing.some((d) => CLI_DEPS.includes(d))) {
   // exit once the write drained (a piped stdout is async on Windows); never resolves
   await new Promise(() => stream.write(text, () => process.exit(1)));
 }
-const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow, MODEL_TIERS, DESCRIPTION_MAX } = await import('../daemon/botyaml.mjs');
+const { DEFAULTS, deepMerge, loadBotYaml, validate, resolveContextWindow, rollThreshold, rollTokensWarning, MODEL_TIERS, DESCRIPTION_MAX } = await import('../daemon/botyaml.mjs');
 const { sync, toolShimState, toolShimText } = await import('../daemon/sync.mjs');
 const { observeAll, observeBot } = await import('../core/observe.mjs');
 const { stateView } = await import('../core/state.mjs');
@@ -3468,6 +3468,10 @@ async function cmdDoctor({ flags }) {
         const us = readJson(path.join(configDir(bot), 'settings.json'));
         const cw = contextWindowVerdict({ resolved: resolveContextWindow(cfg), settingsValue: us && Number.isFinite(us.autoCompactWindow) ? us.autoCompactWindow : null, machineEnv: machineCompactWindow, machinePct: machineCompactPct, running: s.running, launch });
         add(cw.level, `${bot}: context window`, cw.detail.replace(/<bot>/g, bot), 'bots');
+        {
+          const w = rollTokensWarning(cfg), r = rollThreshold(cfg);
+          add(w ? 'WARN' : 'PASS', `${bot}: roll threshold`, w || `auto_roll and context_warn use ${r.tokens} tokens (harness.roll_tokens ${r.rollTokens}; the session compacts near ${r.compactAt})`, 'bots');
+        }
         // memory health: startup context size, timeline distill, import approval, the worker's real window
         const rec = sessionLaunchOf(bot, botState(bot)).rec;
         for (const r of memoryHealthRows({ home: botHome(bot), config: configDir(bot), sessionId: (rawState && rawState.session_id) || '', resolved: resolveContextWindow(cfg), running: s.running, rec })) add(r.level, `${bot}: ${r.name}`, r.detail.replace(/<bot>/g, bot), 'bots');
