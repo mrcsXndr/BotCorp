@@ -68,6 +68,11 @@ export function runCli(args, { stdin = null, timeoutMs = 60_000, maxOut = 4096 }
 }
 
 // A `--json` read through the CLI: the parsed stdout, or `fallback` on any failure.
+/**
+ * @param {string[]} args
+ * @param {any} [fallback]
+ * @returns {Promise<any>}
+ */
 export async function cliJson(args, fallback = null) {
   const r = await runCli(args, { maxOut: 4 * 1024 * 1024 });
   if (r.code !== 0) return fallback;

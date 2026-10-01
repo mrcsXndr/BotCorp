@@ -1,3 +1,4 @@
+// @ts-check
 // ptybridge.mjs - bridge one browser WebSocket to a bot's pty-host.
 //
 // The cockpit never spawns a session. For each browser attach it dials the
@@ -25,12 +26,16 @@ const STATUS_TICK_MS = 5000;
 function send(ws, obj) { try { if (ws.readyState === 1) ws.send(JSON.stringify(obj)); } catch {} }
 
 export async function bridge(bot, browser, { chat = true } = {}) {
+  /** @type {WebSocket | null} */
   let upstream = null;
   let closed = false;
+  /** @type {NodeJS.Timeout | null} */
   let chatTimer = null;
   let chatCursor = 0;
+  /** @type {string | null} */
   let chatFile = null;
   let chatBusy = false;
+  /** @type {NodeJS.Timeout | null} */
   let statusTimer = null;
   let lastStatus = '';
   const early = [];   // input/resize frames sent before the pty-host socket is open
@@ -80,7 +85,7 @@ export async function bridge(bot, browser, { chat = true } = {}) {
     send(browser, { t: 'stopped' });
   } else {
     upstream = new WebSocket(`ws://127.0.0.1:${ep.port}/?token=${encodeURIComponent(ep.token)}`, { maxPayload: 2 * MAX_INPUT_FRAME });
-    upstream.on('open', () => { for (const f of early.splice(0)) upstream.send(f); });
+    upstream.on('open', () => { for (const f of early.splice(0)) upstream?.send(f); });
     upstream.on('message', (raw) => { try { if (browser.readyState === 1) browser.send(raw.toString()); } catch {} });
     upstream.on('close', () => { send(browser, { t: 'detached' }); closeAll(); });
     upstream.on('error', (e) => { send(browser, { t: 'err', m: `pty-host: ${e.message}` }); });
@@ -92,7 +97,7 @@ export async function bridge(bot, browser, { chat = true } = {}) {
       chatBusy = true;
       try {
         const st = await chatState(bot, chatCursor);
-        if (!st.available) { send(browser, { t: 'chat', ...st }); clearInterval(chatTimer); chatTimer = null; return; }
+        if (!st.available) { send(browser, { t: 'chat', ...st }); if (chatTimer) clearInterval(chatTimer); chatTimer = null; return; }
         const rotated = chatFile !== null && st.file !== chatFile;
         if (rotated) { chatCursor = 0; chatFile = st.file; send(browser, { t: 'chat', rotated: true, hasSession: st.hasSession, turns: [], cursor: 0, file: st.file }); return; }
         if (chatFile === null) chatFile = st.file;

@@ -1,3 +1,4 @@
+// @ts-check
 // attention.mjs - "N things need you": every operator decision a bot can park,
 // in one list (GET /api/attention), plus the usage overview (GET /api/usage)
 // and the recent approval decisions (GET /api/approvals).
@@ -46,6 +47,11 @@ const SCAN_CACHE_MS = 60_000;
 const SEVERITY = { bad: 0, warn: 1 };
 
 // Pure: the inputs gathered below -> the sorted item list (bad first, then as found).
+/**
+ * @param {{ bots?: any[], approvals?: any[], pairing?: Record<string, any>, status?: any[], autoState?: Record<string, any>,
+ *   registry?: Record<string, any>, releases?: any[], installed?: string | null, cc?: any, usage?: Record<string, any>,
+ *   accounts?: any[], unlinked?: any }} [inputs]
+ */
 export function attentionItems({ bots: list = [], approvals = [], pairing = {}, status = [], autoState = {}, registry = {}, releases = [], installed = null, cc = null, usage = {}, accounts = [], unlinked = null } = {}) {
   const items = [];
   const push = (bot, kind, severity, text, action) => items.push({ bot, kind, severity, text, action });
@@ -101,6 +107,7 @@ async function registryScan(name) {
   return value;
 }
 
+/** @type {{ at: number, promise: Promise<{ at: string, count: number, items: any[] }> | null }} */
 let cache = { at: 0, promise: null };
 export function invalidate() { cache = { at: 0, promise: null }; scans.clear(); }
 
@@ -116,6 +123,7 @@ async function gather() {
     Promise.all(list.map(async (b) => [b.name, await chatStatus(b)])),
     list.some((b) => b.account) ? cliJson(['accounts', 'list', '--json'], []) : [],
   ]);
+  /** @type {ReturnType<typeof ccStatus> | null} */
   let cc = null;
   try { cc = ccStatus(); } catch {}
   // read-only (fingerprints, no decrypt); only when a bot has no account or a label is still "bot <name>"
@@ -159,7 +167,7 @@ export async function usageOverview() {
       account_pending: (b.account || '') !== att && !onBackup, fiveHour: s.fiveHour || { na: s.error }, sevenDay: s.sevenDay || { na: s.error }, model: s.model || null, effort: s.effort || null };
   }));
   const accounts = await cliJson(['accounts', 'list', '--json'], []);
-  const groups = (Array.isArray(accounts) ? accounts : []).map((acc) => ({ id: String(acc.id || ''), label: String(acc.label || acc.id || ''), masked: acc.masked ? String(acc.masked) : null, registered: true, bots: [] }));
+  const groups = (Array.isArray(accounts) ? accounts : []).map((acc) => ({ id: String(acc.id || ''), label: String(acc.label || acc.id || ''), masked: acc.masked ? String(acc.masked) : null, registered: true, bots: /** @type {string[]} */ ([]) }));
   for (const r of rows) {
     const k = accountKey(r.account);
     const g = groups.find((x) => x.registered && ((k.last4 && x.masked && x.masked.endsWith(k.last4)) || (k.email && x.label.toLowerCase() === k.email)))
