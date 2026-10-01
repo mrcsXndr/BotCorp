@@ -106,4 +106,5 @@ def test_api_models_lists_the_tiers_that_are_not_opt_in(tmp_path):
         c.close()
     assert code == 200
     want = [{"tier": k, "id": t["id"], "name": t["name"], "effort": t["effort"]} for k, t in TIERS.items() if not t.get("opt_in")]
-    assert body == want and "hyper" not in [m["tier"] for m in body]
+    # v0.9.9: {cc_version, tiers, models}; the tiers part is unchanged
+    assert body["tiers"] == want and "hyper" not in [m["tier"] for m in body["tiers"]]
