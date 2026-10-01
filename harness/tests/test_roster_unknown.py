@@ -107,9 +107,9 @@ def test_a_live_session_resets_the_count(box, tmp_path):
         subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"], capture_output=True)
 
 
-def _launch(b, started_by: str) -> str:
+def _launch(b, started_by: str, *extra: str) -> str:
     r = subprocess.run(["pwsh", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(ASSEMBLY / "daemon" / "launch.ps1"),
-                        "-Bot", "rx", "-Bg", "-DryRun", "-StartedBy", started_by],
+                        "-Bot", "rx", "-Bg", "-DryRun", "-StartedBy", started_by, *extra],
                        capture_output=True, text=True, timeout=300, cwd=str(ASSEMBLY), env=b["env"])
     assert r.returncode == 0, r.stderr
     return r.stdout
@@ -120,4 +120,11 @@ def test_launch_refuses_a_manual_start_on_an_unknown_roster(box):
     assert "roster read failed - refusing a possible duplicate" in out, out
     assert not any(ln.strip().startswith("argv:") for ln in out.splitlines()), out
     out = _launch(box, "daemon-cold")
+    assert "refusing a possible duplicate" not in out, out
+
+
+def test_botcorp_restart_starts_on_an_unknown_roster(box):
+    # `botcorp restart` stopped the session itself (stop.ps1) before it starts
+    # again: refusing then left a live bot down (2026-10-01).
+    out = _launch(box, "cli", "-AfterStop")
     assert "refusing a possible duplicate" not in out, out

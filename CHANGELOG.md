@@ -3,6 +3,21 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.10
+
+A stopped background bot starts again at once, and `botcorp restart` brings
+it back.
+
+- **Fixed (daemon):** `Get-BgAgents` returned an EMPTY roster (a stopped bot)
+  as `$null`, the "unknown" value, because `return (...)` unrolls an empty
+  array. So the tick deferred every cold-start of a stopped bg bot by 3 ticks
+  (about 9 minutes), and `launch.ps1` refused every manual start. Unparsable
+  output still reads as unknown.
+- **Fixed (CLI):** `botcorp restart <bot>` passes `-AfterStop` to launch.ps1:
+  it stopped the session itself, so an unknown roster is no duplicate. And
+  `start`/`restart` fail when no live claude came up, instead of printing
+  "started" over a launcher that refused.
+
 ## v0.9.9
 
 The cockpit plan: knowledge docs, model, effort and ultracode from the live

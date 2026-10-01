@@ -58,7 +58,8 @@ param(
     [switch]$InPty,
     [switch]$DebugLog,
     [switch]$DryRun,
-    [string]$LaunchNonce,                 # attestation (else env BOTCORP_LAUNCH_NONCE); without a valid one: NO secrets
+    [switch]$AfterStop,                   # `botcorp restart`: stop.ps1 just stopped this bot's session, so an unknown roster is no duplicate
+    [string]$LaunchNonce,                # attestation (else env BOTCORP_LAUNCH_NONCE); without a valid one: NO secrets
     [Parameter(ValueFromRemainingArguments = $true)][string[]]$Passthrough
 )
 
@@ -141,7 +142,8 @@ if (-not $Force) {
             $agents = Get-BgAgents -Bot $Bot -TimeoutSec 20
             # a failed read is unknown, not "none" (D8): refuse, unless the daemon
             # decided (its tick defers 3 unknown reads first; a restart stopped the old one)
-            if ($null -eq $agents -and $StartedBy -notin @('daemon-cold', 'daemon-restart')) {
+            # or this is `botcorp restart`, which stopped the old one itself (-AfterStop)
+            if ($null -eq $agents -and -not $AfterStop -and $StartedBy -notin @('daemon-cold', 'daemon-restart')) {
                 Write-Host "  $Bot may be running (bg_id=$bgId): the roster read failed - refusing a possible duplicate. Use -Force." -ForegroundColor Yellow
                 exit 0
             }

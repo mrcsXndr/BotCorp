@@ -703,7 +703,12 @@ function Get-BgAgents {
         $env = @{ CLAUDE_CONFIG_DIR = $Paths.ConfigDir }
         $r = Invoke-Bounded -Exe $exe -Arguments @(@('agents', '--json') + $(if ($All) { @('--all') } else { @() })) -TimeoutSec $TimeoutSec -Label 'claude agents' -Capture -Env $env -WorkingDirectory $Paths.BotHome -Bot $Bot
         if ($r.Killed -or $null -eq $r.ExitCode) { return $null }
-        return (ConvertFrom-BgRoster -Text "$($r.Output)")
+        # `return (...)` unrolled an EMPTY roster to $null, so every stopped bot read
+        # as unknown: the tick deferred 3 ticks and every manual start refused.
+        # Keep the array with the comma; unparsable output stays $null (unknown).
+        $rows = ConvertFrom-BgRoster -Text "$($r.Output)"
+        if ($null -eq $rows) { return $null }
+        return , $rows
     } catch { return $null }
 }
 

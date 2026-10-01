@@ -1479,7 +1479,9 @@ function mintLaunchNonce(bot) {
 
 // dryRun: launch.ps1 -DryRun (bg) prints the exe, argv and masked env; nothing
 // is launched, no nonce minted, the paused marker kept.
-async function startBot(bot, fresh, debug = false, dryRun = false) {
+// afterStop: `restart` just stopped this bot, so launch.ps1 may start it on an
+// unknown roster (it would otherwise refuse a possible duplicate and leave it down).
+async function startBot(bot, fresh, debug = false, dryRun = false, afterStop = false) {
   // The daemon skips cold-starting a paused bot; an explicit start un-pauses it.
   if (!dryRun) try { fs.unlinkSync(pausedPath(bot)); } catch {}
   const lock = vaultLockState(bot);
@@ -1487,12 +1489,14 @@ async function startBot(bot, fresh, debug = false, dryRun = false) {
   if (sessionKind(bot) === 'bg') {
     const st = botState(bot);
     if (st.bg_id && pidAlive(Number(st.claude_pid))) fail(`${bot} is already running (background session ${st.bg_id}, pid ${st.claude_pid}); use restart`);
-    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : []), ...(debug ? ['-DebugLog'] : []), ...(dryRun ? ['-DryRun'] : [])];
+    const args = ['-Bot', bot, '-Bg', '-StartedBy', 'cli', ...(fresh ? ['-Fresh'] : []), ...(debug ? ['-DebugLog'] : []), ...(dryRun ? ['-DryRun'] : []), ...(afterStop ? ['-AfterStop'] : [])];
     const r = runPwshFile(path.join(ROOT, 'daemon', 'launch.ps1'), args, { timeoutMs: 150_000, env: dryRun ? null : { BOTCORP_LAUNCH_NONCE: mintLaunchNonce(bot) } });
     for (const l of (r.out + r.err).split(/\r?\n/)) if (l.trim()) out(l.trim());
     if (r.code !== 0) fail(`start: launch.ps1 -Bg exited ${r.code}`);
     if (dryRun) { out(`start: ${bot} (dry-run) nothing launched`); return 0; }
     const after = botState(bot);
+    // launch.ps1 exits 0 when it refuses (a possible duplicate): only a live claude means it started
+    if (!pidAlive(Number(after.claude_pid))) fail(`start: ${bot} did not come up (no live claude process; the launcher's lines above say why)`);
     out(`started ${bot}: background session ${after.bg_id || '?'} (session_id ${after.session_id || '?'}, pid ${after.claude_pid || '?'}); attach: claude attach ${after.bg_id || '<id>'} (elevated) or the cockpit`);
     return 0;
   }
@@ -1658,7 +1662,7 @@ async function cmdRestart({ pos, flags }) {
     fs.writeFileSync(marker, new Date().toISOString() + '\n');
     out(`restart: fresh marker ${marker}`);
   }
-  return startBot(bot, !!flags.fresh, !!flags.debug);
+  return startBot(bot, !!flags.fresh, !!flags.debug, false, true);
 }
 
 // ---- status -----------------------------------------------------------------------------
