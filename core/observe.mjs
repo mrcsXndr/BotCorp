@@ -140,6 +140,7 @@ export function jobFileActive(jobFile, job, now = Date.now()) {
 }
 
 // activity from what was measured (pure, the tests drive it directly)
+/** @param {{ alive: boolean, blocked?: boolean | null, breakpoint?: boolean, quietMs?: number | null, rosterState?: string, active?: boolean }} m */
 export function activityOf({ alive, blocked = null, breakpoint = false, quietMs = null, rosterState = '', active = false }) {
   if (!alive) return 'down';
   if (blocked) return 'blocked';

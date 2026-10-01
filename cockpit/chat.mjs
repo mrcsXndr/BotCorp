@@ -1,3 +1,4 @@
+// @ts-check
 // Chat view - render a bot's live Claude Code session as clean chat turns.
 //
 // BEST-EFFORT ONLY. This reads Claude Code's session transcript
@@ -239,7 +240,9 @@ const TG_TEXT_MAX = 8000;
 // ; | & < > or newline; null when a word is a command substitution (unknown text).
 function shellWords(s) {
   const words = [];
-  let cur = null, i = 0;
+  /** @type {string | null} */
+  let cur = null;
+  let i = 0;
   const push = () => { if (cur !== null) words.push(cur); cur = null; };
   while (i < s.length) {
     const c = s[i];

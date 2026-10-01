@@ -1,3 +1,4 @@
+// @ts-check
 // bots.mjs - the cockpit's read-only view of which bots exist and how they are.
 //
 // The registry IS the filesystem: every `bots/<name>/bot.yaml` under the
@@ -56,6 +57,7 @@ export async function ptyEndpoint(name) {
 // pwsh spawn, so it is fetched only when an answer depends on it, off the event
 // loop, and shared for TREE_TTL_MS across bots and clients.
 const TREE_TTL_MS = 30_000;
+/** @type {{ at: number, promise: Promise<any> | null }} */
 let tree = { at: 0, promise: null };
 function processTree() {
   if (!tree.promise || Date.now() - tree.at > TREE_TTL_MS) tree = { at: Date.now(), promise: processParentsAsync() };

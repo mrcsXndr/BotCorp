@@ -1,3 +1,4 @@
+// @ts-check
 // chatstatus.mjs - the chat header's status chips for one bot: context used,
 // Claude account, 5 h / 7 d limits, model and effort.
 //
@@ -44,7 +45,7 @@ function contextChip(status, cfg) {
   let used = parts.length ? parts.reduce((a, b) => a + b, 0) : null;
   if (used === null && num(cw.used_percentage) !== null && size) used = Math.round(cw.used_percentage * size / 100);
   if (used === null) return { na: 'status.json has no context reading yet (none until the first reply, or right after /compact)' };
-  const resolved = cfg ? resolveContextWindow(cfg) : { tokens: null };
+  const resolved = /** @type {{ tokens: number | null, source?: string }} */ (cfg ? resolveContextWindow(cfg) : { tokens: null });
   const window = resolved.tokens || size;
   if (!window) return { na: `${used} tokens used, but neither bot.yaml nor status.json gives a context window` };
   const source = resolved.tokens ? `bot.yaml harness.context_window: ${resolved.source}` : `the model's window (context_window is auto)`;
@@ -96,6 +97,8 @@ function attemptedReason(launches, state) {
   return rec && typeof rec.account_reason === 'string' ? rec.account_reason : null;
 }
 
+// Every input is a parsed file (or bot.yaml); null when it is not there.
+/** @param {{ status?: any, cfg?: any, claudeJson?: any, sessions?: any, launches?: any, state?: any, now?: number }} [inputs] */
 export function summarizeStatus({ status = null, cfg = null, claudeJson = null, sessions = null, launches = null, state = null, now = Date.now() } = {}) {
   const nowS = now / 1000;
   const model = status && status.model && (status.model.display_name || status.model.id)
