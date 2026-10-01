@@ -1,3 +1,4 @@
+// @ts-check
 // updates.mjs - read-only view of the harness releases for the cockpit's
 // Updates page.
 //
@@ -36,6 +37,7 @@ function notesOf(r, changelog) {
 
 export async function listUpdates() {
   const installed = await installedVersion();
+  /** @type {any} */
   let data = null;
   try { data = JSON.parse(await fsp.readFile(FILE, 'utf-8')); } catch {}
   const raw = data && Array.isArray(data.releases) ? data.releases : [];
@@ -56,5 +58,5 @@ export async function listUpdates() {
   const view = releaseView(releases, installed);
   // the installed version with no entry of its own still gets its notes
   if (view.current && view.current.synthetic) Object.assign(view.current, notesOf({ tag: view.current.tag }, changelog));
-  return { installed, checked_at: data && str(data.checked_at) || null, releases, ...view };
+  return { checked_at: data && str(data.checked_at) || null, releases, ...view };   // view carries `installed`
 }

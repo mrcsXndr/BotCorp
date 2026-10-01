@@ -1,3 +1,4 @@
+// @ts-check
 // operator-pair.mjs - one-time browser pairing for a loopback cockpit's
 // operator-only actions. Not Telegram pairing (that is pairing.mjs).
 //
@@ -37,6 +38,7 @@ export const pairingFile = (stateDir) => path.join(stateDir, 'cockpit-pairing.js
 export const keyFile = (stateDir) => path.join(stateDir, 'cockpit-operator.key');
 
 function readState(stateDir) {
+  /** @type {any} */
   let s = null;
   try { s = JSON.parse(fs.readFileSync(pairingFile(stateDir), 'utf-8')); } catch {}
   if (!s || typeof s !== 'object') s = {};
@@ -76,6 +78,10 @@ export function mintCode(stateDir, { now = Date.now(), env = process.env } = {})
 }
 
 // -> { ok: true, device, value } (value = the cookie value) | { ok: false, status, error }
+/**
+ * @returns {{ ok: true, device: { id: string, created: string, label: string }, value: string }
+ *   | { ok: false, status: number, error: string }}
+ */
 export function claim(stateDir, code, { label = '', now = Date.now() } = {}) {
   const s = readState(stateDir);
   if (s.locked_until && Date.parse(s.locked_until) > now) return { ok: false, status: 429, error: `pairing is locked after ${MAX_FAILS} wrong codes until ${s.locked_until}; run botcorp cockpit pair again later` };

@@ -1,3 +1,4 @@
+// @ts-check
 // access.mjs - Cloudflare Access enforcement for the cockpit. FORCED, no
 // escape hatch: the cockpit binds loopback; any other bind refuses to start
 // unless an Access config exists, and once one exists EVERY request (HTTP and
