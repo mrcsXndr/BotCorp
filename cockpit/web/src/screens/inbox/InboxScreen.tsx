@@ -10,6 +10,11 @@ import { ApprovalCard } from './ApprovalCard';
 
 interface Decided { bot: string; id: string; decision: 'approved' | 'rejected'; by: string; at: string | null; path: string; value: string }
 interface AdminAct { at: string; by: string; verb: string; target: string | null; refused: string | null }
+// Who decided: "operator:x" is x, "bot:x" an admin bot acting for the operator.
+const deciderOf = (by: unknown) => {
+  const m = /^bot:(.+)$/.exec(String(by ?? ''));
+  return m ? t(COPY.inbox.adminBot, { bot: m[1] }) : String(by ?? '').replace(/^operator:/, '');
+};
 
 // The one place a bot's ask lands (IA §2): pending approvals as cards, every
 // other thing that needs the operator as a row with its one button, then
@@ -108,7 +113,7 @@ export function InboxScreen() {
                     <span className="text-ui text-text break-words">{d.path} <span className="text-text-3">· {d.bot}</span></span>
                     <span className="text-sm text-text-2">
                       <span className={`font-semibold ${d.decision === 'approved' ? 'text-ok' : 'text-bad'}`}>
-                        {t(d.decision === 'approved' ? COPY.inbox.approved : COPY.inbox.rejected, { who: String(d.by).replace(/^operator:/, '') })}
+                        {t(d.decision === 'approved' ? COPY.inbox.approved : COPY.inbox.rejected, { who: deciderOf(d.by) })}
                       </span>{d.at ? ` · ${ago(d.at)}` : ''}
                     </span>
                   </li>

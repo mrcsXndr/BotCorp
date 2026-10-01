@@ -39,7 +39,13 @@ export function widensOf(path: unknown): WidensKey {
 }
 
 // p: one row of GET /api/approvals. Every string stays text: the caller escapes.
-export interface ApprovalRow { path?: string; why?: string | null; requested_by?: string | null; diff?: string | null; value?: unknown }
+// `explain` (cli/explain.mjs) says it in plain words; older rows have none.
+export interface Explain { who: string; what: string; why: string; onApprove: string; onDecline: string; when?: string }
+export interface ApprovalRow { path?: string; why?: string | null; requested_by?: string | null; diff?: string | null; value?: unknown; explain?: Explain | null }
+export function explainOf(p: ApprovalRow): Explain | null {
+  const e = p.explain;
+  return e && typeof e === 'object' && [e.who, e.what, e.why, e.onApprove, e.onDecline].every((s) => typeof s === 'string' && s) ? e : null;
+}
 export interface ApprovalView { title: string; widens: WidensKey; widensLabel: string; widensText: string; change: string; asker: string }
 export function approvalView(p: ApprovalRow): ApprovalView {
   const key = widensOf(p.path);

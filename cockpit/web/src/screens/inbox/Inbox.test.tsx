@@ -103,6 +103,25 @@ it('an engine item never names the engine build; Decided and admin folded away',
   expect(screen.getByText(/approved by dev/).closest('[hidden]')).not.toBeNull();   // collapsed: hidden by the disclosure itself
 });
 
+it('v0.9.9: an approval explains itself: Who, Change, Why, Approve →, Decline →; the diff is folded away', async () => {
+  const explain = { who: 'example (the bot itself)', what: 'Turns on the job digest', why: 'A job runs on its own, on a timer.', onApprove: 'It runs from the next tick.', onDecline: 'Nothing changes; example is told.', when: 'Next daemon tick' };
+  serve({ 'GET /api/approvals': [200, { ...APPROVALS, pending: [{ ...APPROVALS.pending[0], diff: 'effort: null -> max', explain }] }] });
+  mount();
+  const card = await waitFor(() => { const c = document.querySelector<HTMLElement>('[data-approval=a1b2c3]'); if (!c?.querySelector('[data-explain]')) throw new Error('no explain'); return c; });
+  const rows = [...card.querySelectorAll('[data-explain] dt')].map((d) => d.textContent);
+  expect(rows).toEqual(['Who', 'Change', 'Why', 'Approve →', 'Decline →', 'When']);
+  for (const s of Object.values(explain)) expect(within(card).getByText(s)).toBeTruthy();
+  expect(within(card).getByText('effort: null -> max').closest('[hidden]')).not.toBeNull();
+  expect(within(card).queryByText('example asked')).toBeNull();
+});
+
+it('v0.9.9: a decision an admin bot made reads "<bot> (admin bot)"', async () => {
+  serve({ 'GET /api/approvals': [200, { ...APPROVALS, recent: [{ ...APPROVALS.recent[0], by: 'bot:ops' }] }] });
+  mount();
+  const line = await screen.findByText(/approved by ops \(admin bot\)/);
+  expect(line.closest('li')!.textContent).not.toMatch(/bot:ops/);
+});
+
 it('an empty Inbox says so', async () => {
   serve({ 'GET /api/attention': [200, { at: '', count: 0, items: [] }], 'GET /api/approvals': [200, { pending: [], recent: [], admin: [] }] });
   mount();
