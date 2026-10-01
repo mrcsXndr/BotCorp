@@ -12,7 +12,8 @@ name: bot-1                       # slug: [a-z0-9][a-z0-9-]{0,31}; also the fold
 persona: "Sharp, dry, loyal. Leads with action, never over-explains."
                                   # the generated CLAUDE.md persona block until the bot edits CLAUDE.md itself
 model: top                        # a tier from harness/models.json (top | workhorse | tiny | hyper) or an explicit id -> settings.json "model"
-effort: null                      # null = the tier's effort (high for an explicit id) | low | medium | high | xhigh -> "effortLevel"
+effort: null                      # null = the tier's effort (high for an explicit id) | low | medium | high | xhigh | max -> "effortLevel"
+ultracode: false                  # true = workflows on every task (uses much more of the limit) -> settings.json "ultracode"
 permissions: bypass               # bypass | default (bypass = --dangerously-skip-permissions + AskUserQuestion/ExitPlanMode denied)
 
 harness:

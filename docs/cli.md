@@ -520,7 +520,24 @@ appended to `<BOTCORP_HOME>/logs/<bot>/approvals.log`.
 Every bot's pending entries in one list: bot, id, when, who asked, why, and a
 readable diff (`automations.x.enabled: false -> true`, `secrets: + gh_token`,
 `tools: + 3 (a, b, c)`). Read-only, so a bot may run it. `--json` rows are
-`{id, bot, requested_by, at, op, path, value, diff, why}`.
+`{id, bot, requested_by, at, op, path, value, diff, why, explain}`; `explain`
+(v0.9.9, `cli/explain.mjs`) says it in plain words: `{who, what, why,
+onApprove, onDecline, when}`.
+
+### `knowledge list|get|set|rm [<bot> | --global] [<doc>] [--if-match <sha256>] [--json]` / `knowledge describe <item-id> <text>`
+
+The docs a bot loads at start (v0.9.9). Per bot: `CLAUDE` (its `CLAUDE.md`)
+and `.claude/rules/<doc>.md`. `--global` ("All bots"):
+`<BOTCORP_HOME>/global/knowledge/<doc>.md`, which `sync` copies into every
+bot's config home as `rules/botcorp-global-<doc>.md` and prunes when the
+source is gone. A new doc's id is lowercase letters, digits and hyphens. `set`
+reads the content from stdin (at most 64 KB); `--if-match` refuses (exit 4) a
+doc changed since it was read. `rm` never removes `CLAUDE`. A global write is
+operator-only (admin bots refused, exit 3) and syncs every bot; a bot may
+write only its own docs. `describe` (operator-only) overrides the shipped
+description of a harness item (`skill:<name>`, `module:<name>`, ...) in every
+bot's Tools tab, kept in `<BOTCORP_HOME>/global/descriptions.json`; an empty
+text restores the shipped one.
 
 ### `approve <bot> <id|--all> [--by <who>]` / `approve <bot> --list [--json]` / `reject <bot> <id> [--by <who>] [--reason <text>]`
 
@@ -819,7 +836,7 @@ kept) and `--skip <tag>` sets `skipped`; both stamp `decided_at` /
 never applies anything itself. `--check` shells to `daemon/update.ps1
 -Check` to record new releases now.
 
-### `cc status [--json]` / `cc test` / `cc rollback [--to <version>]`
+### `cc status [--json]` / `cc test` / `cc rollback [--to <version>]` / `cc models [--json] [--refresh]`
 
 The Claude Code pin (docs/daemon.md, "Claude Code pin"). `botcorp cc status`
 prints the pinned version (who pinned it, when, the exe), the kept previous
@@ -834,6 +851,12 @@ then `-Test` in the foreground (the canary run takes minutes).
 `botcorp cc rollback` moves the pin to the newest kept previous version (or
 `--to <version>`) and rejects the one it replaced; refused, exit 3, from
 inside a bot session (`BOT_NAME` or `CLAUDECODE` set).
+`botcorp cc models` (v0.9.9) asks the pinned Claude Code which models it
+offers (a scratch config dir, no token, the stream-json control protocol):
+`{cc_version, models: [{value, resolvedModel, displayName, price,
+supportedEffortLevels, ultracodeAvailable, defaultEffort}]}`, cached in
+`<BOTCORP_HOME>/cc/<version>/models.json` per pin until `--refresh`; exit 1
+with an `error` and no models when it cannot tell.
 
 ### `install [--s4u] [--unregister] [--dry-run]`
 

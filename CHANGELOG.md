@@ -3,6 +3,55 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.9
+
+The cockpit plan: knowledge docs, model, effort and ultracode from the live
+list, background helpers explained, editable descriptions, approvals that
+explain themselves and running subagents under each bot. Plus four QA round 4
+fixes.
+
+- **Knowledge:** a bot's new Knowledge tab lists what it loads at start, its
+  `CLAUDE.md` and `.claude/rules/*.md`, each with a token estimate and when
+  it was edited; open, edit or preview, save, delete (never `CLAUDE.md`). A
+  save carries the sha it read and a doc changed since is refused and
+  reloaded. "All bots" docs live in `<BOTCORP_HOME>/global/knowledge/`, are
+  edited by the operator only (Settings, or `botcorp knowledge set --global`;
+  admin bots refused) and are copied by `sync` into every bot's config home
+  as `rules/botcorp-global-<doc>.md`. The config guard blocks bots from
+  editing either place. New CLI verb: `botcorp knowledge`.
+- **Model, effort, ultracode:** `botcorp cc models` asks the pinned Claude
+  Code which models it offers, with effort levels, ultracode and price
+  (cached per pin). The Settings tab lists the tiers, then those models;
+  Effort lists only the model's own levels; Ultracode (new `bot.yaml` key,
+  written to settings.json) shows only where the model has it and asks
+  first. "Restart to apply" when the running session reads another model or
+  effort. `effort` is now validated (low, medium, high, xhigh, max) and
+  `fable` is an accepted model alias.
+- **Auto-fix and debrief:** each switch says what it does, how often, on
+  which model, what it writes and when it last ran, with a "Nothing feeds it"
+  warning when auto-fix has no alerts log (`GET /api/bots/:name/helpers`).
+- **Descriptions:** `automations[].description` and `tools.<name>.purpose`
+  are settable through `config set` (one line, at most 200 characters, never
+  queued, a bot may set its own) and edited in place in the cockpit. The
+  shared tool group reads "All bots"; `botcorp knowledge describe` overrides a
+  harness item's shipped description for every bot.
+- **Approvals:** `approvals --json` rows carry `explain` (who, what, why, on
+  approve, on decline, when), and the Inbox card shows it as labelled rows
+  with the diff folded away. A decision an admin bot made reads "<bot>
+  (admin bot)".
+- **Subagents:** the sidebar lists, under each running bot, the subagents its
+  session runs now (type, task, model, elapsed), read from Claude Code's own
+  files; a tap opens the agent's turns read-only, with the bot's last 10
+  finished subagents one tap away. The manage column widens to 960 px on a
+  desktop.
+- **Fixed (timeline):** the weekly distill bundles only the sessions active
+  in that ISO week.
+- **Fixed (timeline):** a weekly distill that fell back is retried at most
+  once every 6 hours (a marker in `memory/timelines/`), still exit 1; the
+  `timeline-summary` job's timeout is 10 minutes, room for both distills.
+- **Fixed (doctor):** the vault-guard isolation probe is no longer recorded
+  in `hooks-timing.jsonl`.
+
 ## v0.9.8
 
 QA pack D: the minor findings of QA round 3.
