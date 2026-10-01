@@ -3,15 +3,17 @@
 Bots propose upgrades to the shared harness; other bots review them; the
 operator alone merges. No bot has a path to `main`.
 
-## 1. Weekly suggest tick
+The cycle is **manual and on demand**. Nothing in the daemon, no automation
+and no scheduled job runs any step of it. The operator or a bot's Director runs it
+when there is something worth proposing: a lesson a bot has re-learned, a
+fix it made locally that every bot would want, a harness gap it hit in real
+work. The `suggest:` block in `bot.yaml` (`weekly`, `max_prs_per_week`,
+`digest_bot`) is read by nothing; it schedules nothing.
 
-For every bot with `suggest.weekly: true` in its `bot.yaml`, the daemon runs
-a headless session (staggered per bot, so two bots never open PRs in the same
-hour) with the prompt: from this week's journal and shared lessons, propose
-at most `suggest.max_prs_per_week` (default 2) **generic** harness upgrades —
-nothing bot-specific.
+## 1. Suggest
 
-Each proposal becomes `botcorp suggest <bot> --topic <t> [--lesson <path>]`:
+When the Director has a **generic** harness upgrade (nothing bot-specific),
+it runs `botcorp suggest <bot> --topic <t> [--lesson <path>]`:
 
 1. A fresh worktree at `~/.botcorp/work/<t>` off `origin/main`, branch
    `suggest/<bot>/<t>`.
@@ -19,19 +21,23 @@ Each proposal becomes `botcorp suggest <bot> --topic <t> [--lesson <path>]`:
    token-shaped strings, and any per-bot extra terms in that bot's own
    gitignored `debrand-terms.txt`) plus `scripts/secret-scan.sh` run before
    anything is pushed.
-3. `gh pr create` with labels `suggest` and `bot:<name>`, and a `Bot: <name>`
-   trailer on the commit.
+3. It prints the `git push` and `gh pr create` commands (labels `suggest` and
+   `bot:<name>`, a `Bot: <name>` trailer on the commit) and runs neither; the
+   Director runs them once the change is in the worktree.
+
+Keep it to one or two PRs at a time; a queue of open suggestions nobody
+reviews is noise.
 
 Commits use the repo's noreply identity, the same as every other commit in
 this repo (`docs/engine-contract.md` / `.githooks/pre-commit`).
 
 ## 2. Cross-review
 
-On a daily review tick, each bot lists open `suggest` PRs it did **not**
-author and has **not** already reviewed
-(`gh pr list --label suggest --json number,author,labels` plus its own
-review presence via `gh api .../reviews`), and for each one posts a single
-review comment from its own perspective — "as a bot that runs X, this
+When the operator asks for reviews, or a Director has time between tasks, a
+bot lists open `suggest` PRs it did **not** author and has **not** already
+reviewed (`gh pr list --label suggest --json number,author,labels` plus its
+own review presence via `gh api .../reviews`), and for each one posts a
+single review comment from its own perspective — "as a bot that runs X, this
 would/wouldn't help because…" — ending with a verdict line
 `VERDICT: approve|request-changes|neutral` and a `Bot: <name>` trailer, via
 `gh pr review --comment`.
@@ -41,7 +47,6 @@ would/wouldn't help because…" — ending with a verdict line
 - never its own PR (checked by author + branch-prefix)
 - never twice on the same PR (a `Bot: <name>` review already present, or a
   `reviewed:<name>` label, means skip)
-- at most `max_reviews_per_week` per bot (default 6)
 - no reviews on a PR older than 30 days
 - a bot never edits a PR it has reviewed
 
@@ -53,32 +58,26 @@ Branch protection on `main`: PR required, required status checks
 write access to `main` and no automation calls `gh pr merge` on a `suggest/*`
 branch — merging is a human action, every time.
 
-## 4. One weekly digest, never per-PR pings
+## 4. Asking the operator: one review page, never per-PR pings
 
-A Sunday digest tick builds a single review page (the `review-artifact`
-pattern) listing every open `suggest` PR: its diff summary, CI state, and
-every bot's review inline, each with Yes / No / Don't-know plus a comment
-field. The operator's answers write back to
-`~/.botcorp/state/digest-<week>.json`, and the next tick acts on them:
+When open `suggest` PRs are waiting on the operator, the Director builds one
+review page (the `review-artifact` pattern) listing them: each PR's diff
+summary, CI state and every bot's review inline, each with Yes / No /
+Don't-know plus a comment field. It acts on the answers that come back:
 
-- **Yes** → `gh pr merge` is still **not** automatic — the tick posts
-  "approved in digest, merge when ready" as a PR comment (or the operator
-  merges straight from the PR link).
+- **Yes** → `gh pr merge` is still **not** automatic — the Director posts
+  "approved, merge when ready" as a PR comment (or the operator merges
+  straight from the PR link).
 - **No** → the PR is closed with the operator's comment attached.
-- **Don't know** → the PR stays open for next week's digest.
+- **Don't know** → the PR stays open for the next time.
 
-One Telegram message with the digest link — sent through whichever bot
-`suggest.digest_bot` names (one machine-wide setting) — and only when at
-least one `suggest` PR is open. No per-PR notification ever reaches chat.
+One Telegram message with the page link, and only when at least one
+`suggest` PR is open. No per-PR notification ever reaches chat.
 
-The same digest also lists any pending harness **releases** the hourly
-update check has recorded (`~/.botcorp/state/updates.json`), each with its
-own plain-language **What changed / Why / Value to you** notes and
-**Apply** / **Skip** buttons — this is the same What/Why/Value shown in the
-cockpit's Releases panel. A release is not a `suggest` PR and carries no
-Yes/No/Don't-know: **Apply** is the one admin action, queuing that release
-for each bot's next safe restart behind the existing smoke test and
-automatic rollback on failure; nothing here ever applies a harness update by
+Pending harness **releases** are not part of this page: the hourly update
+check records them (`~/.botcorp/state/updates.json`) and the cockpit's
+Releases panel shows each with its **What changed / Why / Value to you**
+notes and **Apply** / **Skip**. Nothing ever applies a harness update by
 itself.
 
 ## 5. Shared lessons

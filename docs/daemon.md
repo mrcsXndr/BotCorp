@@ -790,7 +790,7 @@ next `## `): bullets under `What` / `Why` / `Value` headings when present,
 else the first three bullets become What and why/value read "see changelog".
 An existing entry keeps its status; a tag HEAD has reached becomes `applied`.
 It never applies and never messages; the operator sees the releases with
-their notes in the cockpit and the weekly digest and presses **Apply** or
+their notes in the cockpit and presses **Apply** or
 **Skip** there (`update.ps1 -Request -Tag <tag>` / `-Skip -Tag <tag>`
 underneath). Not a git checkout -> `not a git checkout`, exit 0.
 

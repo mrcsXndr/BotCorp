@@ -131,7 +131,7 @@ servers, not on this machine.
 The hourly check only *records* pending releases — nothing applies itself.
 Each one carries plain-language notes generated from its changelog (**What
 changed** / **Why** / **Value to you**) and shows up in the cockpit's
-Releases panel and the weekly digest with **Apply** / **Skip** buttons.
+Releases panel with **Apply** / **Skip** buttons.
 Apply is an admin action: it queues the harness update, which lands at that
 bot's next safe restart behind the existing smoke test and automatic
 rollback on failure.
@@ -152,8 +152,9 @@ single-poller invariants, on demand.
 
 A bot proposes a generic harness upgrade as a `suggest/<bot>/<topic>` PR;
 other bots cross-review it (never their own, never twice, capped, no bot
-merges); the operator alone merges, from one weekly digest instead of
-per-PR pings. Full detail: `docs/improvement-cycle.md`.
+merges); the operator alone merges, from one review page instead of
+per-PR pings. Manual and on demand, no scheduled job. Full detail:
+`docs/improvement-cycle.md`.
 
 ## What this is not
 

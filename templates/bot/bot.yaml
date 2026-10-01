@@ -115,7 +115,7 @@ automations: []                   # per-bot jobs run by the ONE daemon (docs/aut
 #    purpose: the nightly report
 #    secrets: []                  # each must be in secrets: above
 
-suggest:
-  weekly: false                  # weekly headless run proposing harness upgrades as suggest/<bot>/<topic> PRs
+suggest:                         # read by nothing: the improvement cycle is manual (docs/improvement-cycle.md)
+  weekly: false
   max_prs_per_week: 2
-  digest_bot: null                # which bot sends the weekly digest link (one machine-wide)
+  digest_bot: null

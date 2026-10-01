@@ -19,8 +19,8 @@
 #   / value, no summary) gets its notes read again once. An existing entry
 #   keeps its status; a tag that HEAD has reached is marked applied. No
 #   Telegram, no apply: the operator
-#   sees pending releases (with the notes) in the cockpit and the weekly digest
-#   and presses Apply / Skip there. Not a git checkout -> "not a git checkout",
+#   sees pending releases (with the notes) in the cockpit and presses
+#   Apply / Skip there. Not a git checkout -> "not a git checkout",
 #   exit 0.
 #
 # -Apply -Tag (bounded 3 min total): refuse on a dirty tree (someone edited
