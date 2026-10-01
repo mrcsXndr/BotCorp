@@ -145,6 +145,14 @@ p95 is over half that hook's timeout.
   another bot. An admin bot (`role: admin`, judged by `botcorp whoami` on the
   session's own env) passes those; `cockpit expose|unexpose|pair|unpair`,
   `accounts rename` and `accounts seed --link` stay blocked for every bot.
+- **`destructive-guard.sh`** (`PreToolUse` on `Bash|PowerShell|Monitor|mcp__*`;
+  switching it off with `hooks_disable` queues for operator approval) —
+  FAIL-CLOSED (exit 2): blocks a recursive delete of the filesystem root, a
+  drive root, the home folder, the BotCorp root, a bot folder or a `.git`
+  directory (or a folder holding one), a force push to `main`/`master`,
+  `git reset --hard` together with `git clean -fdx`, and `format <drive>:` /
+  `Format-Volume` / `diskpart` / `mkfs`. The operator runs those from their
+  own terminal. Relative and deeper paths pass (`rm -rf node_modules`).
 - All the tool guards run in ONE `node guard.mjs pre|post` process (exec-form
   hooks, 15 s timeout; the `.sh` names are thin wrappers for tests and doctor),
   and fail closed on a payload they cannot parse.

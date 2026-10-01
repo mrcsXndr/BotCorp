@@ -1,7 +1,7 @@
 // guard.mjs - every tool guard in ONE node process (v0.8.6 R5).
 //
 //   node guard.mjs pre     PreToolUse: block-dialogs, config-guard, vault-guard,
-//                          operator-guard, each on its own tools (the matchers the
+//                          operator-guard, destructive-guard, each on its own tools (the matchers the
 //                          separate hooks had), first block wins
 //   node guard.mjs post    PostToolUse: core-guard, tools-nudge (warn-only)
 //   node guard.mjs <name>  one guard, whatever the tool (the <name>.sh wrappers,
@@ -15,7 +15,7 @@
 // The decisions are the bash guards', ported as they were (the header of each
 // <name>.sh says what it guards), with the bypasses the 2026-09-30 review found
 // closed. Exit 2 blocks the tool call and feeds stderr back to the model.
-// vault-guard, config-guard and operator-guard FAIL CLOSED on a payload they
+// vault-guard, config-guard, operator-guard and destructive-guard FAIL CLOSED on a payload they
 // cannot parse and on any error of their own; the PostToolUse guards never
 // block.
 //
@@ -44,6 +44,7 @@ const PRE = [
   ['config-guard', ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
   ['vault-guard', ['Read', 'Glob', 'Grep', ...SHELL, 'Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
   ['operator-guard', SHELL],
+  ['destructive-guard', SHELL],
 ];
 const POST = [
   ['core-guard', ['Edit', 'Write', 'MultiEdit', 'NotebookEdit']],
@@ -221,6 +222,141 @@ function operatorGuard(p) {
   return `BLOCKED: ${need}: operator-only (or an admin bot: bot.yaml role: admin). botcorp approve / reject, accounts add|remove|seed|use|backups, secrets set|delete, pair <id>, update --apply|--skip|--rollback|--cancel and start/stop/restart of another bot are the operator's. A bot queues a widening change (botcorp config set) and the operator decides it in the cockpit or their own terminal. To read the queue: botcorp approvals.`;
 }
 
+// ---- destructive-guard -----------------------------------------------------------
+// Blocks a shell command no bot should run: a recursive delete of the filesystem
+// root, a drive root, the home folder, the BotCorp root, a bot folder, a .git
+// directory or a folder holding one of them; a force push to main/master;
+// `git reset --hard` with `git clean -fdx`; format <drive>: / Format-Volume /
+// diskpart / mkfs. Narrow on purpose: a relative or deeper path passes (rm -rf
+// node_modules), and so does a push without force. String work only, no process.
+
+// The command as segments (split on ; | & newline and brackets outside quotes)
+// of words {v, q}; a quoted word keeps its spaces and has q set.
+function shellWords(cmd) {
+  const segs = [[]];
+  let w = null;
+  let quote = '';
+  const end = () => { if (w) segs[segs.length - 1].push(w); w = null; };
+  for (const c of cmd.replace(/[\\`]\r?\n/g, ' ').replace(/\$\{([^}]*)\}/g, '$$$1')) {
+    if (quote) { if (c === quote) quote = ''; else w.v += c; continue; }
+    if (c === '"' || c === "'") { quote = c; w = w || { v: '', q: false }; w.q = true; continue; }
+    if (';|&\n(){}'.includes(c)) { end(); if (segs[segs.length - 1].length) segs.push([]); continue; }
+    if (/\s/.test(c)) { end(); continue; }
+    w = w || { v: '', q: false };
+    w.v += c;
+  }
+  end();
+  return segs.map((seg) => seg.filter((x) => x.q || x.v !== '$')).filter((seg) => seg.length);
+}
+
+// -> what a recursive delete of path t would wipe, or null. Relative paths are
+// judged by their last segment only (.git); variables other than the home and
+// bot-folder ones are not expanded.
+function protectedPath(t) {
+  if (!t) return null;
+  const home = low(os.homedir());
+  const botHome = process.env.BOT_HOME || process.env.CLAUDE_PROJECT_DIR || '';
+  let s = low(t)
+    .replace(/^(~|\$home|\$env:userprofile|\$env:home|%userprofile%)(?=\/|$)/, home)
+    .replace(/^\/mnt\/([a-z])(?=\/|$)/, '$1:').replace(/^\/([a-z])(?=\/|$)/, '$1:');   // Git Bash / WSL drive forms
+  if (botHome) s = s.replace(/^(\$bot_home|\$env:bot_home|\$claude_project_dir|\$env:claude_project_dir|%bot_home%)(?=\/|$)/, low(path.resolve(botHome)));
+  const abs = /^([a-z]:)?\//.test(s) || /^[a-z]:$/.test(s);
+  if (abs) s = path.posix.normalize(s);
+  // trailing globs, `.` and slashes go: /* is the root, C:\*.* the drive
+  for (let prev = ''; prev !== s;) { prev = s; s = s.replace(/\/(\*(\.\*)?|\.)$/, '').replace(/\/+$/, ''); }
+  if (abs && s === '') return 'the filesystem root';
+  if (/^[a-z]:$/.test(s)) return 'a drive root';
+  if (path.posix.basename(s) === '.git') return 'a .git directory';
+  if (!abs) return null;
+  const holds = (dir) => s === dir || dir.startsWith(`${s}/`);
+  const root = low(path.resolve(HARNESS, '..'));
+  if (holds(home)) return 'the home folder';
+  if (holds(root)) return 'the BotCorp root';
+  if (s === `${root}/bots` || path.posix.dirname(s) === `${root}/bots`) return 'a bot folder';
+  if (botHome && holds(low(path.resolve(botHome)))) return 'the bot folder';
+  return null;
+}
+
+const RM = new Set(['rm', 'remove-item', 'ri', 'del', 'erase', 'rd', 'rmdir']);
+const CMD_RM = new Set(['del', 'erase', 'rd', 'rmdir']);       // cmd.exe: /s recurses, /q is a switch
+const PREFIX = new Set(['sudo', 'command', 'exec', 'nohup', 'time', 'call', 'env']);
+const SHELLS = new Set(['bash', 'sh', 'zsh', 'dash', 'pwsh', 'powershell', 'eval', 'iex', 'invoke-expression']);
+const cmdBase = (v) => low(v).split('/').pop().replace(/\.exe$/, '');
+
+function destructiveSegment(words, ctx, depth) {
+  let i = 0;
+  for (; i < words.length; i++) {   // skip VAR=x, sudo -u x, cmd /c ...
+    const b = cmdBase(words[i].v);
+    if (!words[i].q && /^[a-z_][a-z0-9_]*=/i.test(words[i].v)) continue;
+    if (PREFIX.has(b)) { while (words[i + 1] && words[i + 1].v.startsWith('-')) i++; continue; }
+    if (b === 'cmd') { while (words[i + 1] && /^\/[a-z]$/i.test(words[i + 1].v)) i++; continue; }
+    break;
+  }
+  const w = words[i];
+  if (!w) return null;
+  if (depth < 4 && w.q && /\s/.test(w.v)) return destructiveCmd(w.v, ctx, depth + 1);   // cmd /c "rd /s /q C:\"
+  const b = cmdBase(w.v);
+  const args = words.slice(i + 1).map((x) => x.v);
+  const lc = args.map((a) => a.toLowerCase());
+  if (RM.has(b)) {
+    const cmdStyle = CMD_RM.has(b);
+    const recursive = lc.some((a) => /^-[fvidr]*r[fvidr]*$/.test(a) || a === '--recursive'
+      || (a.length >= 2 && '-recurse'.startsWith(a.split(':')[0])) || (cmdStyle && a === '/s'));
+    if (!recursive) return null;
+    for (const a of args) {
+      if (a.startsWith('-') || (cmdStyle && /^\/[a-z]$/i.test(a))) continue;
+      const what = protectedPath(a);
+      if (what) return `a recursive delete of ${what} (${a})`;
+    }
+    return null;
+  }
+  if (b === 'git') {
+    let j = 0;
+    while (j < args.length && args[j].startsWith('-')) j += /^-[cC]$/.test(args[j]) ? 2 : 1;   // git -C <dir> / -c k=v
+    const sub = lc[j];
+    const rest = args.slice(j + 1);
+    if (sub === 'push') {
+      const forced = rest.some((a) => a === '--force' || a.startsWith('--force-with-lease') || /^-[a-z]*f[a-z]*$/i.test(a));
+      for (const a of rest) {
+        if (a.startsWith('-')) continue;
+        const dst = a.replace(/^\+/, '').split(':').pop().replace(/^refs\/heads\//i, '').toLowerCase();
+        if ((forced || a.startsWith('+')) && (dst === 'main' || dst === 'master')) return `a force push to ${dst} (git push ${rest.join(' ')})`;
+      }
+    }
+    if (sub === 'reset' && rest.includes('--hard')) ctx.reset = true;
+    if (sub === 'clean') {
+      const f = rest.filter((a) => /^-[a-zA-Z]+$/.test(a)).join('') + (rest.includes('--force') ? 'f' : '');
+      if (f.includes('f') && f.includes('d') && f.includes('x')) ctx.clean = true;
+    }
+    return null;
+  }
+  if (b === 'format' && args.some((a) => /^[a-z]:[\\/]?$/i.test(a))) return `formatting a drive (format ${args.join(' ')})`;
+  if (b === 'format-volume' || b === 'diskpart' || b === 'mkfs' || b.startsWith('mkfs.')) return `${b} (formats or repartitions a disk)`;
+  if (SHELLS.has(b) && depth < 4) {
+    for (const x of words.slice(i + 1)) if (x.q && /\s/.test(x.v)) { const r = destructiveCmd(x.v, ctx, depth + 1); if (r) return r; }
+    const k = lc.findIndex((a) => a.length >= 2 && '-command'.startsWith(a));   // bash -c / pwsh -Command, unquoted
+    if (k >= 0) return destructiveSegment(words.slice(i + 2 + k), ctx, depth + 1);
+  }
+  return null;
+}
+
+function destructiveCmd(cmd, ctx, depth) {
+  for (const words of shellWords(cmd)) { const r = destructiveSegment(words, ctx, depth); if (r) return r; }
+  return null;
+}
+
+function destructiveGuard(p) {
+  if (p.ok && p.d === null) return null;
+  if (!p.ok) return unparsed('destructive-guard');
+  let cmd;
+  try { cmd = String(toolInput(p.d).command || ''); } catch { return unparsed('destructive-guard'); }
+  if (!cmd) return null;
+  const ctx = { reset: false, clean: false };
+  let what = destructiveCmd(cmd, ctx, 0);
+  if (!what && ctx.reset && ctx.clean) what = '`git reset --hard` together with `git clean -fdx` (wipes every uncommitted and ignored file in the repo)';
+  return what ? `BLOCKED: ${what}. destructive-guard keeps bots away from commands that wipe a disk, a home folder, the BotCorp root, a bot folder, a repo's .git or main. If it is really meant, the operator runs it from their own terminal.` : null;
+}
+
 // ---- core-guard (warn-only) ------------------------------------------------------
 // A TRACKED file of the shared BotCorp checkout modified off a suggest/* branch:
 // the updater refuses a dirty tree, so it blocks every future update.
@@ -282,6 +418,7 @@ const GUARDS = {
   'config-guard': { run: configGuard, block: true, closed: 'BLOCKED: config-guard failed, so it cannot tell what this edit touches; it fails closed.' },
   'vault-guard': { run: vaultGuard, block: true, closed: 'BLOCKED: vault-guard failed, so it cannot rule out a vault access; it fails closed.' },
   'operator-guard': { run: operatorGuard, block: true, closed: 'BLOCKED: operator-guard failed, so it cannot rule out an operator verb; it fails closed.' },
+  'destructive-guard': { run: destructiveGuard, block: true, closed: 'BLOCKED: destructive-guard failed, so it cannot rule out a destructive command; it fails closed.' },
   'core-guard': { run: coreGuard, block: false },
   'tools-nudge': { run: toolsNudge, block: false },
 };

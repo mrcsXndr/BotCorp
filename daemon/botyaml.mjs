@@ -20,7 +20,7 @@ import yaml from 'js-yaml';
 const HOOKS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'harness', 'hooks');
 // The tool guards all run inside ONE `guard.mjs pre|post` process, so they have
 // no hooks.json entry of their own; a test holds this list equal to guard.mjs's.
-export const GUARD_HOOKS = ['block-dialogs', 'config-guard', 'core-guard', 'operator-guard', 'tools-nudge', 'vault-guard'];
+export const GUARD_HOOKS = ['block-dialogs', 'config-guard', 'core-guard', 'destructive-guard', 'operator-guard', 'tools-nudge', 'vault-guard'];
 export function hookNames() {
   const names = new Set(GUARD_HOOKS);
   try {
