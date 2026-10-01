@@ -3,6 +3,49 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.13
+
+Fixes from a parity review against the old standalone supervisor: auto-roll
+can fire, triage runs on the bot's own token, auto-commit no longer runs into
+its timeout, a deaf Telegram poller is found and healed, and the session
+debrief runs as a daemon job.
+
+- **Fixed (daemon):** auto-roll never fired on a bot whose
+  `harness.roll_tokens` (default 500000) reached its auto-compact point
+  (`context_window: 50%` = 500K): Claude Code compacts a little before the
+  window, so the context never passed the threshold. The effective threshold
+  is now `min(roll_tokens, 80% of the compact point)`, computed in one place
+  (`botyaml.mjs rollThreshold`) and used by the tick's auto-roll and by
+  `context_warn`. `--validate` and the doctor (`<bot>: roll threshold`) warn
+  when `roll_tokens` is at or above the compact point.
+- **Fixed (daemon):** alert triage's headless run inherited the daemon's
+  machine-wide `CLAUDE_CODE_OAUTH_TOKEN`, which on a shared host belongs to
+  another account. It now drops the inherited credentials and gets the bot's
+  own `oauth_token` (or its active account's) through the same code
+  automations use (`Get-JobSecretEnv`).
+- **Fixed (harness):** the `auto-commit` Stop hook ran at p95 28 s of its
+  30 s timeout on a live Windows bot. Its git work takes about 0.2 s; the
+  rest was Git Bash start-up and forks. The hook is now `auto-commit.mjs`,
+  which `run.mjs` runs on node without bash: 0.2-0.3 s in a measurement
+  where the bash version hit its timeout on every run. Same gates, commit and
+  detached push.
+- **Added (daemon):** a deaf Telegram poller is found without touching the
+  slot. A plugin that left its poll loop stays alive, so the poller read
+  OWNED. The tick now reads the local TCP table: a polling plugin always holds
+  its long-poll connection. Three ticks in a row with no connection, while
+  Telegram is reachable, heal it like a dead poller (an idle-gated restart).
+  On by default; it uses no token and sends nothing to Telegram. The
+  `getUpdates` probe stays opt-in.
+- **Changed (harness):** the session debrief (module `debrief`) is a built-in
+  daemon job, `session-debrief`: every 6 h, with the bot's own token, and
+  only when the session journal changed since the last debrief. As a Stop
+  hook it never had credentials. The Stop hook is removed; `session-debrief`
+  stays a valid `hooks_disable` name.
+
+Upgrading: nothing to do. A bot with `roll_tokens` at or above its compact
+point gets a doctor WARN and rolls at 80% of the compact point; lower
+`harness.roll_tokens` to silence it.
+
 ## v0.9.12
 
 The cockpit server is type-checked: every file under `cockpit/` that runs in
