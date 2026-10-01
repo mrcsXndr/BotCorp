@@ -33,7 +33,7 @@ function DocRows({ docs, onOpen }: { docs: KnowledgeRow[]; onOpen?: (id: string)
           <li key={d.id} data-doc={d.id}>
             {onOpen
               ? <button type="button" onClick={() => onOpen(d.id)} className="flex items-center gap-3 w-full min-h-[var(--tap)] px-2 -mx-2 rounded-btn bg-transparent border-0 text-left cursor-default outline-none hover:bg-hover focus-visible:outline-2 focus-visible:outline-accent">{body}</button>
-              : <div className="flex items-center gap-3 min-h-[var(--tap)]">{body}</div>}
+              : <div className="flex items-center gap-3 min-h-[var(--tap)] px-2 -mx-2">{body}</div>}
           </li>
         );
       })}
