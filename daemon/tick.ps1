@@ -380,15 +380,26 @@ function Test-TgPollerDeaf {
     # Default on, every tick with an OWNED poller: Get-TgLinkVerdict on the
     # plugin's own connections (state tg_link_miss carries the count). $true =
     # deaf on 3 ticks in a row; the caller heals it like a DEAD poller.
-    param([string]$Bot, $St, [hashtable]$Paths, [switch]$AsDryRun)
+    # One restart per episode: a revoked token or a stolen slot leaves the
+    # new plugin deaf too, so once a deaf restart has not healed it
+    # (tg_deaf_restarted, cleared by the first connection seen) it alerts
+    # instead of restarting into the start cap.
+    param([string]$Bot, $St, $Cfg, [hashtable]$Paths, [switch]$AsDryRun)
     try {
         $botPid = 0; try { $botPid = Get-FirstPid ((Get-Content -LiteralPath (Join-Path $Paths.ConfigDir 'channels\telegram\bot.pid') -ErrorAction Stop | Select-Object -First 1)) } catch {}
         $prev = 0; try { if ($St -and ($St.PSObject.Properties.Name -contains 'tg_link_miss') -and $St.tg_link_miss) { $prev = [int]$St.tg_link_miss } } catch {}
+        $retried = $false; try { $retried = [bool]($St -and ($St.PSObject.Properties.Name -contains 'tg_deaf_restarted') -and $St.tg_deaf_restarted) } catch {}
         $conns = Get-TgLinkCount -ProcId $botPid
         $reach = $(if ($conns -eq 0) { Test-TgReachable } else { $true })
         $v = Get-TgLinkVerdict -Conns $conns -Reachable $reach -Misses $prev
         if ($v.Misses -ne $prev -and -not $AsDryRun) { Write-BotState -Bot $Bot -Updates @{ tg_link_miss = $(if ($v.Misses) { $v.Misses } else { $null }) } }
+        if ($retried -and $null -ne $conns -and [int]$conns -gt 0 -and -not $AsDryRun) { Write-BotState -Bot $Bot -Updates @{ tg_deaf_restarted = $null } }
         if ($conns -eq 0) { Write-DaemonLog "tg link: poller bot.pid=$botPid holds no connection ($($v.Misses)/3$(if (-not $reach) { ', Telegram unreachable from this box: not counted' }))$(if ($v.Deaf) { ' -> deaf' })" -Bot $Bot -Quiet:(-not $v.Deaf) }
+        if ($v.Deaf -and $retried) {
+            Write-DaemonLog 'tg link: still deaf after a deaf restart - not restarting again (a revoked token or a second poller on this token?)' -Bot $Bot
+            if (-not $AsDryRun) { Send-TgSlotAlert -Bot $Bot -Cfg $Cfg -Paths $Paths -Text ('The Telegram poller is still deaf after a restart, so inbound messages are not arriving. Check the token (botcorp secrets set ' + $Bot + ' telegram) or stop a second poller on it, then botcorp restart ' + $Bot + '.') }
+            return $false
+        }
         return [bool]$v.Deaf
     } catch { Write-DaemonLog "tg link: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $false }
 }
@@ -905,7 +916,7 @@ function Invoke-BotTick {
     $deaf = $false
     if ($hasTg -and $alive -and $poller -eq 'OWNED') {
         Invoke-TgProbe -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun
-        $deaf = Test-TgPollerDeaf -Bot $Bot -St $st -Paths $P -AsDryRun:$DryRun
+        $deaf = Test-TgPollerDeaf -Bot $Bot -St $st -Cfg $cfg -Paths $P -AsDryRun:$DryRun
     }
     try { if ($poller -ne 'DEAD' -and -not $deaf -and $st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ tg_dead_since = $null } } } catch {}
 
@@ -1070,7 +1081,9 @@ function Invoke-BotTick {
             } catch { Write-DaemonLog "auto-roll: fresh marker not written ($($_.Exception.Message)); not rolling" -Bot $Bot; return }
             Write-BotState -Bot $Bot -Updates @{ auto_roll_at = (Get-Date).ToString('o') }
         }
-        $rel = if ($autoRoll) { 'FRESH (auto-roll)' } elseif ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
+        # a deaf restart starts a fresh count and is the episode's one restart (Test-TgPollerDeaf)
+        if ($deaf) { Write-BotState -Bot $Bot -Updates @{ tg_link_miss = $null; tg_deaf_restarted = 1 } }
+        $rel =if ($autoRoll) { 'FRESH (auto-roll)' } elseif ($service -eq 'bg') { "--resume $sessionId" } else { '--continue' }
         Write-DaemonLog "ACTION=START bot=$Bot kind=restart ($why, session $(if ($limited) { 'usage-limited' } else { 'idle' }) -> $rel)" -Bot $Bot
         if ($ccRoll) { Write-BotState -Bot $Bot -Updates @{ cc_roll_at = (Get-Date).ToString('o') } }
         if ($acctRoll) { Write-BotState -Bot $Bot -Updates @{ account_roll_at = (Get-Date).ToString('o') } }

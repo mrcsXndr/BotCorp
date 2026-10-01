@@ -91,7 +91,7 @@ def deaf_bot(tmp_path):
     return name, home, rt, env
 
 
-def _tick(name, home, rt, env, tmp_path, misses):
+def _tick(name, home, rt, env, tmp_path, misses, extra_state=None):
     srv = socket.socket()                       # the reachable "Bot API": a TCP connect, nothing else
     srv.bind(("127.0.0.1", 0))
     srv.listen(8)
@@ -116,7 +116,7 @@ def _tick(name, home, rt, env, tmp_path, misses):
         (home / f".claude-{name}" / "channels" / "telegram" / "bot.pid").write_text(str(plugin), encoding="utf-8")
         old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3600))
         (rt / "state" / f"{name}.json").write_text(json.dumps({"bot": name, "claude_pid": fake.pid, "status": "running", "service": "bg",
-                                                                "bg_id": "", "started_at": old, "poller": "OWNED", "tg_link_miss": misses}), encoding="utf-8")
+                                                                "bg_id": "", "started_at": old, "poller": "OWNED", "tg_link_miss": misses, **(extra_state or {})}), encoding="utf-8")
         (rt / "cockpit.json").write_text('{"enabled": false}', encoding="utf-8")
         (rt / "state" / "daemon.json").write_text(json.dumps({"update_check_at": time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime())}), encoding="utf-8")
         (rt / "state" / "otel.json").write_text(json.dumps({"pid": sink.pid}), encoding="utf-8")
@@ -144,4 +144,14 @@ def test_the_first_quiet_tick_is_no_action(deaf_bot, tmp_path):
     name, home, rt, env = deaf_bot
     lines = _tick(name, home, rt, env, tmp_path, misses=0)
     assert any("tg link: poller bot.pid=" in ln and "(1/3)" in ln for ln in lines), lines   # positive control: measured
+    assert not any("would restart" in ln for ln in lines), lines
+
+
+@needs_win
+def test_still_deaf_after_a_deaf_restart_is_not_restarted_again(deaf_bot, tmp_path):
+    # a revoked token or a stolen slot leaves the new plugin deaf too: one restart per episode, not a loop into the start cap
+    name, home, rt, env = deaf_bot
+    lines = _tick(name, home, rt, env, tmp_path, misses=2, extra_state={"tg_deaf_restarted": 1})
+    assert any("(3/3) -> deaf" in ln for ln in lines), lines                                 # positive control: still measured deaf
+    assert any("still deaf after a deaf restart" in ln for ln in lines), lines
     assert not any("would restart" in ln for ln in lines), lines

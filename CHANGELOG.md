@@ -34,13 +34,18 @@ debrief runs as a daemon job.
   OWNED. The tick now reads the local TCP table: a polling plugin always holds
   its long-poll connection. Three ticks in a row with no connection, while
   Telegram is reachable, heal it like a dead poller (an idle-gated restart).
-  On by default; it uses no token and sends nothing to Telegram. The
-  `getUpdates` probe stays opt-in.
+  On by default; it uses no token. One restart per episode: a revoked token
+  or a second poller on the token leaves the new plugin deaf too, so a
+  poller still deaf after a deaf restart raises one alert instead of
+  restarting again, until a connection is seen. The `getUpdates` probe stays
+  opt-in.
 - **Changed (harness):** the session debrief (module `debrief`) is a built-in
   daemon job, `session-debrief`: every 6 h, with the bot's own token, and
   only when the session journal changed since the last debrief. As a Stop
-  hook it never had credentials. The Stop hook is removed; `session-debrief`
-  stays a valid `hooks_disable` name.
+  hook it never had credentials. The Stop hook is removed. `session-debrief`
+  stays a valid `hooks_disable` name but no longer does anything: the module
+  switch is the control. A bot without `oauth_token` in `secrets:` gets a
+  SUMMARY line and exit 0, not a failing job.
 
 Upgrading: nothing to do. A bot with `roll_tokens` at or above its compact
 point gets a doctor WARN and rolls at 80% of the compact point; lower

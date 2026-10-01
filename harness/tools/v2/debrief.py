@@ -97,8 +97,9 @@ def main(argv: list[str]) -> int:
         print(f"SUMMARY: the journal of {sid} has not changed since the last debrief; nothing to do")
         return 0
     if not _claude_auth_available():
+        # a config gap, not a failure: exit 1 here would fail the job every 6 h
         print("SUMMARY: no Claude credentials in this env (declare oauth_token in bot.yaml secrets:); not debriefed")
-        return 1
+        return 0
     env = dict(os.environ, BOT_TG_MUTE="1", PYTHONIOENCODING="utf-8")
     started = int(time.time())   # the stamp: a journal written during the run is debriefed next time
     try:
