@@ -3,6 +3,39 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.11
+
+A guard against commands that wipe a disk, a home, a bot folder or main; the
+transcript cost meter counts each message once; the visible launch mode is
+gone; the improvement cycle is documented as the manual process it is.
+
+- **Added (harness):** `destructive-guard`, a new PreToolUse guard in
+  `guard.mjs` for shell tool calls. It blocks a recursive delete of the
+  filesystem root, a drive root, the home folder, the BotCorp root, a bot
+  folder or a `.git` directory (or a folder holding one), a force push to
+  `main`/`master`, `git reset --hard` together with `git clean -fdx`, and
+  `format <drive>:` / `Format-Volume` / `diskpart` / `mkfs`. It reads through
+  quotes, `cmd /c`, `bash -c` and `pwsh -Command`. Everyday deletes
+  (`rm -rf node_modules`, a job dir) and pushes pass. The message says the
+  operator can run it from their own terminal. Switching it off with
+  `harness.hooks_disable` queues for operator approval.
+- **Fixed (cost meter):** the transcript fallback counted a message once per
+  content block, because Claude Code writes each block on its own line with
+  the message's usage. It now counts each `message.id` (else `requestId`)
+  once, with its last usage.
+- **Removed (daemon):** the visible launch mode: `daemon/launch-visible.ps1`,
+  the `BotCorp-Launch` scheduled task and the tick's move of a hidden
+  session-0 pty bot to a visible window. A pty bot starts and restarts under
+  pty-host (the cockpit attaches); bg bots are unchanged. `botcorp doctor`
+  reports a leftover `BotCorp-Launch` task as INFO and never removes it;
+  `install.ps1 -Unregister` still does.
+- **Docs:** `docs/improvement-cycle.md` describes the suggest / review /
+  merge cycle as manual and on demand. No weekly suggest run, review tick or
+  Sunday digest ever existed; the `suggest:` block in `bot.yaml` is inert.
+
+Upgrading: nothing to do. To drop the old task, run
+`Unregister-ScheduledTask -TaskName BotCorp-Launch` from your own terminal.
+
 ## v0.9.10
 
 A stopped background bot starts again at once, and `botcorp restart` brings
