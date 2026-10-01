@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "cockpit": "node cockpit/server.mjs",
+    "typecheck:cockpit": "tsc -p cockpit/tsconfig.json",
     "test": "node --check cockpit/server.mjs && node --check daemon/pty-host.mjs && node --test core/tests/failover.test.mjs core/tests/changelog.test.mjs core/tests/releases.test.mjs &&python -m pytest harness/tests -q"
   },
   "dependencies": {
@@ -15,5 +16,12 @@
     "js-yaml": "^4.1.0",
     "node-pty": "^1.1.0",
     "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/express": "5.0.6",
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "20.19.43",
+    "@types/ws": "8.18.2",
+    "typescript": "7.0.2"
   }
 }

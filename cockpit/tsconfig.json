@@ -1,0 +1,20 @@
+// Type-check the cockpit server (the Node side; cockpit/web has its own tsconfig).
+// checkJs stays off: each cockpit file opts in with `// @ts-check`, so the
+// core/cli/daemon modules it imports are read for types but not checked.
+// noImplicitAny stays off: an unannotated parameter is `any` rather than an
+// error; the rest of `strict` is on.
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "skipLibCheck": true,
+    "types": ["node"]
+  },
+  "include": ["*.mjs", "*.d.ts"]
+}
