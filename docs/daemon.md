@@ -554,7 +554,11 @@ Headless utility spawns (triage, debrief) use `Get-ClaudeHeadlessArgv`: `-p
 --setting-sources user --dangerously-skip-permissions [--model M]
 [--plugin-dir <harness>]`, prompt on stdin. There is deliberately no `--bare`:
 it never reads OAuth (`docs/cc-compat.md` viii), so a token-authenticated bot
-cannot use it.
+cannot use it. Triage's scan, and so the headless run it spawns, gets the
+credential an automation gets (`Get-JobSecretEnv`): the inherited
+`CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` are dropped (on a shared host
+they are another account's) and the bot's `oauth_token`, or its active
+account's, is injected when bot.yaml `secrets:` declares it.
 
 Knobs: `BOT_BREAKPOINT_TTL_MIN` (30), `BOT_TRIAGE_EVERY_MIN` (30) and the
 other `BOT_TRIAGE_*` read by `alert_triage.py`, `tick.ps1 -MaxStartsPerWindow

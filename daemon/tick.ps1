@@ -515,7 +515,12 @@ function Invoke-AlertTriage {
         $a = @($script, 'scan')
         if (Test-SessionBusy -Bot $Bot) { $a += '--session-busy' }
         if ($AsDryRun) { $a += '--dry-run' }
-        $r = Invoke-Bounded -Exe $pyExe -Arguments $a -TimeoutSec 120 -Label 'alert_triage' -Env (Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths) -WorkingDirectory $Paths.BotHome -Bot $Bot
+        # The scan spawns the headless `claude --print` run with this env: the
+        # bot's own token (an automation's path), never the inherited one.
+        $e = Get-BotEnv -Bot $Bot -Cfg $Cfg -Paths $Paths
+        $keys = @(@($Cfg.secrets) | Where-Object { "$_" -eq 'oauth_token' })
+        if ($keys.Count -gt 0) { $sec = Get-JobSecretEnv -Bot $Bot -Cfg $Cfg -Paths $Paths -Keys $keys -LogPrefix 'alert_triage'; foreach ($k in $sec.Keys) { $e[$k] = $sec[$k] } }
+        $r = Invoke-Bounded -Exe $pyExe -Arguments $a -TimeoutSec 120 -Label 'alert_triage' -Env $e -DropEnv $script:InheritedClaudeAuthEnv -WorkingDirectory $Paths.BotHome -Bot $Bot
         Write-DaemonLog "alert_triage: scan rc=$(if ($null -eq $r.ExitCode) { 'killed' } else { $r.ExitCode })$(if ($AsDryRun) { ' (dry-run)' })" -Bot $Bot
     } catch { Write-DaemonLog "alert_triage: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }

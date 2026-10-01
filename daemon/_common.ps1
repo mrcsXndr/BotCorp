@@ -1346,7 +1346,8 @@ function Invoke-Bounded {
     # -ArgumentList joins with spaces and does not). Returns
     #   @{ ExitCode = <int or $null when killed>; Output = <stdout+stderr when -Capture>; Killed = <bool> }
     # Without -Capture, output is discarded rather than buffered (a chatty child
-    # on a full, undrained pipe would deadlock).
+    # on a full, undrained pipe would deadlock). -DropEnv: inherited variables
+    # the child must not see (removed before -Env is applied).
     param(
         [Parameter(Mandatory)][string]$Exe,
         [string[]]$Arguments = @(),
@@ -1355,7 +1356,8 @@ function Invoke-Bounded {
         [string]$WorkingDirectory,
         [hashtable]$Env,
         [switch]$Capture,
-        [string]$Bot
+        [string]$Bot,
+        [string[]]$DropEnv = @()
     )
     $p = $null
     try {
@@ -1365,6 +1367,7 @@ function Invoke-Bounded {
         $psi.UseShellExecute = $false
         $psi.CreateNoWindow = $true
         if ($WorkingDirectory) { $psi.WorkingDirectory = $WorkingDirectory }
+        foreach ($k in $DropEnv) { [void]$psi.Environment.Remove([string]$k) }
         if ($Env) { foreach ($k in $Env.Keys) { $psi.Environment[[string]$k] = [string]$Env[$k] } }
         $psi.RedirectStandardOutput = [bool]$Capture
         $psi.RedirectStandardError = [bool]$Capture
@@ -1806,6 +1809,36 @@ function Get-ActiveAccount {
         }
     } catch {}
     return $primary
+}
+
+# An inherited Claude credential is another account's (the HKCU user env on a
+# shared host): a daemon child that may run claude drops these and gets only
+# the bot's own, through Get-JobSecretEnv.
+$script:InheritedClaudeAuthEnv = @('CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY')
+
+function Get-JobSecretEnv {
+    # Vault keys -> the env a daemon-run job gets (an automation's `secrets:`,
+    # alert triage's headless run): each value under the key upper-cased and
+    # under the session's name (oauth_token -> CLAUDE_CODE_OAUTH_TOKEN). An
+    # oauth_token follows the session's active account (Get-ActiveAccount),
+    # else the bot's own. Decrypted in-process, never logged; a key it cannot
+    # read is logged by name and left out.
+    param([Parameter(Mandatory)][string]$Bot, $Cfg, [hashtable]$Paths, [string[]]$Keys, [string]$LogPrefix)
+    $out = @{}
+    try {
+        $acct = "$(Get-ActiveAccount -Bot $Bot -Cfg $Cfg -State (Read-BotState -Bot $Bot))"
+        foreach ($k in $Keys) {
+            $v = $null
+            if ("$k" -eq 'oauth_token' -and $acct) {
+                $accHome = Join-Path (Join-Path $script:RtHome 'accounts') $acct
+                try { if (Test-Path (Join-Path $accHome 'account.json')) { $v = Get-VaultSecret -BotHome $accHome -Bot "account:$acct" -Key 'oauth_token' } } catch { $v = $null }
+                if (-not $v) { Write-DaemonLog "${LogPrefix}: account $acct unreadable -> bot's oauth_token" -Bot $Bot }
+            }
+            if (-not $v) { try { $v = Get-VaultSecret -BotHome $Paths.BotHome -Bot $Bot -Key "$k" -Reason 'automation' } catch { Write-DaemonLog "${LogPrefix}: vault key '$k' unreadable - re-enter it with: botcorp secrets set $Bot $k" -Bot $Bot } }
+            if ($v) { $out["$k".ToUpperInvariant()] = $v; $out[(Get-SecretEnvName $k)] = $v } else { Write-DaemonLog "${LogPrefix}: vault key '$k' missing" -Bot $Bot }
+        }
+    } catch { Write-DaemonLog "${LogPrefix}: vault unavailable ($($_.Exception.Message))" -Bot $Bot }
+    return $out
 }
 
 function New-LaunchId {

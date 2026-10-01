@@ -287,21 +287,8 @@ function Invoke-AutomationJob {
     }
     $secretNames = @(); try { $secretNames = @($a.secrets | Where-Object { $_ }) } catch {}
     if ($secretNames.Count -gt 0) {
-        try {
-            . (Join-Path $PSScriptRoot 'vault.ps1')
-            $acct = "$(Get-ActiveAccount -Bot $Bot -Cfg $jcfg -State (Read-BotState -Bot $Bot))"   # the session's active account (Get-ActiveAccount: a failover's, else bot.yaml account): a job's oauth_token follows it
-            foreach ($k in $secretNames) {
-                $v = $null
-                if ("$k" -eq 'oauth_token' -and $acct) {
-                    $accHome = Join-Path (Join-Path $RtHome 'accounts') $acct
-                    try { if (Test-Path (Join-Path $accHome 'account.json')) { $v = Get-VaultSecret -BotHome $accHome -Bot "account:$acct" -Key 'oauth_token' } } catch { $v = $null }
-                    if (-not $v) { Log "run ${name}: account $acct unreadable -> bot's oauth_token" }
-                }
-                if (-not $v) { try { $v = Get-VaultSecret -BotHome $P.BotHome -Bot $Bot -Key "$k" -Reason 'automation' } catch { Log "run ${name}: vault key '$k' unreadable - re-enter it with: botcorp secrets set $Bot $k" } }
-                if ($v) { $envMap["$k".ToUpperInvariant()] = $v; $envMap[(Get-SecretEnvName $k)] = $v } else { Log "run ${name}: vault key '$k' missing" }
-            }
-        } catch { Log "run ${name}: vault unavailable ($($_.Exception.Message))" }
-        $ErrorActionPreference = 'Continue'   # vault.ps1 sets Stop for itself
+        $sec = Get-JobSecretEnv -Bot $Bot -Cfg $jcfg -Paths $P -Keys $secretNames -LogPrefix "automations: run ${name}"
+        foreach ($k in $sec.Keys) { $envMap[$k] = $sec[$k] }
     }
 
     $start = Get-DaemonNow
@@ -320,7 +307,7 @@ function Invoke-AutomationJob {
         $psi.WorkingDirectory = $P.BotHome
         # An inherited Claude credential is another account's (the HKCU user env
         # on a shared host); a job gets only its own, through secrets: [oauth_token].
-        foreach ($k in 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY') { [void]$psi.Environment.Remove($k) }
+        foreach ($k in $script:InheritedClaudeAuthEnv) { [void]$psi.Environment.Remove($k) }
         foreach ($k in $envMap.Keys) { $psi.Environment[[string]$k] = [string]$envMap[$k] }
         if ($isPrompt) { $psi.RedirectStandardInput = $true; $psi.StandardInputEncoding = [System.Text.UTF8Encoding]::new($false) }
         $proc = [System.Diagnostics.Process]::Start($psi)
