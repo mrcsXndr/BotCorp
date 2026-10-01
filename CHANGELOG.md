@@ -3,6 +3,31 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## v0.9.12
+
+The cockpit server is type-checked: every file under `cockpit/` that runs in
+Node is checked by TypeScript from its JSDoc, and `npm test` runs the check.
+Nothing was rewritten; one leaked timer was fixed on the way.
+
+- **Added (cockpit):** `npm run typecheck:cockpit` runs `tsc` over the
+  cockpit server with `cockpit/tsconfig.json`. Each server file opts in with
+  `// @ts-check`; the core, cli and daemon modules it imports are read for
+  their types but not checked themselves. `strict` is on except
+  `noImplicitAny` (an unannotated parameter is `any`) and
+  `useUnknownInCatchVariables` (a caught error is `any`). The route
+  wrappers, the gates and the CLI helpers carry JSDoc types, so each handler
+  is checked against the Express 5 types. TypeScript 7.0.2 and the Node 20,
+  Express, ws and js-yaml types are pinned devDependencies. The web app
+  (`cockpit/web`) keeps its own check.
+- **Fixed (cockpit):** a terminal socket that closed before its chat loop
+  started left the 1.5 s chat timer running for the life of the cockpit.
+  The timer now starts only while the socket is still open.
+- **Changed (cockpit):** `GET /api/updates` lists `installed` after
+  `releases` instead of first; the value is the same.
+
+Upgrading: nothing to do. `npm ci` installs the new devDependencies; the
+cockpit itself needs none of them to run.
+
 ## v0.9.11
 
 A guard against commands that wipe a disk, a home, a bot folder or main; the
