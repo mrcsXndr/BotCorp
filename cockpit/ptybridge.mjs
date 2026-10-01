@@ -106,7 +106,7 @@ export async function bridge(bot, browser, { chat = true } = {}) {
       } catch {} finally { chatBusy = false; }
     };
     await tick();
-    chatTimer = setInterval(tick, CHAT_TICK_MS);
+    if (!closed) chatTimer = setInterval(tick, CHAT_TICK_MS);   // closeAll already ran: nothing would clear it
 
     const statusTick = async () => {
       if (browser.readyState !== 1) return;

@@ -99,6 +99,28 @@ test('C5: an error or a frame on the browser socket before bridge() settles is h
   assert.equal(browser.readyState, 3, 'the errored socket is closed');
 });
 
+test('a browser that closes before the chat loop starts leaves no chat timer running', async () => {
+  const { bridge } = await import('../ptybridge.mjs');
+  const { setInterval: realSet, clearInterval: realClear } = globalThis;
+  const made = [];
+  const cleared = new Set();
+  globalThis.setInterval = (...a) => { const t = realSet(...a); made.push(t); return t; };
+  globalThis.clearInterval = (t) => { cleared.add(t); return realClear(t); };
+  try {
+    const browser = new EventEmitter();
+    browser.readyState = 1;
+    browser.close = () => { browser.readyState = 3; };
+    // the tab goes away right after 'stopped', while bridge() is still on its way to the first chat read
+    browser.send = (d) => { if (JSON.parse(d).t === 'stopped') { browser.readyState = 3; browser.emit('close'); } };
+    await bridge({ name: 'gone', kind: 'pty', running: false, configDir: TMP, home: path.join(BOTS, 'gone') }, browser);
+    assert.equal(made.filter((t) => !cleared.has(t)).length, 0, 'every interval the bridge started was cleared');
+  } finally {
+    globalThis.setInterval = realSet;
+    globalThis.clearInterval = realClear;
+    for (const t of made) realClear(t);
+  }
+});
+
 function auditRows() {
   const f = path.join(RT, 'state', 'cockpit-audit.jsonl');
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf-8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
