@@ -1128,6 +1128,43 @@ function Test-TgConnection {
     } catch { return $null }
 }
 
+function Get-TgLinkCount {
+    # How many established TCP connections process $ProcId holds, to any
+    # remote: a polling plugin always holds its getUpdates long-poll (a proxy
+    # or a DNS answer that differs from the plugin's cannot hide it), a plugin
+    # that left its poll loop holds none. $null when it cannot be measured.
+    param([int]$ProcId)
+    if ($ProcId -le 0) { return $null }
+    try { return @(Get-NetTCPConnection -State Established -ErrorAction Stop | Where-Object { $_.OwningProcess -eq $ProcId }).Count } catch { return $null }
+}
+
+function Test-TgReachable {
+    # Can this box open a TCP connection to the Bot API at all? No request and
+    # no token: a connect and a close. BOTCORP_TG_API_BASE (tests: a loopback
+    # fake) replaces api.telegram.org:443.
+    param([int]$TimeoutMs = 3000)
+    $h = 'api.telegram.org'; $port = 443
+    if ($env:BOTCORP_TG_API_BASE) { try { $u = [uri]$env:BOTCORP_TG_API_BASE; $h = $u.Host; $port = $u.Port } catch {} }
+    $c = [System.Net.Sockets.TcpClient]::new()
+    try { return ($c.ConnectAsync($h, $port).Wait($TimeoutMs) -and $c.Connected) } catch { return $false } finally { $c.Dispose() }
+}
+
+function Get-TgLinkVerdict {
+    # v0.9.13: OWNED (bot.pid alive under claude) says the plugin lives, not
+    # that it polls: after 8 409s in a row it leaves its poll loop and stays
+    # alive, deaf (a slot another poller took ends the same way). The opt-in
+    # getUpdates probe (Invoke-TgProbe) interrupts the live poller; this reads
+    # only the local TCP table. Deaf = the plugin process held NO established
+    # connection on $Need ticks in a row while the box could reach Telegram.
+    # Unmeasurable ($Conns $null) or unreachable keeps the count; any
+    # connection resets it. -> @{ Misses; Deaf }
+    param($Conns, [bool]$Reachable, [int]$Misses = 0, [int]$Need = 3)
+    if ($null -eq $Conns -or -not $Reachable) { return @{ Misses = $Misses; Deaf = $false } }
+    if ([int]$Conns -gt 0) { return @{ Misses = 0; Deaf = $false } }
+    $m = $Misses + 1
+    return @{ Misses = $m; Deaf = ($m -ge $Need) }
+}
+
 function Get-BgBlock {
     # The session is waiting on something no unattended launch can answer (a
     # login, a dialog, a permission) - '' when it is not, or when that cannot

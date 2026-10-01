@@ -376,6 +376,23 @@ function Invoke-TgProbe {
     } catch { Write-DaemonLog "tg probe: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot }
 }
 
+function Test-TgPollerDeaf {
+    # Default on, every tick with an OWNED poller: Get-TgLinkVerdict on the
+    # plugin's own connections (state tg_link_miss carries the count). $true =
+    # deaf on 3 ticks in a row; the caller heals it like a DEAD poller.
+    param([string]$Bot, $St, [hashtable]$Paths, [switch]$AsDryRun)
+    try {
+        $botPid = 0; try { $botPid = Get-FirstPid ((Get-Content -LiteralPath (Join-Path $Paths.ConfigDir 'channels\telegram\bot.pid') -ErrorAction Stop | Select-Object -First 1)) } catch {}
+        $prev = 0; try { if ($St -and ($St.PSObject.Properties.Name -contains 'tg_link_miss') -and $St.tg_link_miss) { $prev = [int]$St.tg_link_miss } } catch {}
+        $conns = Get-TgLinkCount -ProcId $botPid
+        $reach = $(if ($conns -eq 0) { Test-TgReachable } else { $true })
+        $v = Get-TgLinkVerdict -Conns $conns -Reachable $reach -Misses $prev
+        if ($v.Misses -ne $prev -and -not $AsDryRun) { Write-BotState -Bot $Bot -Updates @{ tg_link_miss = $(if ($v.Misses) { $v.Misses } else { $null }) } }
+        if ($conns -eq 0) { Write-DaemonLog "tg link: poller bot.pid=$botPid holds no connection ($($v.Misses)/3$(if (-not $reach) { ', Telegram unreachable from this box: not counted' }))$(if ($v.Deaf) { ' -> deaf' })" -Bot $Bot -Quiet:(-not $v.Deaf) }
+        return [bool]$v.Deaf
+    } catch { Write-DaemonLog "tg link: swallowed exception (fail-open): $($_.Exception.Message)" -Bot $Bot; return $false }
+}
+
 function Invoke-RegistryScan {
     # Once a day per bot with a `tools:` list: `botcorp tools <bot> scan` records
     # the day in <rt>/state/<bot>.registry-days.json, so a quiet day still
@@ -885,8 +902,12 @@ function Invoke-BotTick {
         Write-BotState -Bot $Bot -Updates $upd
     }
     if ($ProbeOnly) { return }
-    if ($hasTg -and $alive -and $poller -eq 'OWNED') { Invoke-TgProbe -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun }
-    try { if ($poller -ne 'DEAD' -and $st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ tg_dead_since = $null } } } catch {}
+    $deaf = $false
+    if ($hasTg -and $alive -and $poller -eq 'OWNED') {
+        Invoke-TgProbe -Bot $Bot -Cfg $cfg -Paths $P -AsDryRun:$DryRun
+        $deaf = Test-TgPollerDeaf -Bot $Bot -St $st -Paths $P -AsDryRun:$DryRun
+    }
+    try { if ($poller -ne 'DEAD' -and -not $deaf -and $st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since -and -not $DryRun) { Write-BotState -Bot $Bot -Updates @{ tg_dead_since = $null } } } catch {}
 
     # --- decide -----------------------------------------------------------------
     # A poller DEAD within the launcher grace may still be connecting: not yet.
@@ -902,6 +923,7 @@ function Invoke-BotTick {
     if (-not $alive -and $rosterUnknown -and $unknownTicks -lt 3) { $action = 'deferred'; Write-DaemonLog "roster unknown, deferring ($unknownTicks/3 before a cold-start)" -Bot $Bot }
     elseif (-not $alive) { $action = 'cold-start' }
     elseif ($poller -eq 'DEAD' -and $startedMin -ge $LauncherGraceMin) { $action = 'restart' }
+    elseif ($deaf -and $startedMin -ge $LauncherGraceMin) { $action = 'restart'; $why = 'poller deaf: its process held no connection on 3 ticks' }
 
     if (($action -eq 'cold-start') -and (Test-Path $P.PausedFile)) {
         Write-DaemonLog 'paused (state/<bot>.paused present) - not cold-starting' -Bot $Bot -Quiet
@@ -1028,7 +1050,7 @@ function Invoke-BotTick {
         if ($stuck) { Write-DaemonLog "session $(if ($limited) { 'usage-limited' } else { 'blocked on a login' }): the turn cannot proceed -> restart allowed (no live work to protect)" -Bot $Bot }
         if (Test-SessionBusy -Bot $Bot -LimitBlocked:$stuck) {
             Write-DaemonLog "restart DEFERRED ($why): session BUSY (transcript fresh) - not killing live work" -Bot $Bot
-            if ($poller -eq 'DEAD') {
+            if ($poller -eq 'DEAD' -or $deaf) {
                 # a turn that ends within a tick or two heals it without a word; one that keeps it deaf alerts
                 $since = [datetime]::MinValue
                 try { if ($st -and ($st.PSObject.Properties.Name -contains 'tg_dead_since') -and $st.tg_dead_since) { [void][datetime]::TryParse("$($st.tg_dead_since)", [ref]$since) } } catch {}

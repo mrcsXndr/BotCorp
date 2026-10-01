@@ -441,6 +441,8 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                         jobs/<bg_id>/state.json tempo blocked on anything but "send a prompt to start" -> BLOCKED line
   decision              not alive                                    -> cold-start (unless state/<bot>.paused or harness.service: manual)
                         alive + DEAD, launch older than LauncherGraceMin -> restart   (idle-gated)
+                        alive + OWNED but deaf (Test-TgPollerDeaf, below), launch older than LauncherGraceMin
+                                                                     -> restart   (idle-gated, as DEAD)
                         alive + OWNED / UNKNOWN                      -> none
                         cold-start/restart, vault operator-locked -> locked (state/<bot>.json launch.phase: locked;
                                     waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
@@ -480,7 +482,30 @@ only for a live session, so an orphan bun still holding the getUpdates slot
 never masks a dead bot. The tick used to ask `tg_watchdog.py --probe-only`
 instead, which needs the bot token; the token file is deleted after launch
 and the tick's env has no token, so every tick logged `poller=UNKNOWN` while
-`status` said OWNED. UNKNOWN never restarts a bot. Nothing in the tick holds
+`status` said OWNED. UNKNOWN never restarts a bot.
+
+**Deaf poller (default on, no token).** OWNED says the plugin process lives,
+not that it polls: after 8 409s in a row it leaves its poll loop and stays
+alive, and a slot another poller took ends the same way. The `getUpdates`
+probe (`BOT_TG_PROBE_EVERY_MIN`) can see that but interrupts the live
+poller's long-poll, so it stays opt-in. The tick instead reads the local TCP
+table: a polling plugin always holds its long-poll connection (measured on a
+live OWNED slot: one established connection to the Bot API in every sample),
+and a plugin that stopped polling holds none. `Test-TgPollerDeaf` counts the
+ticks on which bot.pid holds no established connection at all (any remote, so
+a proxy or a different DNS answer cannot fake a miss) while a plain TCP
+connect to `api.telegram.org:443` succeeds (an outage is not counted); any
+connection resets the count (`tg_link_miss` in `state/<bot>.json`). Three in
+a row is deaf, healed like a DEAD poller: an idle-gated restart, and a busy
+session that keeps it deaf for 10 min sends the existing CRITICAL line. What
+it cannot see: a deaf plugin that still holds an idle keep-alive socket (a
+missed heal, never a false one), and a slot stolen while the plugin keeps
+retrying (it gives up after 8 tries, then counts). Considered and not used:
+`getWebhookInfo`'s `pending_update_count` would show updates piling up
+without consuming any, but it needs the bot token in the tick, and the slot
+probe deliberately keeps that token inside the vault child.
+
+Nothing in the tick holds
 the mutex across an unbounded call: every
 child runs through `Invoke-Bounded` (hard timeout, tree kill), long work
 (triage, automations) is spawned detached with its own waiter.
