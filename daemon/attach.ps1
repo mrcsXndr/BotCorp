@@ -1,7 +1,7 @@
 # attach.ps1 - pull a running background bot up on the desktop: a Windows
 # Terminal tab running `claude attach <bg id>` under the bot's config home.
-# The session keeps running when the tab closes. `botcorp attach`, the tray's
-# double-click and launch-visible.ps1 (bg branch) all end here.
+# The session keeps running when the tab closes. `botcorp attach` and the
+# tray's double-click both end here.
 #
 #   attach.ps1 -Bot <name> [-Elevate] [-WaitSec <n>] [-DryRun]
 #   attach.ps1 -Bot <name> -InTab            # INSIDE the tab: env, then claude attach

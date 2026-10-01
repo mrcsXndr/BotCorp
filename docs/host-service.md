@@ -20,8 +20,8 @@ own probes.
    by session id on every restart (`--resume <session id>`, one conversation),
    supervised by Claude Code's own per-user supervisor in session 0; the tick
    checks it with `claude agents --json` and stops it with `claude stop <id>`.
-3. **Operators attach with `claude attach <id>`** (the `BotCorp-Launch` task
-   opens that window; the cockpit uses `pty-host --attach` as its transport).
+3. **Operators attach with `claude attach <id>`** (`botcorp attach` or the
+   tray opens that window; the cockpit uses `pty-host --attach` as its transport).
    Both must run with the daemon's elevation: the supervisor pipe answers only
    callers with the same token, so `RunLevel Highest` forces elevated attaches.
 
@@ -36,7 +36,7 @@ own probes.
   (`bots/<name>/.claude-<name>`); the Telegram plugin keeps one token per
   config home.
 - The background-session daemon pipe is admin-only: `claude attach` runs
-  elevated (`BotCorp-Launch` opens it through `wt.exe` with the daemon's
+  elevated (`attach.ps1` opens it through `wt.exe` with the daemon's
   RunLevel); a non-elevated `claude agents` lists nothing, which is expected.
 - The generated `settings.json` sets `worktree.bgIsolation: none`: a `--bg`
   session must run in the bot folder, not an isolated worktree.
@@ -125,7 +125,7 @@ tick treats a roster row whose process is gone and whose state is not
 - NOT verified: that a `RunLevel Limited` Password task yields a supervisor
   pipe reachable from a normal (non-elevated) shell. The reference host ran
   Highest. `install.ps1` records `run_level` in `install.json` and
-  `launch-visible.ps1` elevates the attach when it is Highest; if Limited turns
+  `attach.ps1` elevates the attach when it is Highest; if Limited turns
   out to need elevation too, set `-RunLevel Highest` and the rest follows.
 - NOT verified: `claude --bg` under an S4U task (cc-compat vii never ran the
   script at all).

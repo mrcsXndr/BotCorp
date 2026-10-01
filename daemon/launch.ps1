@@ -1,9 +1,9 @@
 # launch.ps1 - launch ONE bot's Claude Code session. The choke point every start
-# path uses: manual, the daemon's cold-start, restart.ps1, the visible-launch
-# task, and the pty-host (which runs this script inside the ConPTY).
+# path uses: manual, the daemon's cold-start, restart.ps1, and the pty-host
+# (which runs this script inside the ConPTY).
 #
 #   pwsh -NoProfile -File daemon/launch.ps1 -Bot <name> [-Continue|-Fresh] [-Bg] [-Force]
-#        [-StartedBy manual|cli|daemon-cold|daemon-restart|pty|visible] [-InPty] [-DebugLog] [-DryRun] [-- <claude args>]
+#        [-StartedBy manual|cli|daemon-cold|daemon-restart|pty] [-InPty] [-DebugLog] [-DryRun] [-- <claude args>]
 #   -DebugLog  this launch writes a Claude Code debug log to <config>/debug/ (bot.yaml harness.debug: every launch)
 #
 # Two shapes, picked by -Bg (the daemon passes it for `harness.session: bg`,
@@ -119,10 +119,10 @@ $botService = Get-BotSessionKind $cfg
 $exe = Resolve-ClaudeExe
 
 # --- 1b. attestation ---------------------------------------------------------------
-# A trusted start path (daemon tick, restart.ps1, launch-visible.ps1, botcorp
-# start) minted a nonce whose hash is in state/<bot>.json. No valid nonce =
-# this launch was started some other way: it still runs, WITHOUT secrets (and
-# so without the Telegram poller), and says so.
+# A trusted start path (daemon tick, restart.ps1, botcorp start) minted a
+# nonce whose hash is in state/<bot>.json. No valid nonce = this launch was
+# started some other way: it still runs, WITHOUT secrets (and so without the
+# Telegram poller), and says so.
 $attested = $false
 if ($LaunchNonce) { try { $attested = [bool](Test-LaunchNonce -Bot $Bot -Nonce $LaunchNonce) } catch { $attested = $false } }
 if (-not $attested) { Write-LaunchLog "unattested launch: no secrets injected (use botcorp start $Bot)" }

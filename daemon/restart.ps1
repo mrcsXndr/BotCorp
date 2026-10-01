@@ -15,9 +15,7 @@
 #   bg (default): `daemon/launch.ps1 -Bot <name> -Bg` (bounded) -> `claude --bg
 #                 --resume <session id>` under the supervisor; -Fresh when the
 #                 fresh marker is honoured (a new session id).
-#   pty:          from session 0 with a logged-in desktop user -> the
-#                 'BotCorp-Launch' task (visible, in that session); otherwise
-#                 `node daemon/pty-host.mjs --bot <name> --botcorp <root>
+#   pty:          `node daemon/pty-host.mjs --bot <name> --botcorp <root>
 #                 --continue`, detached (the cockpit attaches to it).
 #
 # Fresh-restart marker (<BotHome>/.claude/.botcorp_fresh_restart): a marker
@@ -146,10 +144,7 @@ try {
 } catch {}
 
 # --- 4. relaunch -----------------------------------------------------------------------
-$viaTask = $false
-$sid = -1; try { $sid = [System.Diagnostics.Process]::GetCurrentProcess().SessionId } catch {}
-$isid = if ($sid -eq 0) { Get-InteractiveSessionId } else { 0 }
-$desc = if ($sid -eq 0 -and $isid -gt 0) { "BotCorp-Launch task (interactive session $isid), else pty-host --continue" } else { 'node daemon/pty-host.mjs --bot ' + $Bot + ' --continue (detached, hidden)' }
+$desc = 'node daemon/pty-host.mjs --bot ' + $Bot + ' --continue (detached, hidden)'
 
 if ($DryRun) {
     Log "DRYRUN would relaunch via -> $desc [$mode]"
@@ -159,16 +154,10 @@ if ($DryRun) {
 }
 
 try {
-    if ($sid -eq 0 -and $isid -gt 0) {
-        $how = Start-VisibleLaunchTask -Bot $Bot -SessionId $isid
-        if ($how) { $viaTask = $true; Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_pid = $null; launcher_started_at = (Get-Date).ToString('o') }; Log "relaunched OK via -> $how [$mode]" }
-    }
-    if (-not $viaTask) {
-        $lp = Start-PtyHost -Bot $Bot
-        if ($lp -le 0) { Log 'RELAUNCH FAILED: pty-host did not start. Start the bot by hand.'; exit 1 }
-        Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_pid = $lp; launcher_started_at = (Get-Date).ToString('o') }
-        Log "relaunched OK via -> pty-host --continue (pid $lp) [$mode]"
-    }
+    $lp = Start-PtyHost -Bot $Bot
+    if ($lp -le 0) { Log 'RELAUNCH FAILED: pty-host did not start. Start the bot by hand.'; exit 1 }
+    Set-BotLaunchPhase -Bot $Bot -Phase restarting -Updates @{ launcher_pid = $lp; launcher_started_at = (Get-Date).ToString('o') }
+    Log "relaunched OK via -> pty-host --continue (pid $lp) [$mode]"
     exit 0
 } catch {
     Log "RELAUNCH FAILED: $($_.Exception.Message). Start the bot by hand."

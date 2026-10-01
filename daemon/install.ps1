@@ -1,15 +1,14 @@
 # install.ps1 - register (or remove) the BotCorp daemon on this machine.
 #
-#   pwsh -File daemon/install.ps1                      # register both tasks (prompts for the password; self-elevates)
+#   pwsh -File daemon/install.ps1                      # register the task (prompts for the password; self-elevates)
 #   pwsh -File daemon/install.ps1 -Password (Read-Host -AsSecureString)
 #   pwsh -File daemon/install.ps1 -LogonType S4U       # fallback: no stored password (see docs/host-service.md)
 #   pwsh -File daemon/install.ps1 -RunLevel Highest    # elevated daemon token (attach must then be elevated too)
-#   pwsh -File daemon/install.ps1 -Unregister          # remove both
+#   pwsh -File daemon/install.ps1 -Unregister          # remove it (and a BotCorp-Launch task left from before v0.9.11)
 #   pwsh -File daemon/install.ps1 -IntervalMinutes 5
-#   pwsh -File daemon/install.ps1 -LaunchTaskOnly      # (re)register only BotCorp-Launch (no elevation)
 #   pwsh -File daemon/install.ps1 -GitUser <name> -GitEmail <noreply email>
 #
-# EXACTLY two scheduled tasks per machine - the daemon is BotCorp's single
+# EXACTLY one scheduled task per machine - the daemon is BotCorp's single
 # inherent service; adding a bot adds a folder, never a task:
 #
 #   BotCorp-Daemon   The user, LogonType Password ("run whether user is logged
@@ -24,9 +23,7 @@
 #                    vault) works. This is the model the reference host runs
 #                    (verified across a reboot: bot up one minute after boot,
 #                    nobody logged in). It runs in session 0: no desktop, so a
-#                    bot is SEEN through `claude attach` / the cockpit, and a
-#                    pty bot's task-initiated launch is hidden (the tick hands
-#                    that launch to the second task whenever someone is logged in).
+#                    bot is SEEN through `claude attach` / the cockpit.
 #                    -LogonType S4U keeps the old no-stored-password model as an
 #                    explicit fallback (session 0 too, no profile loaded, and a
 #                    probe on this project's build box never got a script to
@@ -35,15 +32,10 @@
 #                    supervisor it starts run with; the supervisor pipe answers
 #                    only callers with the same elevation, so Highest forces
 #                    every `claude attach` to be elevated (docs/host-service.md).
-#   BotCorp-Launch   Interactive principal, NO triggers, no time limit. Action =
-#                    pwsh -File daemon/launch-visible.ps1. Started by the tick
-#                    from session 0, it runs in the user's desktop session:
-#                    `claude attach <id>` in a window for a bg bot, a visible
-#                    launch for a pty bot.
 #
 # Also: writes <rt>/state/install.json {user_profile, user, logon_type,
 # run_level, registered_at, ...} (the tick pins USERPROFILE/LOCALAPPDATA/PATH
-# from it under S4U; launch-visible.ps1 reads run_level), sets the repo-local
+# from it under S4U; attach.ps1 reads run_level), sets the repo-local
 # git identity + core.hooksPath in the checkout, and WARNS about any other
 # scheduled task named *Bot* (never deletes them).
 #
@@ -56,7 +48,6 @@
 param(
     [switch]$Unregister,
     [int]$IntervalMinutes = 3,
-    [switch]$LaunchTaskOnly,
     [ValidateSet('Password', 'S4U')][string]$LogonType = 'Password',
     [ValidateSet('Limited', 'Highest')][string]$RunLevel = 'Limited',
     [System.Security.SecureString]$Password,
@@ -75,10 +66,8 @@ if ($RtHomeOverride) { $env:BOTCORP_HOME = $RtHomeOverride }
 . (Join-Path $PSScriptRoot '_common.ps1')
 
 $daemonTask = 'BotCorp-Daemon'
-$launchTask = 'BotCorp-Launch'
 $installLog = Join-Path $RtHome 'install.log'
 $tickScript = Join-Path $PSScriptRoot 'tick.ps1'
-$visibleScript = Join-Path $PSScriptRoot 'launch-visible.ps1'
 $vbsPath = Join-Path $RtHome 'daemon-hidden.vbs'
 
 function Say { param([string]$M, [string]$Color = 'Gray')
@@ -93,28 +82,6 @@ function Test-Admin {
 function ConvertTo-Plain { param([System.Security.SecureString]$S)
     $b = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($S)
     try { return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($b) } finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($b) }
-}
-
-# pwsh for the Launch task action: a known install path first, then the
-# version-stable WindowsApps alias (survives PowerShell updates), then
-# whatever PATH gives, then the ABSOLUTE Windows PowerShell 5.1 path - never
-# a bare 'pwsh.exe' (PATH is unreliable in session 0).
-$pwshRt = Join-Path $env:ProgramFiles 'PowerShell\7\pwsh.exe'
-if (-not (Test-Path $pwshRt)) {
-    $alias = Join-Path $env:LOCALAPPDATA 'Microsoft\WindowsApps\pwsh.exe'
-    if (Test-Path $alias) { $pwshRt = $alias }
-    else {
-        $pwshRt = (Get-Command pwsh.exe -ErrorAction SilentlyContinue).Source
-        if (-not $pwshRt) { $pwshRt = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe' }
-    }
-}
-
-function Register-LaunchTask {
-    $action = New-ScheduledTaskAction -Execute $pwshRt -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$visibleScript`""
-    $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType Interactive -RunLevel Limited
-    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
-    Register-ScheduledTask -TaskName $launchTask -Action $action -Principal $principal -Settings $settings -Force | Out-Null
-    Say "Registered '$launchTask' (Interactive, no triggers): $pwshRt -File $visibleScript" 'Green'
 }
 
 function Register-DaemonTask {
@@ -140,7 +107,7 @@ function Register-DaemonTask {
         Register-ScheduledTask -TaskName $daemonTask -Action $action -Trigger $tBoot, $tRepeat -Principal $principal -Settings $settings -Force | Out-Null
     }
     Say "Registered '$daemonTask' ($LogonType, RunLevel $RunLevel): At Startup + every ${IntervalMinutes}m -> wscript $vbsPath -> pwsh -File $tickScript" 'Green'
-    if ($RunLevel -eq 'Highest') { Say "  RunLevel Highest: the bg supervisor runs elevated, so every 'claude attach' must be elevated too (launch-visible.ps1 does this)." 'Yellow' }
+    if ($RunLevel -eq 'Highest') { Say "  RunLevel Highest: the bg supervisor runs elevated, so every 'claude attach' must be elevated too (attach.ps1 does this)." 'Yellow' }
 }
 
 function Write-InstallState {
@@ -153,7 +120,7 @@ function Write-InstallState {
         botcorp_root  = $BotCorp
         runtime_root  = $RtHome
         interval_min  = $IntervalMinutes
-        tasks         = @($daemonTask, $launchTask)
+        tasks         = @($daemonTask)
     }
     if (Write-JsonFile -Path (Join-Path $StateDir 'install.json') -Object $rec) { Say "Wrote $(Join-Path $StateDir 'install.json') (profile pin + run level for the tick and the attach window)" 'DarkGray' }
 }
@@ -173,17 +140,10 @@ function Show-OtherBotTasks {
     try {
         $others = @(Get-ScheduledTask -ErrorAction Stop | Where-Object { $_.TaskName -like '*Bot*' -and $_.TaskName -notlike 'BotCorp-*' } | Select-Object -ExpandProperty TaskName)
         if ($others.Count -gt 0) {
-            Say "WARNING: other *Bot* scheduled tasks exist (BotCorp registers exactly two; 'botcorp doctor' flags these): $($others -join ', ')" 'Yellow'
+            Say "WARNING: other *Bot* scheduled tasks exist (BotCorp registers exactly one; 'botcorp doctor' flags these): $($others -join ', ')" 'Yellow'
             Say '         They were NOT touched. Remove them yourself once their bots run under this daemon.' 'Yellow'
         }
     } catch {}
-}
-
-# --- LaunchTaskOnly: no elevation needed --------------------------------------------
-if ($LaunchTaskOnly) {
-    Register-LaunchTask
-    Show-OtherBotTasks
-    exit 0
 }
 
 # --- password (collected BEFORE elevating, so the prompt is in this console) --------------
@@ -218,7 +178,6 @@ if ($DryRun) {
     $who = "$env:USERDOMAIN\$env:USERNAME"
     $pwNote = if ($LogonType -eq 'Password') { " (password: $(if ($plain) { "provided, $($plain.Length) chars" } else { 'none' }))" } else { '' }
     Say "DRYRUN: would register '$daemonTask' as $who, LogonType ${LogonType}${pwNote}, RunLevel ${RunLevel}: At Startup + every ${IntervalMinutes}m -> wscript -> pwsh -File $tickScript" 'Cyan'
-    Say "DRYRUN: would register '$launchTask' (Interactive, no triggers) -> pwsh -File $visibleScript" 'Cyan'
     Say "DRYRUN: would write $(Join-Path $StateDir 'install.json'), set the repo git identity ($GitUser <$GitEmail>), and elevate via Start-Process -Verb RunAs if not already admin. Nothing registered." 'Cyan'
     $plain = $null
     exit 0
@@ -252,7 +211,7 @@ if (-not (Test-Admin)) {
 
 # --- elevated (or already admin) ------------------------------------------------------
 if ($Unregister) {
-    foreach ($t in @($daemonTask, $launchTask)) {
+    foreach ($t in @($daemonTask, 'BotCorp-Launch')) {   # BotCorp-Launch: the visible-launch task before v0.9.11
         try { Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction Stop; Say "Removed scheduled task '$t'." 'Yellow' }
         catch { Say "Task '$t' not found / not removed: $($_.Exception.Message)" 'DarkGray' }
     }
@@ -263,7 +222,6 @@ if ($Unregister) {
 try {
     Register-DaemonTask -PlainPassword $plain
     $plain = $null
-    Register-LaunchTask
     Write-InstallState
     Set-RepoGitIdentity
     Show-OtherBotTasks

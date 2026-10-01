@@ -17,8 +17,7 @@ daemon/
   tick.ps1              the tick (mutex Global\BotCorpDaemon; always exit 0)
   launch.ps1            launches ONE bot (vault -> env, --plugin-dir, owner-lock); -Bg = claude --bg
   restart.ps1           wait-for-old-pid, then relaunch the same conversation (honours a fresh marker)
-  launch-visible.ps1    action of the BotCorp-Launch task: `claude attach <id>` (bg) or a visible launch (pty)
-  install.ps1           registers / removes the two tasks; writes state/install.json
+  install.ps1           registers / removes the daemon task; writes state/install.json
   automations.ps1       per-bot automations scheduler + detached run waiter (docs/automations.md)
   update.ps1            hourly harness update CHECK (records releases + notes); admin-requested APPLY
   smoke.ps1             the harness smoke test (validate, pytest, bash -n, node --check, hooks, tick, bg-agents)
@@ -57,7 +56,6 @@ never secrets:
 | `state/<bot>/automations.json`, `runs.jsonl`, `events/`, `jobs/` | automations.ps1 | see docs/automations.md |
 | `state/install.json` | install.ps1 | `{user_profile, user, logon_type, run_level, registered_at, botcorp_root, runtime_root, interval_min}` |
 | `state/daemon.json` | tick | `cockpit_pid`, `cockpit_started_at`, `update_check_at`, `cc_check_at` |
-| `state/launch-request.json` | tick / restart.ps1 | `{bot, requested_at, by}` read by launch-visible.ps1 (ignored after 10 min) |
 | `state/updates.json` | update.ps1 | `{checked_at, head, head_sha, releases:[{tag, sha, date, what[], why[], value[], status}]}`; status `pending` / `apply_requested` / `applied` / `skipped` / `failed` (+ `fail_reason`, `fail_detail`) |
 | `state/harness.json` | update.ps1 -Apply | `{tag, sha, channel, applied_at, schema, migrations}` |
 | `state/accounts.json` | tick (not `-DryRun`), or the operator by hand | `{"accounts":{"<id>":{"blocked_until","window","source","seen_by","at","failed":{at,why,seen_by}\|null,"bots":[...]}}}`; `bots` = the bots whose ACTIVE account it is -> non-critical automations pause |
@@ -125,8 +123,8 @@ off, `warn`; no account = the bot's own login), so no migration script runs.
 
 | `session` | The bot process | Liveness | Stop | Seen through |
 |---|---|---|---|---|
-| `bg` (default) | a Claude Code background session: `launch.ps1 -Bg` runs `claude --bg [--resume <session_id>] --dangerously-skip-permissions --plugin-dir <harness> [--channels ... --settings <tg-enable>]` (channels LAST) and exits; the session runs under Claude Code's supervisor for the bot's config home (`<config home>/daemon.lock`) | `claude agents --json` (run with the bot's `CLAUDE_CONFIG_DIR`) lists the id / session id / cwd with a live `pid` or state `working`/`blocked`, OR the recorded `claude_pid` is alive | `claude stop <id>` (bounded 45 s; the conversation is kept), then the guarded tree-kill on the recorded pid if it lingers | `claude attach <id>` (BotCorp-Launch task, `botcorp attach`), the cockpit via `pty-host --attach` |
-| `pty` | `pty-host.mjs` owns a ConPTY that runs `launch.ps1 -InPty`, which execs `claude --continue ...` | the launcher shell + its `claude.exe` child, or the claude pid | `pty-host --stop <bot>` (`taskkill /T /F` on the pty root, then the host) | the cockpit attaches to the pty-host; the BotCorp-Launch task opens a visible launch |
+| `bg` (default) | a Claude Code background session: `launch.ps1 -Bg` runs `claude --bg [--resume <session_id>] --dangerously-skip-permissions --plugin-dir <harness> [--channels ... --settings <tg-enable>]` (channels LAST) and exits; the session runs under Claude Code's supervisor for the bot's config home (`<config home>/daemon.lock`) | `claude agents --json` (run with the bot's `CLAUDE_CONFIG_DIR`) lists the id / session id / cwd with a live `pid` or state `working`/`blocked`, OR the recorded `claude_pid` is alive | `claude stop <id>` (bounded 45 s; the conversation is kept), then the guarded tree-kill on the recorded pid if it lingers | `claude attach <id>` (`botcorp attach`, the tray), the cockpit via `pty-host --attach` |
+| `pty` | `pty-host.mjs` owns a ConPTY that runs `launch.ps1 -InPty`, which execs `claude --continue ...` | the launcher shell + its `claude.exe` child, or the claude pid | `pty-host --stop <bot>` (`taskkill /T /F` on the pty root, then the host) | the cockpit attaches to the pty-host |
 
 `harness.service: manual` (distinct key) means the daemon never cold-starts
 the bot; it still heals a running one.
@@ -143,7 +141,7 @@ a fresh marker) = a fresh background session.
 with the token that started the supervisor. The daemon task launches the bot,
 so the tick's `claude agents` / `claude stop` always match. A human `claude
 attach` must match too: with `install.ps1 -RunLevel Highest` (what the
-reference host runs) every attach is elevated, and `launch-visible.ps1` opens
+reference host runs) every attach is elevated, and `attach.ps1` opens
 it with `-Verb RunAs` (UAC may prompt); a non-elevated `claude agents` then
 prints `[]`, which is expected, not a dead bot. `smoke.ps1`'s `bg-agents` step
 reports that case instead of failing. With the default `RunLevel Limited` a
@@ -375,12 +373,15 @@ failure path; a foreground launch deletes it from a background job, and at
 session exit at the latest), with a
 `telegram: token file deleted ...` line; it is never left at rest.
 
-## The two tasks
+## The task
 
 | Task | Principal | Triggers | Action |
 |---|---|---|---|
 | `BotCorp-Daemon` | the user, **LogonType Password** ("run whether user is logged on or not"; `-LogonType S4U` = fallback with no stored password), RunLevel Limited (`-RunLevel Highest` optional) | **At Startup** + every `-IntervalMinutes` (3); `MultipleInstances IgnoreNew`; 5 min time limit | `wscript.exe <rt>/daemon-hidden.vbs //B //Nologo` -> `pwsh -File daemon/tick.ps1` |
-| `BotCorp-Launch` | Interactive, Limited | none (started by the tick) | `pwsh -File daemon/launch-visible.ps1` |
+
+A `BotCorp-Launch` task registered before v0.9.11 (the old visible launch
+mode) is no longer started by anything. `botcorp doctor` reports it (INFO);
+`install.ps1 -Unregister` or the operator's own terminal removes it.
 
 Why Password: it fires at the login screen after an unattended reboot AND is a
 full logon (profile loaded, user-scope DPAPI unambiguous), which is what the
@@ -391,10 +392,8 @@ to run under it (`docs/cc-compat.md` vii); it stays available for a host where
 no password may be stored, and the tick still pins
 `USERPROFILE`/`LOCALAPPDATA`/`APPDATA`/`PATH` from `state/install.json` when it
 detects the profile is not loaded. Both run in session 0: no desktop, so a
-bg bot is attached to, never shown, and a pty bot's task-initiated launch is
-hidden (the tick hands that launch to `BotCorp-Launch` whenever `explorer.exe`
-shows a logged-in user, and migrates a hidden session-0 pty bot to the visible
-path, idle-gated, when the user logs in later).
+bg bot is attached to, never shown, and a pty bot runs hidden under pty-host
+(the cockpit attaches to it).
 
 The VBS shim exists because a task that runs `pwsh.exe` directly flashes a
 console every tick. It resolves `pwsh` at runtime (`%LOCALAPPDATA%` alias,
@@ -446,8 +445,7 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                         cold-start/restart, vault operator-locked -> locked (state/<bot>.json launch.phase: locked;
                                     waits for botcorp secrets unlock <bot> / the cockpit; a launch now would run
                                     without secrets, a restart would throw away the ones the live session holds)
-  guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill;
-                        hidden session-0 pty bot + logged-in user -> restart into the visible path (idle-gated)
+  guards                session-0 stray sweep; launcher grace (LauncherGraceMin 4) / hung-launcher tree kill
   every tick            usage_resume: usage_monitor.py warn when <config>/botcorp/status.json shows a window
                                  at 98% (one --alert per window, into alerts.log), then
                                  usage_monitor.py --resume-check (exit 10 -> relaunch, idle-gated)
@@ -474,7 +472,7 @@ per bot (bots/*/bot.yaml, folders starting with `_` skipped), each in its own tr
                                     bg: claude stop <id> (+ guarded kill if it lingers) / pty: Stop-Process claude (if ours)
                         cold-start: kill an orphan launcher shell (TOCTOU re-check, guarded), kill the bot.pid holder
                                     (bun/node, name-guarded, guarded), pty-host --stop a stale record, then
-                                    bg: launch.ps1 -Bg (bounded) / pty: session 0 + logged-in user -> BotCorp-Launch task, else pty-host --continue
+                                    bg: launch.ps1 -Bg (bounded) / pty: pty-host --continue
 ```
 
 The process record comes before the poller verdict: the verdict is measured

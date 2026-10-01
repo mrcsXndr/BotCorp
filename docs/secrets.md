@@ -249,7 +249,7 @@ register the hook at all).
 ### Launch attestation
 
 A trusted start path - the daemon tick's cold-start (`Start-BotBg` /
-`Start-PtyHost`), `restart.ps1`, `launch-visible.ps1`, or `botcorp start` -
+`Start-PtyHost`), `restart.ps1`, or `botcorp start` -
 mints a 32-byte random nonce before it launches a bot. Only the nonce's
 sha256 is ever recorded, in `<BOTCORP_HOME>/state/<bot>.json` `launch`:
 
@@ -260,9 +260,7 @@ sha256 is ever recorded, in `<BOTCORP_HOME>/state/<bot>.json` `launch`:
 State files are readable by every process of this user, so only the hash
 goes there; the raw nonce reaches `launch.ps1` in the environment
 (`BOTCORP_LAUNCH_NONCE`, stripped from the environment before `claude`
-starts) - or, for the one branch that spawns a Windows Terminal profile in
-`launch-visible.ps1`, as `-LaunchNonce` on that process's own argv, never
-anywhere it would be inherited more widely.
+starts), never anywhere it would be inherited more widely.
 
 `Get-VaultSecret -Reason launch` refuses to decrypt anything unless it is
 handed a nonce that matches the recorded hash, has not already been

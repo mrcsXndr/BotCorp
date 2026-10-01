@@ -953,8 +953,9 @@ logins, `--no-tg-probe` the Telegram slot probe.
   `%LOCALAPPDATA%\Programs\Python`, then PATH): a Scheduled-Task / session-0
   shell has no usable PATH, and `python: FAIL not found: looked in …` names
   every place that was tried;
-- scheduled tasks: `BotCorp-Daemon` and `BotCorp-Launch` present (WARN when
-  absent: `botcorp install`); any OTHER `*Bot*` task is a WARN and is named
+- scheduled tasks: `BotCorp-Daemon` present (WARN when absent: `botcorp
+  install`); a `BotCorp-Launch` task left from before v0.9.11 is an INFO
+  (nothing starts it; doctor never removes it); any OTHER `*Bot*` task is a WARN and is named
   (two supervisors fighting over one bot is what this catches) — unless it is
   allowlisted in `host.coexist_tasks` (exact names or `*` globs, shipped
   empty in `botcorp.json`, extended per machine by

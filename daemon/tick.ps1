@@ -27,8 +27,7 @@
 #            idle one after 60 min) and a session waiting on a login / dialog is
 #            logged BLOCKED (Get-BgBlock). Decide:
 #              not alive                  -> COLD-START (bg: launch.ps1 -Bg with
-#                                             --resume <session id>; pty: pty-host
-#                                             or the visible task)
+#                                             --resume <session id>; pty: pty-host)
 #              alive + poller DEAD        -> RESTART once the launch is older than
 #                                             LauncherGraceMin (idle-gated: breakpoint
 #                                             marker or transcript quiet)
@@ -41,10 +40,7 @@
 #            bot's automations (daemon/automations.ps1) and the inbox kick,
 #            every tick.
 #   guards:  session-0 stray sweep, launcher grace + hung-launcher kill,
-#            MaxStartsPerWindow cap (ACTION=START lines in the bot's log),
-#            hidden-session-0 -> visible migration when a user is logged in
-#            (pty bots only; a bg bot always lives under the supervisor and is
-#            SEEN through `claude attach`, never moved).
+#            MaxStartsPerWindow cap (ACTION=START lines in the bot's log).
 #
 # The process record is AUTHORITATIVE over the poller: a poller still running
 # after the session died is an orphan and must never mask a dead bot. The tick never kills a busy session: unsure => busy => defer.
@@ -760,12 +756,9 @@ function Start-BotCold {
     # a dead pty-host with the same tree-kill the CLI uses, then launch:
     #   session bg  : launch.ps1 -Bg (bounded; `claude --bg --resume <session id>`,
     #                 the same conversation, under the supervisor in session 0).
-    #                 Never handed to the visible task - a bg bot is SEEN through
-    #                 `claude attach`, it does not need a desktop to run.
-    #   session pty : a session-0 tick with a logged-in user hands off to the
-    #                 BotCorp-Launch task (a hidden session-0 bot next to a
-    #                 logged-in user is what stole a Telegram poller once);
-    #                 otherwise pty-host, detached and hidden.
+    #                 A bg bot is SEEN through `claude attach`, it does not need a
+    #                 desktop to run.
+    #   session pty : pty-host, detached and hidden (the cockpit attaches to it).
     # Records the launcher so the next tick can tell "still starting" from
     # "hung". Returns a description.
     param([string]$Bot, [hashtable]$Paths, [string]$Service = 'bg')
@@ -790,13 +783,6 @@ function Start-BotCold {
         $how = Start-BotBg -Bot $Bot -StartedBy 'daemon-cold'
         Write-BotState -Bot $Bot -Updates @{ launcher_started_at = $null }
         return $how
-    }
-    if (Test-Headless) {
-        $isid = Get-InteractiveSessionId
-        if ($isid -gt 0) {
-            $how = Start-VisibleLaunchTask -Bot $Bot -SessionId $isid
-            if ($how) { Write-BotState -Bot $Bot -Updates @{ launcher_pid = $null; launcher_started_at = (Get-Date).ToString('o') }; return $how }
-        }
     }
     $lp = Start-PtyHost -Bot $Bot
     Write-BotState -Bot $Bot -Updates @{ launcher_pid = $(if ($lp -gt 0) { $lp } else { $null }); launcher_started_at = (Get-Date).ToString('o') }
@@ -974,19 +960,6 @@ function Invoke-BotTick {
         }
     }
 
-    # --- hidden session-0 bot while a user is logged in -> migrate to visible ---
-    # pty bots only: a bg bot lives under the supervisor by design.
-    $migrateVisible = $false
-    if ($service -ne 'bg' -and $action -eq 'none' -and $alive -and $shellAlive -and (Test-Headless)) {
-        $ownerSession = Get-ProcessSessionId $shellPid
-        $isid = Get-InteractiveSessionId
-        if ($ownerSession -eq 0 -and $isid -gt 0) {
-            if (Test-SessionBusy -Bot $Bot) { Write-DaemonLog "hidden session-0 bot with user in session ${isid}: migrate DEFERRED (session busy)" -Bot $Bot -Quiet }
-            elseif ($claudePid -le 0) { Write-DaemonLog 'hidden session-0 bot: migrate DEFERRED (claude pid unresolved)' -Bot $Bot -Quiet }
-            else { $action = 'restart'; $migrateVisible = $true; Write-DaemonLog "hidden session-0 bot (shell $shellPid, claude $claudePid) with user in session $isid -> graceful restart into the visible path" -Bot $Bot }
-        }
-    }
-
     # --- isolated per-bot ticks (never gate the liveness decision) ----------------
     $resumeWanted = $false
     if (Test-BotModule $cfg 'usage_resume') {
@@ -1041,7 +1014,7 @@ function Invoke-BotTick {
     if ($action -eq 'restart') {
         # NEVER kill a session that is actively working: a busy session is
         # deferred, not killed (long-running context is load-bearing).
-        if (-not $why) { $why = if ($migrateVisible) { 'migrate hidden session-0 bot to visible' } else { "poller $poller" } }
+        if (-not $why) { $why = "poller $poller" }
         $stuck = $limited -or $switch
         if ($stuck) { Write-DaemonLog "session $(if ($limited) { 'usage-limited' } else { 'blocked on a login' }): the turn cannot proceed -> restart allowed (no live work to protect)" -Bot $Bot }
         if (Test-SessionBusy -Bot $Bot -LimitBlocked:$stuck) {

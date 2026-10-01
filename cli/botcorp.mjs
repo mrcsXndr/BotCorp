@@ -3341,7 +3341,9 @@ async function cmdDoctor({ flags }) {
     // (another supervisor?) unless host.coexist_tasks allowlists it (then INFO)
     const tasks = runPwshCommand("Get-ScheduledTask -ErrorAction SilentlyContinue | Where-Object { $_.TaskName -like '*Bot*' } | ForEach-Object { $_.TaskName }", { timeoutMs: 60_000 });
     const names = tasks.out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    for (const t of ['BotCorp-Daemon', 'BotCorp-Launch']) add(names.includes(t) ? 'PASS' : 'WARN', `task ${t}`, names.includes(t) ? 'registered' : 'absent (botcorp install)');
+    add(names.includes('BotCorp-Daemon') ? 'PASS' : 'WARN', 'task BotCorp-Daemon', names.includes('BotCorp-Daemon') ? 'registered' : 'absent (botcorp install)');
+    // the visible-launch task before v0.9.11: nothing starts it now; reported, never removed here
+    if (names.includes('BotCorp-Launch')) add('INFO', 'task BotCorp-Launch', 'left from before v0.9.11 (visible launch mode removed; nothing starts it). Remove it from your own terminal: Unregister-ScheduledTask -TaskName BotCorp-Launch');
     const coexist = coexistTasks();
     const foreign = names.filter((n) => !['BotCorp-Daemon', 'BotCorp-Launch'].includes(n));
     const allowed = foreign.filter((n) => matchesAnyGlob(n, coexist.patterns));

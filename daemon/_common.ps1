@@ -270,11 +270,6 @@ function Get-ClaudeChildPid {
     } catch { return -1 }
 }
 
-function Get-ProcessSessionId {
-    param([int]$ProcId)
-    try { return [int](Get-CimInstance Win32_Process -Filter "ProcessId=$ProcId" -ErrorAction Stop).SessionId } catch { return -1 }
-}
-
 function Resolve-PwshExe {
     # Never a versioned WindowsApps path (breaks on every PowerShell update).
     # A bare 'powershell'/'pwsh' name can fail to spawn from session 0 (PATH is
@@ -1345,17 +1340,6 @@ function Test-Headless {
     } catch { return $false }
 }
 
-function Get-InteractiveSessionId {
-    # Session id of a logged-in desktop user (explorer.exe outside session 0),
-    # 0 at the login screen. Unsure -> 0 (selects the hidden launch).
-    try {
-        $ex = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop |
-              Where-Object { $_.SessionId -ne 0 } | Select-Object -First 1
-        if ($ex) { return [int]$ex.SessionId }
-    } catch {}
-    return 0
-}
-
 function Invoke-Bounded {
     # Run a child with a HARD timeout; the whole tree is killed on overrun.
     # ProcessStartInfo.ArgumentList quotes each element (Start-Process
@@ -1913,24 +1897,6 @@ function Stop-PtyHost {
     $last = ''; try { $last = (($r.Output -split "`n" | Where-Object { $_.Trim() }) | Select-Object -Last 1) } catch {}
     Write-DaemonLog "pty-host --stop: exit=$($r.ExitCode) $last" -Bot $Bot
     return ($r.ExitCode -eq 0)
-}
-
-function Start-VisibleLaunchTask {
-    # Hand a launch to the 'BotCorp-Launch' scheduled task (Interactive
-    # principal, no triggers). Started from session 0 it still runs in the
-    # user's desktop session. The task is per-machine; it learns which bot from
-    # <rt>/state/launch-request.json written right before Start-ScheduledTask.
-    # Returns a description on success, $null when the task is missing/fails.
-    param([Parameter(Mandatory)][string]$Bot, [int]$SessionId = 0)
-    try {
-        $t = Get-ScheduledTask -TaskName 'BotCorp-Launch' -ErrorAction Stop
-        [void](Write-JsonFile -Path (Join-Path $script:StateDir 'launch-request.json') -Object ([ordered]@{ bot = $Bot; requested_at = (Get-Date).ToString('o'); by = 'daemon' }))
-        Start-ScheduledTask -InputObject $t -ErrorAction Stop
-        return "BotCorp-Launch task (interactive session $SessionId)"
-    } catch {
-        Write-DaemonLog "BotCorp-Launch task unavailable ($($_.Exception.Message)) -> hidden launch" -Bot $Bot
-        return $null
-    }
 }
 
 function Start-RestartDetached {
