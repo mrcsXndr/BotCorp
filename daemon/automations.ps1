@@ -199,9 +199,17 @@ function Add-AlertLine {
 #     it structural (hooks get no Claude credentials; this run gets oauth_token).
 #     The model is the workhorse tier of harness/models.json. 10 min covers
 #     its two distills (session + week) at timeline.py's 180 s each.
+#   debrief -> session-debrief: every 6 h, `debrief.py` debriefs the session
+#     into context/ when its journal changed since the last debrief (it was a
+#     Stop hook until v0.9.13, and a hook has no token). 15 min covers its
+#     600 s claude run.
 function Get-BuiltinAutomations {
     param($Cfg)
     $out = @()
+    if (@($Cfg._modules) -contains 'debrief') {
+        $out += [pscustomobject]@{ name = 'session-debrief'; module = 'debrief'; trigger = [pscustomobject]@{ interval_min = 360 }
+            command = '${PY} "${HARNESS}\tools\v2\debrief.py"'; secrets = @(@($Cfg.secrets) | Where-Object { "$_" -eq 'oauth_token' }); timeout_min = 15 }
+    }
     if (@($Cfg._modules) -contains 'timeline_summary') {
         $cmd = '${PY} "${HARNESS}\tools\v2\timeline.py" summarize-stale'
         $model = ''; try { $model = "$((Get-Content -Raw -LiteralPath (Join-Path $Harness 'models.json') | ConvertFrom-Json).tiers.workhorse.id)" } catch {}

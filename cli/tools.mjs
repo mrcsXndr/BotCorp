@@ -347,7 +347,7 @@ export const MODULE_TEXT = {
   hub: 'Pushes status to a hub (integrations.hub).',
   janitor: 'Disk, transcript and stray-process hygiene on the daemon tick ("report" only scans).',
   lessons: 'Injects the harness lessons index at session start.',
-  debrief: 'A headless session debrief on Stop (real spend).',
+  debrief: 'A daemon job every 6 h: a headless session debrief into context/ when the journal changed (real spend).',
   auto_commit: 'Commits the bot folder on Stop; pushes with backup.git_remote.',
   memory_sync: 'Pushes memory/ to the bot\'s own remote on Stop.',
   sound: 'Plays a sound on Stop.',

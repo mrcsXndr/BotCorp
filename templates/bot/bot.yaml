@@ -29,7 +29,7 @@ harness:
                                   # orchestrators may go lower (e.g. 50%). Applies at the next session start
   resume_prompt: null             # every other unattended bg launch (daemon cold-start / restart, botcorp start|restart): null = one short turn (re-arm watchers, carry on, reply "ok"); '' = off
   tray: true                      # per-bot tray icon at login (botcorp tray <name> on); false = doctor stops asking for it
-  hooks_disable: []               # hook names = the run.mjs names in harness/hooks/hooks.json + the tool guards, e.g. [play-sound, session-debrief]; unknown names are rejected by validate
+  hooks_disable: []               # hook names = the run.mjs names in harness/hooks/hooks.json + the tool guards, e.g. [play-sound, cost-meter]; unknown names are rejected by validate
   disable: []                     # harness skills / agents this bot does not get: [skill:weekly, agent:fable]; sync hides the skill and denies the agent
   tools_registry: warn            # warn | enforce: doctor grades an executable no tools: entry covers WARN or FAIL (tools: below)
   modules:                        # -> BOT_MODULES env + which daemon ticks run for this bot
@@ -41,7 +41,7 @@ harness:
     hub: false                    # status push to any hub (integrations.hub)
     janitor: true                 # disk/transcript/orphan hygiene on the daemon tick; `report` = scan + log, touch nothing (shared host)
     lessons: true                 # inject harness/lessons/INDEX.md at session start
-    debrief: false                # headless session debrief on Stop (real spend)
+    debrief: false                # daemon job every 6 h: headless session debrief into context/ when the journal changed, with the vault token (real spend)
     auto_commit: true             # commit the bot repo on Stop (runs its pre-commit secret scan); with backup.git_remote also pushes
     memory_sync: false            # push memory/ to the bot's OWN remote on Stop
     sound: false                  # play hooks/sounds/done.* on Stop

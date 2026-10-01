@@ -43,6 +43,7 @@ but is defined in `daemon/automations.ps1` (`Get-BuiltinAutomations`), not in
 
 | module | job | what it does |
 |---|---|---|
+| `debrief` | `session-debrief`, every 360 min, `secrets: [oauth_token]`, 15 min | `debrief.py`: a headless run appends a short entry to `context/session-log.md`, updates a context doc when that matters and commits, only when the session journal changed since the last debrief (`.claude/.debrief_last_ts`; otherwise "nothing to do"). It was a Stop hook until v0.9.13, which never had credentials. Model: the workhorse tier. Exit 1 when the run failed. |
 | `timeline_summary` | `timeline-summary`, every 60 min, `secrets: [oauth_token]`, 10 min | `timeline.py summarize-stale`: LLM-distils the current session's timeline when it is missing or structural, then the current ISO week's `memory/timelines/<week>.md` when the PreCompact hook left it concatenated. Hooks get no Claude credentials, so every hook-built timeline is structural; this run has the vault token. Model: the workhorse tier of `harness/models.json`. Exit 1 when the distill fell back, so three misses in a row reach alerts.log. A weekly fallback waits 6 h before the LLM is tried again for that week (marker `memory/timelines/.weekly_distill_failed`); the runs in between still exit 1. |
 
 ## Prompt automations (`kind: prompt`)

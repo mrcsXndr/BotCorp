@@ -1875,6 +1875,7 @@ function cmdAutomations({ pos, flags }) {
   const list = Array.isArray(cfg.automations) ? [...cfg.automations] : [];
   // module built-ins the daemon schedules too (daemon/automations.ps1 Get-BuiltinAutomations)
   const builtins = [];
+  if (cfg.harness.modules.debrief === true) builtins.push({ name: 'session-debrief', module: 'debrief', trigger: { interval_min: 360 }, command: '(built-in) debrief.py' });
   if (cfg.harness.modules.timeline_summary === true) builtins.push({ name: 'timeline-summary', module: 'timeline_summary', trigger: { interval_min: 60 }, command: '(built-in) timeline.py summarize-stale' });
   for (const b of builtins) if (!list.some((a) => a && a.name === b.name)) list.push(b);
   if (action === 'list') {
@@ -2067,7 +2068,7 @@ const MODULE_DESC = {
   hub: 'status push to a hub URL (integrations.hub, vault key hub_token)',
   janitor: 'disk/transcript/orphan hygiene on the daemon tick (report = scan and log only, touch nothing)',
   lessons: 'inject harness/lessons/INDEX.md at session start',
-  debrief: 'headless session debrief on Stop (real spend)',
+  debrief: 'daemon job every 6 h: a headless session debrief into context/ when the journal changed, with the vault token (real spend)',
   auto_commit: 'commit on Stop (and push, with backup.git_remote); a no-op unless the folder is a repo',
   memory_sync: 'push memory/ to the bot\'s own remote on Stop',
   sound: 'play a sound on Stop',

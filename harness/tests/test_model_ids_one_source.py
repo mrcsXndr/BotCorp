@@ -53,7 +53,7 @@ def test_no_literal_model_id_in_code():
 def test_the_scan_sees_the_code_it_guards():
     # positive control: the scan covers the files that held literals before
     seen = {rel for rel, _ in _code_files()}
-    assert {"harness/tools/v2/alert_triage.py", "cli/botcorp.mjs", "harness/hooks/session-debrief.sh",
+    assert {"harness/tools/v2/alert_triage.py", "cli/botcorp.mjs", "harness/tools/v2/debrief.py",
             "harness/tools/v2/cost_meter.py", "daemon/tick.ps1"} <= seen
     assert LITERAL.search('model = "' + MODELS["tiers"]["top"]["id"] + '"')
 

@@ -57,7 +57,6 @@
         "hooks": [
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "memory-sync", "memory_sync", "memory-sync.sh"], "timeout": 15, "statusMessage": "harness: memory sync" },
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "play-sound", "sound", "play-sound.sh"], "timeout": 15 },
-          { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-debrief", "debrief", "session-debrief.sh"], "timeout": 30 },
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "session-summarize", "session_summarize", "py.sh", "session-summarize", "session_summarize", "infra/session_summarize.py", "--quiet"], "timeout": 15 },
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "cost-meter", "cost_meter", "py.sh", "cost-meter", "cost_meter", "v2/cost_meter.py", "--stdin"], "timeout": 20 },
           { "type": "command", "command": "node", "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/run.mjs", "auto-commit", "auto_commit", "auto-commit.mjs"], "timeout": 30 }

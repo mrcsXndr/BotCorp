@@ -21,6 +21,10 @@ const HOOKS_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 
 // The tool guards all run inside ONE `guard.mjs pre|post` process, so they have
 // no hooks.json entry of their own; a test holds this list equal to guard.mjs's.
 export const GUARD_HOOKS = ['block-dialogs', 'config-guard', 'core-guard', 'destructive-guard', 'operator-guard', 'tools-nudge', 'vault-guard'];
+// Hooks that moved elsewhere stay valid hooks_disable names (now a no-op), so a
+// bot.yaml that switched one off still validates. session-debrief: the daemon's
+// built-in job since v0.9.13 (module debrief is its switch).
+export const RETIRED_HOOKS = ['session-debrief'];
 export function hookNames() {
   const names = new Set(GUARD_HOOKS);
   try {
@@ -188,7 +192,7 @@ export function validate(cfg) {
   if (!Array.isArray(cfg.harness.hooks_disable)) errs.push('harness.hooks_disable: must be a list');
   else {
     const known = hookNames();
-    const bad = cfg.harness.hooks_disable.map(String).filter((h) => !known.includes(h));
+    const bad = cfg.harness.hooks_disable.map(String).filter((h) => !known.includes(h) && !RETIRED_HOOKS.includes(h));
     if (known.length && bad.length) errs.push(`harness.hooks_disable: unknown hook(s) ${bad.join(', ')} (valid: ${known.join(', ')})`);
     // The vault guard and the operator guard are the hooks a bot may never switch off.
     for (const h of ['vault-guard', 'operator-guard']) if (cfg.harness.hooks_disable.map(String).includes(h)) errs.push(`harness.hooks_disable: ${h} cannot be disabled`);

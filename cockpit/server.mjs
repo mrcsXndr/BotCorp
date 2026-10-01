@@ -301,7 +301,7 @@ app.get('/api/bots/:name/automations', withBot(async (_req, res, bot) => {
 
 // The two background helpers the Settings tab switches, as facts: auto-fix
 // (module alert_triage: the daemon's triage scan of memory/metrics/alerts.log)
-// and the debrief (module debrief: the Stop hook's headless run). Read-only.
+// and the debrief (module debrief: the daemon's built-in session-debrief job). Read-only.
 app.get('/api/bots/:name/helpers', withBot(async (_req, res, bot) => {
   const mtime = async (f) => { try { return (await fsp.stat(f)).mtime.toISOString(); } catch { return null; } };
   const workhorse = MODEL_TIERS.workhorse ? MODEL_TIERS.workhorse.id : null;

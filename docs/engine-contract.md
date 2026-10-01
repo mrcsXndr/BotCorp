@@ -79,7 +79,7 @@ the daemon tick runs a module's job only for bots that have it on.
 | `hub` | off | the tick's status push (`integrations.hub`) |
 | `janitor` | on | the tick's hygiene pass (`report`: scan and log, touch nothing) |
 | `lessons` | on | the lessons index in the session-start context |
-| `debrief` | off | the `session-debrief` Stop hook (a headless run, real spend) |
+| `debrief` | off | the built-in `session-debrief` automation: every 6 h, `debrief.py` with the vault `oauth_token` when the session journal changed (a headless run, real spend) |
 | `auto_commit` | on | the `auto-commit` Stop hook |
 | `memory_sync` | off | the `memory-sync` Stop hook |
 | `sound` | off | the `play-sound` Stop hook |
