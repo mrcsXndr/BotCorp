@@ -151,3 +151,23 @@ def test_rollup_mode_writes_subagents_csv_from_rollup_hourly(isolated):
     with cm.SUBAGENTS_CSV_PATH.open(newline="", encoding="utf-8") as fh:
         rows = list(csv.DictReader(fh))
     assert any(r["session_id"] == "s3" and r["agent_type"] == "subagent" for r in rows)
+
+
+def test_transcript_fallback_counts_a_repeated_message_id_once(tmp_path):
+    """(v0.9.11) Claude Code writes one line per content block, each with the message's
+    usage: a message is counted once (by message.id, else requestId), with its last usage."""
+    def line(mid, rid, out, block):
+        return json.dumps({"type": "assistant", "requestId": rid, "timestamp": "2026-10-01T00:00:00Z", "message": {
+            "id": mid, "model": "claude-sonnet-5-5", "content": [block],
+            "usage": {"input_tokens": 100, "output_tokens": out, "cache_read_input_tokens": 1000, "cache_creation_input_tokens": 10}}})
+    text = {"type": "text", "text": "x"}
+    agent = {"type": "tool_use", "name": "Agent", "input": {}}
+    f = tmp_path / "t.jsonl"
+    f.write_text("\n".join([
+        line("msg_1", "req_1", 5, text), line("msg_1", "req_1", 7, agent), line("msg_1", "req_1", 9, text),   # one message, three lines
+        line(None, "req_2", 3, text), line(None, "req_2", 4, text),                                          # no id: requestId
+        line("msg_3", "req_3", 1, text),
+    ]) + "\n", encoding="utf-8")
+    t = cm._price_jsonl(f)
+    assert (t["input"], t["output"], t["cache_read"], t["cache_creation"]) == (300, 9 + 4 + 1, 3000, 30)
+    assert sum(t["models"].values()) == 3 and t["subagent_count"] == 1

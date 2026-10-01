@@ -259,8 +259,12 @@ def _price_jsonl(path: Path) -> dict:
         "input": 0, "output": 0, "cache_read": 0, "cache_creation": 0, "usd": 0.0,
         "subagent_count": 0, "ts_start": None, "ts_end": None, "models": {},
     }
+    # Claude Code writes one line per content block of a message, each carrying
+    # the message's usage: count a message once (message.id, else requestId),
+    # with the usage of its last line.
+    usages: dict = {}
     with path.open(encoding="utf-8", errors="replace") as fh:
-        for line in fh:
+        for n, line in enumerate(fh):
             if not line.strip():
                 continue
             try:
@@ -278,33 +282,34 @@ def _price_jsonl(path: Path) -> dict:
             if entry.get("type") != "assistant":
                 continue
             msg = entry.get("message") or {}
-            usage = msg.get("usage") or {}
-            tier = _tier(msg.get("model"))
-            price = PRICING.get(tier) or PRICING.get("sonnet") or _NO_PRICE
-            if price is _NO_PRICE and not totals.get("unpriced"):
-                totals["unpriced"] = True
-                print("cost_meter: no prices (harness/models.json unreadable?); usd_est is 0, not a real cost", file=sys.stderr)
-
-            inp = int(usage.get("input_tokens") or 0)
-            out = int(usage.get("output_tokens") or 0)
-            cr = int(usage.get("cache_read_input_tokens") or 0)
-            cc = int(usage.get("cache_creation_input_tokens") or 0)
-
-            totals["input"] += inp
-            totals["output"] += out
-            totals["cache_read"] += cr
-            totals["cache_creation"] += cc
-            totals["usd"] += (
-                inp * price["input"] + cc * price["cache_write"]
-                + cr * price["cache_read"] + out * price["output"]
-            ) / 1e6
-            totals["models"][tier] = totals["models"].get(tier, 0) + 1
+            usages[msg.get("id") or entry.get("requestId") or f"line:{n}"] = (_tier(msg.get("model")), msg.get("usage") or {})
 
             content = msg.get("content")
             if isinstance(content, list):
                 for blk in content:
                     if isinstance(blk, dict) and blk.get("type") == "tool_use" and blk.get("name") in ("Agent", "Task"):
                         totals["subagent_count"] += 1
+
+    for tier, usage in usages.values():
+        price = PRICING.get(tier) or PRICING.get("sonnet") or _NO_PRICE
+        if price is _NO_PRICE and not totals.get("unpriced"):
+            totals["unpriced"] = True
+            print("cost_meter: no prices (harness/models.json unreadable?); usd_est is 0, not a real cost", file=sys.stderr)
+
+        inp = int(usage.get("input_tokens") or 0)
+        out = int(usage.get("output_tokens") or 0)
+        cr = int(usage.get("cache_read_input_tokens") or 0)
+        cc = int(usage.get("cache_creation_input_tokens") or 0)
+
+        totals["input"] += inp
+        totals["output"] += out
+        totals["cache_read"] += cr
+        totals["cache_creation"] += cc
+        totals["usd"] += (
+            inp * price["input"] + cc * price["cache_write"]
+            + cr * price["cache_read"] + out * price["output"]
+        ) / 1e6
+        totals["models"][tier] = totals["models"].get(tier, 0) + 1
     return totals
 
 
