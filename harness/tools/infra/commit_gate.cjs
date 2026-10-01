@@ -1,6 +1,6 @@
 // commit_gate.cjs - when a Stop hook may commit the bot folder (v0.8.6 R13).
 //
-// The two committers (harness/hooks/auto-commit.sh "chore(auto): session checkpoint",
+// The two committers (harness/hooks/auto-commit.mjs "chore(auto): session checkpoint",
 // harness/tools/infra/memory-sync-hook.cjs "auto: memory sync") ran on every Stop: 373
 // commits in 4 days on one bot, most of them runtime state. Now each commits
 //   - only when something OTHER than churn changed: memory/metrics/ is runtime
@@ -66,7 +66,7 @@ function decide({ paths, sinceMin, everyMin: every }) {
 
 module.exports = { CHURN, DEFAULT_EVERY_MIN, changedPaths, realChanges, everyMin, minutesSince, decide };
 
-// CLI for hooks/auto-commit.sh: `node commit_gate.cjs <repo> <marker>` prints
+// CLI (auto-commit.mjs requires the module instead): `node commit_gate.cjs <repo> <marker>` prints
 // the reason; exit 0 = commit now, 1 = not now.
 if (require.main === module) {
   const [repo, marker] = process.argv.slice(2);

@@ -387,8 +387,8 @@ export function frontmatter(text) {
 function scriptPurpose(text) {
   const doc = /^(?:#.*\r?\n)*\s*"""([\s\S]*?)"""/.exec(String(text || ''));
   if (doc) return clip(doc[1].trim().split(/\r?\n\s*\r?\n/)[0].replace(/^[\w.-]+\.py\s*[-—:]\s*/, ''), 160);
-  const c = String(text || '').split(/\r?\n/).filter((l) => /^#(?!!)/.test(l)).map((l) => l.replace(/^#\s?/, '')).filter((l) => l.trim());
-  return clip((c[0] || '').replace(/^[\w.-]+\.sh\s*[-—:]\s*/, ''), 160);
+  const c = String(text || '').split(/\r?\n/).filter((l) => /^(#(?!!)|\/\/)/.test(l)).map((l) => l.replace(/^(#|\/\/)\s?/, '')).filter((l) => l.trim());
+  return clip((c[0] || '').replace(/^[\w.-]+\.(sh|mjs)\s*[-—:]\s*/, ''), 160);
 }
 // The first `# ` heading of a markdown file.
 function mdTitle(text) { const m = /^#\s+(.+)$/m.exec(String(text || '')); return m ? m[1].trim() : ''; }

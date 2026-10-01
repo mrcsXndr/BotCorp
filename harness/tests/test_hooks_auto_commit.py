@@ -1,4 +1,4 @@
-"""Fake-stdin tests for harness/hooks/auto-commit.sh.
+"""Fake-stdin tests for harness/hooks/auto-commit.mjs.
 
 The Stop hook must commit ONLY inside the bot's own home (`bots/<name>/`, as
 the launcher's BOT_HOME/BOT_NAME name it) when that folder is a git repo and
@@ -41,7 +41,7 @@ def _env(tmp_path, bot_home, **overrides):
 
 def _run(env, cwd):
     return subprocess.run(
-        ["bash", str(HARNESS / "hooks" / "auto-commit.sh")],
+        ["node", str(HARNESS / "hooks" / "auto-commit.mjs")],
         input="{}", capture_output=True, text=True, env=env, cwd=cwd, timeout=60,
     )
 
@@ -144,6 +144,38 @@ def test_a_second_stop_inside_the_window_waits(tmp_path):
     # past the window (0 = no window) the waiting change is committed
     assert _run(_env(tmp_path, home, BOT_AUTO_COMMIT_EVERY_MIN="0"), cwd=home).returncode == 0
     assert _commits(home) == "3"
+    assert _status(home) == ""
+
+
+# v0.9.13: on a live Windows bot the bash hook ran at p95 28 s of its 30 s budget,
+# while its git work takes ~0.2 s: the rest was Git Bash start-up and forks. The
+# hook is node now and run.mjs starts it without bash: here no bash exists at all
+# (PATH holds only git's own folder, the Git install run.mjs looks in is empty),
+# and the Stop hook, run exactly as hooks.json declares it, still commits.
+def test_the_stop_hook_commits_with_no_bash_on_the_box(tmp_path):
+    import json
+    import shutil
+    import sys
+    from pathlib import Path
+    home = _git_repo(tmp_path / "root" / "bots" / "demo")
+    (home / "memory.md").write_text("dirty\n", encoding="utf-8")
+    git, node = shutil.which("git"), shutil.which("node")
+    if sys.platform == "win32":
+        gitdir = Path(git).parent
+    else:
+        gitdir = tmp_path / "gitonly"
+        gitdir.mkdir()
+        (gitdir / "git").symlink_to(git)
+    assert not any((gitdir / b).exists() for b in ("bash", "bash.exe"))     # the precondition: no bash to find
+    env = {k: v for k, v in _env(tmp_path, home, BOT_MODULES="auto_commit").items()
+           if k.upper() not in ("PATH", "PROGRAMFILES", "CLAUDE_CODE_GIT_BASH_PATH")}
+    env.update(PATH=str(gitdir), ProgramFiles=str(tmp_path / "no-program-files"))
+    stop = next(h for g in json.loads((HARNESS / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]["Stop"]
+                for h in g["hooks"] if h["args"][1] == "auto-commit")
+    proc = subprocess.run([node, str(HARNESS / "hooks" / "run.mjs"), *stop["args"][1:]],
+                          input="{}", capture_output=True, text=True, env=env, cwd=home, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    assert _commits(home) == "2"
     assert _status(home) == ""
 
 

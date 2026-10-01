@@ -32,7 +32,7 @@ from pathlib import Path
 import pytest
 
 ASSEMBLY = Path(__file__).resolve().parents[2]
-HOOK = ASSEMBLY / "harness" / "hooks" / "auto-commit.sh"
+HOOK = ASSEMBLY / "harness" / "hooks" / "auto-commit.mjs"
 COMMON = ASSEMBLY / "daemon" / "_common.ps1"
 BOTYAML = ASSEMBLY / "daemon" / "botyaml.mjs"
 LIB = (ASSEMBLY / "cli" / "_lib.mjs").as_uri()
@@ -82,7 +82,7 @@ def _run_hook(home: Path, rt: Path, modules: str | None):
     if modules is not None:
         env["BOT_MODULES"] = modules
     t = time.monotonic()
-    r = subprocess.run(["bash", str(HOOK)], input="{}", capture_output=True, text=True, env=env, timeout=60)
+    r = subprocess.run(["node", str(HOOK)], input="{}", capture_output=True, text=True, env=env, timeout=60)
     return r, time.monotonic() - t
 
 

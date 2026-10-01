@@ -9,7 +9,8 @@
 // missing from BOT_MODULES (unset = every module; `*` = every module), exits 0
 // without spawning anything. Otherwise ONE bash runs the script with this
 // process's stdin/stdout/stderr and its exit code is passed through. The
-// script still sources _guard.sh (the same gates again, the paths, PY).
+// script still sources _guard.sh (the same gates again, the paths, PY). A
+// .mjs/.cjs/.js script runs on this node instead of bash.
 //
 // BOT_HOOK_TRACE=1: the trace line is written here, before the gates, and not
 // again by _guard.sh.
@@ -78,7 +79,8 @@ function hookTimeout() {
   return 0;
 }
 
-const [exe, pre] = bash();
+// A node hook (auto-commit.mjs) runs on this node, with no bash start at all.
+const [exe, pre] = /\.[cm]?js$/.test(script) ? [process.execPath, []] : bash();
 const t = hookTimeout();
 const budget = t > 0 ? Math.max(1000, Math.floor(t * 1000 - 1000 - performance.now())) : undefined;
 const r = spawnSync(exe, [...pre, path.resolve(HOOKS_DIR, script), ...args], { stdio: 'inherit', env, windowsHide: true, timeout: budget });
