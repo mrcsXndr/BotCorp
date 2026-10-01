@@ -1,3 +1,4 @@
+// @ts-check
 // pairing.mjs - Telegram pairing panel data.
 //
 // State and mutations both go through the CLI (`botcorp pair <bot> ...`), so

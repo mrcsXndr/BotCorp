@@ -1,3 +1,4 @@
+// @ts-check
 // chat-launch.mjs - read-only view of recent chat workspaces for the New
 // chat modal.
 //

@@ -1,3 +1,4 @@
+// @ts-check
 // cli.mjs - the cockpit's only write path: `node cli/botcorp.mjs <args>`.
 //
 // The cockpit has no liveness authority and never touches a vault, a bot.yaml
@@ -40,6 +41,11 @@ export function cliEnv(env = process.env) {
 // Run the CLI; never throws. { code, out, err, timedOut }. `stdin` (a string)
 // is written and closed - used for secret values so they never appear in argv.
 // `maxOut` raises the stdout cap for the `--json` reads (a tools scan is tens of KB).
+/**
+ * @param {string[]} args
+ * @param {{ stdin?: string | null, timeoutMs?: number, maxOut?: number }} [opts]
+ * @returns {Promise<{ code: number, out: string, err: string, timedOut: boolean }>}
+ */
 export function runCli(args, { stdin = null, timeoutMs = 60_000, maxOut = 4096 } = {}) {
   const cap = Math.max(MAX_CAPTURE, maxOut);
   return new Promise((resolve) => {

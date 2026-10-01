@@ -1,3 +1,4 @@
+// @ts-check
 // vault.mjs - thin, masked-only view of a bot's vault.
 //
 // The vault (bots/<name>/.vault/secrets.json, DPAPI) is never read by the

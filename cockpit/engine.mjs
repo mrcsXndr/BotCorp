@@ -1,3 +1,4 @@
+// @ts-check
 // engine.mjs - read-only version of the BotCorp checkout the cockpit serves.
 // Updating is the daemon's job (it applies tags, runs migrations, rolls
 // sessions at breakpoints); the cockpit only reports what is checked out.
@@ -37,9 +38,14 @@ function git(args, timeoutMs = 10_000) {
   });
 }
 
+/** @typedef {{ version: string | null, commit: string | null }} EngineVersion */
+
+/** @type {{ at: number, value: EngineVersion } | null} */
 let cached = null;
+/** @returns {Promise<EngineVersion>} */
 export async function engineVersion() {
   if (cached && Date.now() - cached.at < 60_000) return cached.value;
+  /** @type {string | null} */
   let version = null;
   try { version = JSON.parse(await fsp.readFile(path.join(BOTCORP_ROOT, 'botcorp.json'), 'utf-8')).version ?? null; } catch {}
   const sha = await git(['rev-parse', '--short', 'HEAD']);

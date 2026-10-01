@@ -2,7 +2,8 @@
 // checkJs stays off: each cockpit file opts in with `// @ts-check`, so the
 // core/cli/daemon modules it imports are read for types but not checked.
 // noImplicitAny stays off: an unannotated parameter is `any` rather than an
-// error; the rest of `strict` is on.
+// error. useUnknownInCatchVariables stays off: a caught error is `any`, as
+// every `catch (e) { e.message }` here assumes. The rest of `strict` is on.
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -13,6 +14,7 @@
     "noEmit": true,
     "strict": true,
     "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
     "skipLibCheck": true,
     "types": ["node"]
   },

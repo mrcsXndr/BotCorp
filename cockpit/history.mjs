@@ -1,3 +1,4 @@
+// @ts-check
 // Session history - read-only list of a bot's Claude Code sessions.
 //
 // Claude Code stores one transcript per session at
