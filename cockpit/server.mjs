@@ -1,3 +1,4 @@
+// @ts-check
 // BotCorp cockpit - the ops surface for the bots on this machine.
 //
 // Lists every bot (bots/*/bot.yaml), shows its live terminal by attaching to
@@ -64,6 +65,7 @@ const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]', '::fff
 const LOOPBACK_BIND = LOOPBACK_HOSTS.has(HOST);
 
 const ACCESS_FILE = path.join(bots.BOTCORP_HOME, 'access.json');
+/** @type {Awaited<ReturnType<typeof loadAccessConfig>>} */
 let accessCfg = null;
 try { accessCfg = await loadAccessConfig(ACCESS_FILE); }
 catch (e) { console.error(`[cockpit] ${e.message}`); process.exit(2); }
@@ -92,6 +94,7 @@ function audit(row) {
     .then(() => fsp.appendFile(AUDIT_LOG, line + '\n'))
     .catch((e) => console.error(`[cockpit] audit write failed: ${e.message}`));
 }
+/** @param {import('express').Request} req @param {Res} res */
 function auditOnClose(req, res) {
   const p = req.path.slice(0, 200);
   const bot = /^\/api\/bots\/([^/]+)/.exec(p)?.[1] || null;
@@ -107,6 +110,7 @@ function auditOnClose(req, res) {
 const ALLOWED_HOSTS = new Set([`127.0.0.1:${PORT}`, `localhost:${PORT}`, `[::1]:${PORT}`]);
 const ALLOWED_ORIGINS = new Set([...ALLOWED_HOSTS].map((h) => `http://${h}`));
 
+/** @param {HttpReq} req */
 function gateOk(req) {
   const host = req.headers.host || '';
   const origin = req.headers.origin;
@@ -126,6 +130,7 @@ function gateOk(req) {
 
 // Resolve the caller's identity. Access mode: a verified JWT or nothing.
 // Loopback: the fixed 'local' identity (the gate above is the check).
+/** @param {HttpReq} req */
 async function identityOf(req) {
   if (!ACCESS) return 'local';
   const jwt = req.headers['cf-access-jwt-assertion'];
@@ -167,7 +172,13 @@ app.use(express.json({ limit: '8mb' }));
 app.use(express.static(path.join(__dirname, 'web', 'dist')));
 
 // ---- API ---------------------------------------------------------------------
-const wrap = (fn) => (req, res) => Promise.resolve(fn(req, res)).catch((e) => res.status(400).json({ error: e.message }));
+/** @typedef {import('express').Request<Record<string, string>>} Req (every route param is a named `:param`, so a string) */
+/** @typedef {import('express').Response} Res */
+/** @typedef {import('node:http').IncomingMessage} HttpReq (the gates also see the /term upgrade, a plain http request) */
+/** @typedef {NonNullable<Awaited<ReturnType<typeof bots.getBot>>>} Bot */
+/** @param {(req: Req, res: Res) => unknown} fn */
+const wrap = (fn) => (/** @type {Req} */ req, /** @type {Res} */ res) => Promise.resolve(fn(req, res)).catch((e) => res.status(400).json({ error: e.message }));
+/** @param {(req: Req, res: Res, bot: Bot) => unknown} fn */
 const withBot = (fn) => wrap(async (req, res) => {
   const bot = await bots.getBot(req.params.name);
   if (!bot) return res.status(404).json({ error: 'no such bot' });
@@ -181,6 +192,7 @@ app.get('/api/bots', wrap(async (_req, res) => res.json(await bots.listBots())))
 // A bot's Settings model picker: the tiers by name (harness/models.json; opt-in
 // tiers left out), then what the pinned Claude Code offers (core/ccprobe.mjs:
 // its models, effort levels, ultracode and price; [] with `error` when it cannot tell).
+/** @type {ReturnType<typeof ccModels> | null} */
 let ccModelsInFlight = null;
 function liveModels() {
   if (!ccModelsInFlight) ccModelsInFlight = ccModels({ pin: ccStatus().pinned }).finally(() => { ccModelsInFlight = null; });
@@ -251,7 +263,7 @@ app.post('/api/bots/:name/archive', withBot(async (req, res, bot) => {
 
 app.get('/api/bots/:name/sessions', withBot(async (_req, res, bot) => res.json(await history.listSessions(bot.configDir, bot.home))));
 app.get('/api/bots/:name/chat', withBot(async (req, res, bot) => {
-  const after = Math.max(0, parseInt(req.query.after, 10) || 0);
+  const after = Math.max(0, parseInt(String(req.query.after), 10) || 0);
   res.json(await chat.chatState(bot, after));
 }));
 // Chat send: queued in the bot's inbox by `botcorp send` (the text on stdin,
@@ -272,6 +284,7 @@ app.post('/api/bots/:name/send', withBot(async (req, res, bot) => {
   const text = files.length ? attach.withAttachments(typed, files) : typed;
   if (Buffer.byteLength(text) > inbox.MAX_TEXT_BYTES) return res.status(413).json({ error: `message too large (${inbox.MAX_TEXT_BYTES / 1024} KB max)` });
   const r = await runCli(['send', bot.name, '--source', 'cockpit', '--json'], { stdin: text });
+  /** @type {any} */
   let item = null;
   try { item = JSON.parse(r.out); } catch {}
   if (r.code !== 0 || !item || !item.id) return res.status(502).json({ error: (r.err || r.out || `send exited ${r.code}`).trim() });
@@ -309,11 +322,13 @@ app.get('/api/bots/:name/helpers', withBot(async (_req, res, bot) => {
 // docs are the operator's (the gate below, and the CLI refuses any bot).
 const DOC_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const SHA_RE = /^[0-9a-f]{64}$/;
+/** @param {Res} res @param {string[]} args */
 async function knowledgeRead(res, args) {
   const r = await runCli(['knowledge', ...args, '--json'], { maxOut: 256 * 1024 });
   if (r.code !== 0) return res.status(r.code === 1 ? 404 : r.code === 2 ? 400 : 502).json({ error: (r.err || r.out).trim().replace(/^botcorp: /, '') });
   res.json(JSON.parse(r.out));
 }
+/** @param {Req} req @param {Res} res @param {'set' | 'rm'} action @param {string[]} scope */
 async function knowledgeWrite(req, res, action, scope) {
   const { doc } = req.params;
   if (!DOC_RE.test(doc)) return res.status(400).json({ error: 'doc: CLAUDE or a plain name (letters, digits, - and _)' });
@@ -359,7 +374,7 @@ app.get('/api/bots/:name/agents/:id', withBot(async (req, res, bot) => {
   if (!file) return res.status(404).json({ error: 'no such agent in the live session' });
   const all = await agentsOf(bot);
   const agent = [...all.running, ...all.recent].find((a) => a.id === req.params.id) || null;
-  const after = Math.max(0, parseInt(req.query.after, 10) || 0);
+  const after = Math.max(0, parseInt(String(req.query.after), 10) || 0);
   const { turns, cursor } = await chat.readTurns(file, after);
   res.json({ agent, turns, cursor });
 }));
@@ -387,6 +402,7 @@ if (APPROVE_TOKEN) {
   } catch (e) { console.log(`[cockpit] could not write ${APPROVE_TOKEN_FILE}: ${e.message}`); }
 }
 // A browser paired once (operator-pair.mjs) carries the operator cookie instead of the token.
+/** @param {HttpReq} req */
 function isOperator(req) {
   if (!APPROVE_TOKEN) return true;
   if (operatorPair.deviceOf(bots.STATE_DIR, req.headers.cookie)) return true;
@@ -394,6 +410,7 @@ function isOperator(req) {
   return got.length === APPROVE_TOKEN.length && crypto.timingSafeEqual(Buffer.from(got), Buffer.from(APPROVE_TOKEN));
 }
 const NEEDS_OPERATOR = 'needs the operator: pair this browser once (`botcorp cockpit pair` in your terminal, then enter the code), or the approval token this cockpit printed at start, also in <BOTCORP_HOME>/state/cockpit-approve-token (or Cloudflare Access, or `botcorp approve` in your terminal)';
+/** @param {import('express').Request} req @param {Res} res */
 function operatorGate(req, res) {
   if (isOperator(req)) return true;
   res.status(403).json({ error: NEEDS_OPERATOR, need: 'approve-token' });
@@ -609,9 +626,9 @@ app.post('/api/bots/:name/unlock', withBot(async (req, res, bot) => {
 
 app.get('/api/secrets/audit', wrap(async (req, res) => {
   const bot = typeof req.query.bot === 'string' ? req.query.bot : '';
-  res.json(await vault.auditTail(bot || null, parseInt(req.query.limit, 10) || 100));
+  res.json(await vault.auditTail(bot || null, parseInt(String(req.query.limit), 10) || 100));
 }));
-app.get('/api/bots/:name/secrets/audit', withBot(async (req, res, bot) => res.json(await vault.auditTail(bot.name, parseInt(req.query.limit, 10) || 100))));
+app.get('/api/bots/:name/secrets/audit', withBot(async (req, res, bot) => res.json(await vault.auditTail(bot.name, parseInt(String(req.query.limit), 10) || 100))));
 
 // Machine-wide Releases panel: read-only list here, Apply/Skip go through the
 // CLI same as every other write path (lifecycle() above is already generic).
@@ -684,6 +701,7 @@ app.post('/api/accounts/link', wrap(async (req, res) => {
   res.locals.audit = { action: 'link' };
   const r = await runCli(['accounts', 'seed', '--link', '--json', '--by', req.identity], { timeoutMs: 180_000 });
   attention.invalidate();
+  /** @type {any} */
   let result = null;
   try { result = JSON.parse(r.out); } catch {}
   if (r.code !== 0 || !result) return res.status(502).json({ ok: false, code: r.code, err: r.err || r.out });
@@ -710,6 +728,7 @@ app.post('/api/chat/launch', wrap((req, res) => {
 // fill its own folder through here); an allow-listed type, at most 20 MB, kept
 // under the bot's own <bot>/.botcorp/uploads (core/attach.mjs). 10/min per session.
 const uploadHits = new Map();   // cookie -> [ts]
+/** @param {Req} req */
 function uploadAllowed(req) {
   const key = cookie.read(req) || req.identity;
   const now = Date.now();
@@ -760,7 +779,7 @@ app.use((err, _req, res, _next) => {
 // Last resort: one bad socket or a rejected promise nothing awaited is logged,
 // and the cockpit keeps serving every other client.
 process.on('uncaughtException', (e) => console.error(`[cockpit] uncaught (kept serving): ${e && e.stack || e}`));
-process.on('unhandledRejection', (e) => console.error(`[cockpit] unhandled rejection (kept serving): ${e && e.stack || e}`));
+process.on('unhandledRejection', (/** @type {any} */ e) => console.error(`[cockpit] unhandled rejection (kept serving): ${e && e.stack || e}`));
 
 const server = http.createServer(app);
 const wss = new WebSocketServer({ noServer: true, maxPayload: 2 * 1024 * 1024 });
@@ -797,7 +816,7 @@ server.on('upgrade', async (req, socket, head) => {
 
 server.listen(PORT, HOST, () => {
   console.log(`[cockpit] http://${HOST}:${PORT}  bots=${bots.BOTS_DIR}  runtime=${bots.BOTCORP_HOME}`);
-  console.log(`[cockpit] auth: ${ACCESS ? `Cloudflare Access (team ${accessCfg.team}, jwks ${ACCESS.jwksFile ? 'file' : 'fetch'})` : 'loopback session cookie'}`);
+  console.log(`[cockpit] auth: ${ACCESS ? `Cloudflare Access (team ${accessCfg?.team}, jwks ${ACCESS.jwksFile ? 'file' : 'fetch'})` : 'loopback session cookie'}`);
   if (APPROVE_TOKEN) console.log(`[cockpit] approval token (this boot): ${APPROVE_TOKEN}`);
   if (APPROVE_TOKEN) console.log(`[cockpit] the same token, owner-only: ${APPROVE_TOKEN_FILE}`);
 });

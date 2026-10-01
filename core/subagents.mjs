@@ -181,6 +181,10 @@ function workflowJournal(file) {
 //   transcript: the bot's live transcript (cockpit/chat.mjs currentTranscript)
 //   hookLog:    <rt>/state/<bot>/subagents.jsonl
 //   alive:      is the bot's session running
+/**
+ * @param {{ transcript: string | null, hookLog?: string | null, alive?: boolean, now?: number }} opts
+ * @returns {{ session: string | null, agents: any[], workflows: any[] }}
+ */
 export function listAgents({ transcript, hookLog = null, alive = true, now = Date.now() }) {
   const out = { session: null, agents: [], workflows: [] };
   if (!transcript) return out;
