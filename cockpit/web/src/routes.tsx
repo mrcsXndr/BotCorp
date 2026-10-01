@@ -10,6 +10,7 @@ import { KitTools } from './kit/KitTools';
 import { Shell } from './app/Shell';
 import { BotsScreen } from './screens/Bots';
 import { BotScreen } from './screens/bot/BotScreen';
+import { AgentScreen } from './screens/bot/AgentScreen';
 import { ManageScreen } from './screens/manage/ManageScreen';
 import { InboxScreen } from './screens/inbox/InboxScreen';
 import { AccountsScreen } from './screens/accounts/AccountsScreen';
@@ -35,6 +36,7 @@ export const router = createHashRouter([
       { path: 'bots/:name', element: <BotScreen /> },
       { path: 'bots/:name/manage/:tab', element: <ManageScreen /> },
       { path: 'bots/:name/manage', element: <ManageScreen /> },
+      { path: 'bots/:name/agents/:id', element: <AgentScreen /> },
       { path: '*', element: <Navigate to="/" replace /> },
     ],
   },
