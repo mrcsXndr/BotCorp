@@ -551,6 +551,14 @@ export function memoryHealthRows({ home, config, sessionId = '', resolved = null
   const key = String(home).replace(/\\/g, '/');
   rows.push({ name: 'claude.md imports approved', ...externalIncludesVerdict(cj && cj.projects && cj.projects[key]) });
   rows.push({ name: 'session context window', ...sessionWindowVerdict({ resolved, running, rec }) });
+  // Claude Code loads only the auto index (memory/auto/MEMORY.md); a real
+  // memory/MEMORY.md beside it is never injected.
+  try {
+    const curated = fs.readFileSync(path.join(home, 'memory', 'MEMORY.md'), 'utf-8').split('\n').length;
+    if (curated > 10 && fs.existsSync(path.join(home, 'memory', 'auto', 'MEMORY.md'))) {
+      rows.push({ name: 'curated memory mirror', level: 'WARN', detail: `memory/MEMORY.md (${curated} lines) is never loaded; move its notes into the auto index memory/auto/MEMORY.md and leave a stub` });
+    }
+  } catch {}
   return rows;
 }
 

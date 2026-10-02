@@ -149,8 +149,45 @@ def last_session(current: str) -> str:
 
 # --- Memory budget header ----------------------------------------------------
 # Frozen-snapshot usage header so the Director SEES how full the durable
-# index (memory/MEMORY.md) and this session's journal are, and self-
-# consolidates before they bloat. Budgets are chars.
+# index (the auto-memory MEMORY.md Claude Code loads) and this session's
+# journal are, and self-consolidates before they bloat. Journal budget is chars.
+# Claude Code loads only the first 200 lines or 25KB of the auto-memory index,
+# whichever comes first (https://code.claude.com/docs/en/memory, "How it
+# works"). That index lives in `autoMemoryDirectory`, which `botcorp sync`
+# writes to <bot>/.claude/settings.json (default <bot>/memory/auto). The
+# curated <bot>/memory/MEMORY.md is never injected: it is only the fallback
+# for a bot that has no auto index at all.
+MEMORY_MAX_LINES = 200
+MEMORY_MAX_BYTES = 25000
+
+
+def memory_index_path() -> str:
+    d = f"{BOT_HOME}/memory/auto"
+    try:
+        with open(f"{BOT_HOME}/.claude/settings.json", encoding="utf-8") as f:
+            cfg = json.load(f).get("autoMemoryDirectory")
+        if isinstance(cfg, str) and cfg:
+            d = os.path.expanduser(cfg)
+    except (OSError, ValueError, AttributeError):
+        pass
+    auto = os.path.join(d, "MEMORY.md")
+    return auto if os.path.isfile(auto) else f"{BOT_HOME}/memory/MEMORY.md"
+
+
+def memory_line() -> str | None:
+    path = memory_index_path()
+    try:
+        n = os.path.getsize(path)
+        with open(path, "rb") as f:
+            lines = f.read().count(b"\n") + 1
+    except OSError:
+        return None
+    pct = round(100 * max(lines / MEMORY_MAX_LINES, n / MEMORY_MAX_BYTES))
+    over = lines > MEMORY_MAX_LINES or n > MEMORY_MAX_BYTES
+    flag = " OVER-LIMIT — the tail is not loaded, consolidate" if over else ""
+    return f"[memory: {pct}% — {lines}/{MEMORY_MAX_LINES} lines, {n:,}/{MEMORY_MAX_BYTES:,} bytes{flag}]"
+
+
 def budget_header(journal_path: str, journal_budget: int) -> str:
     def line(label, path, budget):
         try:
@@ -161,8 +198,7 @@ def budget_header(journal_path: str, journal_budget: int) -> str:
         flag = " OVER-BUDGET — consolidate" if n > budget else ""
         return f"[{label}: {pct}% — {n:,}/{budget:,} chars{flag}]"
     out = []
-    for label, path, budget in (("memory", f"{BOT_HOME}/memory/MEMORY.md", 20000), ("journal", journal_path, journal_budget)):
-        ln = line(label, path, budget)
+    for ln in (memory_line(), line("journal", journal_path, journal_budget)):
         if ln:
             out.append(ln)
     return "\n".join(out)

@@ -134,3 +134,27 @@ def test_assembler_hard_stops_when_the_fixed_lines_overrun(tmp_path):
     ctx = json.loads(r.stdout)["hookSpecificOutput"]["additionalContext"]
     assert u16(ctx) <= LIMIT
     assert ctx.rstrip().endswith("]") and "session-start context cut at 9500 chars" in ctx
+
+
+def test_memory_line_measures_the_auto_index_not_the_curated_mirror(tmp_path, bot_home):
+    # The curated memory/MEMORY.md is never loaded by Claude Code; the line must
+    # report the auto index (200 lines / 25KB limit), not the tiny mirror.
+    (bot_home / "memory" / "MEMORY.md").write_text("# stub\n", encoding="utf-8")
+    auto = bot_home / "memory" / "auto"
+    auto.mkdir(parents=True, exist_ok=True)
+    (auto / "MEMORY.md").write_text("\n".join(f"- [note {i}](n{i}.md) hook" for i in range(172)) + "\n", encoding="utf-8")
+    ctx = context(tmp_path, bot_home, "s1")
+    assert "[memory: 86% — 173/200 lines, " in ctx and "OVER-LIMIT" not in ctx, ctx
+    (auto / "MEMORY.md").write_text("x\n" * 250, encoding="utf-8")
+    assert "OVER-LIMIT" in context(tmp_path, bot_home, "s1")
+
+
+def test_memory_line_follows_autoMemoryDirectory_and_falls_back(tmp_path, bot_home):
+    (bot_home / "memory" / "MEMORY.md").write_text("a\nb\n", encoding="utf-8")
+    assert " — 3/200 lines, " in context(tmp_path, bot_home, "s1")   # no auto index: the mirror
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    (other / "MEMORY.md").write_text("x\n" * 99, encoding="utf-8")
+    (bot_home / ".claude").mkdir(exist_ok=True)
+    (bot_home / ".claude" / "settings.json").write_text(json.dumps({"autoMemoryDirectory": str(other)}), encoding="utf-8")
+    assert "[memory: 50% — 100/200 lines" in context(tmp_path, bot_home, "s1")

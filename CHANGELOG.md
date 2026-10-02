@@ -3,6 +3,19 @@
 All notable changes to BotCorp. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 versions follow SemVer.
 
+## Unreleased
+
+- **Fixed (harness):** the session-start `memory:` budget line measured
+  `memory/MEMORY.md`, which Claude Code never loads, so it read tiny while the
+  real index was large. It now measures the auto-memory index (`autoMemoryDirectory`
+  from `.claude/settings.json`, default `memory/auto/MEMORY.md`; the curated file
+  only when no auto index exists) against Claude Code's real limit, 200 lines or
+  25KB: `[memory: 86% — 173/200 lines, 9,100/25,000 bytes]`.
+- **Added (doctor):** `<bot>: curated memory mirror` warns when a bot has both a
+  non-stub `memory/MEMORY.md` (over 10 lines) and an auto index.
+- **Changed (templates):** the seeded `memory/MEMORY.md` is now a one-line pointer
+  to the auto index.
+
 ## v0.9.13
 
 Fixes from a parity review against the old standalone supervisor: auto-roll

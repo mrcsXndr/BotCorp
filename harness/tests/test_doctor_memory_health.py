@@ -147,3 +147,17 @@ def test_doctor_shows_the_memory_rows(box):
     assert rows["t: session timeline"]["level"] == "WARN"
     assert rows["t: claude.md imports approved"]["level"] == "WARN" and "botcorp sync t" in rows["t: claude.md imports approved"]["detail"]
     assert rows["t: session context window"]["level"] == "INFO"  # not running
+
+
+@needs_node
+def test_curated_memory_mirror_warns_only_beside_an_auto_index(tmp_path):
+    home, config = _fixture(tmp_path, start="ok", phases=[], approved=True)
+    mem = home / "memory"
+    (mem / "MEMORY.md").write_text("\n".join(f"- note {i}" for i in range(40)) + "\n", encoding="utf-8")
+    assert "curated memory mirror" not in _rows(home, config)          # no auto index yet
+    (mem / "auto").mkdir()
+    (mem / "auto" / "MEMORY.md").write_text("# Memory Index\n", encoding="utf-8")
+    row = _rows(home, config)["curated memory mirror"]
+    assert row["level"] == "WARN" and "never loaded" in row["detail"]
+    (mem / "MEMORY.md").write_text("# pointer\n", encoding="utf-8")    # a stub is fine
+    assert "curated memory mirror" not in _rows(home, config)
