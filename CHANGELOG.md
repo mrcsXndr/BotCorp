@@ -5,6 +5,8 @@ versions follow SemVer.
 
 ## Unreleased
 
+## v0.9.14
+
 - **Fixed (harness):** the session-start `memory:` budget line measured
   `memory/MEMORY.md`, which Claude Code never loads, so it read tiny while the
   real index was large. It now measures the auto-memory index (`autoMemoryDirectory`
